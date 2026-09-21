@@ -91,7 +91,11 @@ export async function openFolder(ctx, runProcess, path) {
   if (isWindows) {
     const explorer = await resolveFirst(ctx, ['explorer.exe', 'explorer']);
     if (!explorer) throw new Error('未找到 Windows 资源管理器');
-    return runProcess(explorer, [path], path);
+    const result = await runProcess(explorer, [path], path);
+    // explorer.exe 的退出码不可靠：目标目录已在资源管理器中打开过时也会返回 1（实测），
+    // 上游按 exitCode !== 0 判失败 → "无法打开项目目录"误报。只有真正的启动失败才当错误。
+    if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('资源管理器打开失败（exit ' + result.exitCode + '）');
+    return result.exitCode === 1 ? { ...result, exitCode: 0 } : result;
   }
   if (isMac) {
     const opener = await resolveFirst(ctx, ['open']);
@@ -106,7 +110,10 @@ export async function revealFile(ctx, runProcess, path, cwd) {
   if (isWindows) {
     const explorer = await resolveFirst(ctx, ['explorer.exe', 'explorer']);
     if (!explorer) throw new Error('未找到 Windows 资源管理器');
-    return runProcess(explorer, ['/select,', path], cwd);
+    const result = await runProcess(explorer, ['/select,', path], cwd);
+    // 同 openFolder：explorer 对 /select 也常返回 1，归一为成功。
+    if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('资源管理器定位失败（exit ' + result.exitCode + '）');
+    return result.exitCode === 1 ? { ...result, exitCode: 0 } : result;
   }
   if (isMac) {
     const opener = await resolveFirst(ctx, ['open']);

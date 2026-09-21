@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { access, mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isMac, resolvePython } from '../../lib/platform.js';
+import { isMac, isWindows, resolvePython } from '../../lib/platform.js';
 import { PLUGIN_ROOT } from './vendor-assets.js';
 import { createPythonToolRegistry } from './adapters/python.adapter.js';
 import { register as registerContracts } from './routes/contracts.routes.js';
@@ -245,7 +245,7 @@ function apply(ctx) {
           // 这些目录通常是依赖/缓存，不可能是项目素材；跳过后可避免
           // 导入一个代码仓库或大目录时递归扫描数万项文件。
           if (entry.name === 'node_modules' || entry.name === '__pycache__' || entry.name === '.cache') continue;
-          if (depth === 0 && (entry.name === 'outputs' || entry.name === '画布回收站' || entry.name === '画布备份' || entry.name === 'DSH聊天生成图片')) continue;
+          if (depth === 0 && (entry.name === 'outputs' || entry.name === '画布回收站' || entry.name === '画布备份' || entry.name === 'DSH聊天生成图片' && !isWindows)) continue;
           await walk(full, depth + 1);
         } else if (entry.isFile() && isSourceImagePath(entry.name)) {
           const info = await stat(full);
