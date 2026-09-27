@@ -94,9 +94,13 @@
                 chatHandledRef.current = new Set([...chatHandledRef.current].slice(-500));
               }
             }
-            // 生成全部结束但仍有占位:它们不会等来结果,标记失败(留观 4 秒防竞态)
+            // 生成全部结束但仍有占位:完成环里还有未处理路径说明结果正在归档/在途,
+            // 不能判死;只有确实没有任何在途结果时才留观 10 秒后标记失败
+            // (外置盘归档 + v4 会话写入可能超过旧 4 秒窗口,曾把好占位误判成失败)。
             if (active === 0 && pending.length) {
-              if (!tick.settleTimer) {
+              if (unprocessed > 0) {
+                if (tick.settleTimer) { window.clearTimeout(tick.settleTimer); tick.settleTimer = null; }
+              } else if (!tick.settleTimer) {
                 tick.settleTimer = window.setTimeout(() => {
                   tick.settleTimer = null;
                   const rest = chatPendingRef.current;
@@ -104,7 +108,7 @@
                     chatPendingRef.current = [];
                     for (const id of rest) post({ type: 'chat-gen-fail', id, message: '生成已结束但没有等到结果——删除后重新生成即可' });
                   }
-                }, 4000);
+                }, 10000);
               }
             } else if (tick.settleTimer) {
               window.clearTimeout(tick.settleTimer);
@@ -1490,6 +1494,11 @@
           } else {
             setFeedback('⚠ 所选图片暂时无法读取，请稍后重试');
           }
+        } else if (d.type === 'chat-gen-resolve-failed' && d.path) {
+          // 占位替换失败(占位被删/画布重载等):立即把成图按兜底路径放上画布
+          // (视口锚点 + 240 盒装,与其它生成图同规格),不再等文件扫描慢半拍地救回。
+          dispatchGeneratedToCanvas(String(d.path));
+          setFeedback('⚠ ' + (d.message || '占位替换失败') + '，成图已放到画布当前视野');
         } else if (d.type === 'chat-gen-soft-error') {
           // 聊天生图占位/上画布的可恢复失败:只提示,不打成全局「加载失败」
           setFeedback('⚠ ' + (d.message || '聊天生图未能上画布'));
