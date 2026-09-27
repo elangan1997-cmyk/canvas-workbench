@@ -71,7 +71,8 @@ async function analyzeTextWithCurrentModel(ctx, uploaded, body, simplified) {
     ? '请识别这张图片中出现的所有文字。只输出 JSON：{"blocks":[{"text":"文字内容","x":左,"y":上,"width":宽,"height":高}]}，坐标为 0-1000 整图归一化（左上角为原点）。尽量列全，看不清的也要尝试。'
     : '用户框选区域（0-1000 整图归一化坐标）为：' + JSON.stringify(normalized)
     + '。只识别这些矩形内用户准备移除的文字。框外内容即使清晰可见也不要输出。请同时返回局部背景特征和 erasePrompt。';
-  const message = createUserMessage({ source: { kind: 'plugin', plugin: name }, content: [{ type: 'text', text: instruction }, { type: 'image', attachment }] });
+  // v4 的 producer-owned source 形态;该消息发给模型调用不落会话,但统一新写法防后续 API 收紧。
+  const message = createUserMessage({ source: Object.freeze({ kind: 'plugin:' + name }), content: [{ type: 'text', text: instruction }, { type: 'image', attachment }] });
   const assembler = new BlockAssembler();
   const signal = AbortSignal.timeout(180000);
   for await (const chunk of prepared.stream({ ...prepared.config, messages: [message], system: TEXT_VISION_SYSTEM, signal, purpose: 'canvas-text-analysis' })) assembler.push(chunk);

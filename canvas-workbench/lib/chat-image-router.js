@@ -6,6 +6,9 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { generateChatImage } from './image-engine.js';
 import { beginChatGeneration, endChatGeneration, noteChatGenerationCompleted } from '../src/host/services/chat-generation.js';
 
+/** 会话 v4 的生产者归属标识(dsh-codex 同款 Object.freeze 模式)。 */
+const CANVAS_MESSAGE_SOURCE = Object.freeze({ kind: 'plugin:canvas-workbench' });
+
 const TOOL_NAME = 'imagegen';
 const MAX_REFERENCE_IMAGES = 5;
 
@@ -289,7 +292,10 @@ function routedTool(ctx, original, getChatContext) {
       // 必须走 deferContext 把生成图作为上下文消息推入对话，否则工具结果被
       // compaction 清理后聊天里就看不到图了。deferContext 在 exec 上恒存在。
       if (typeof exec.deferContext === 'function') {
-        exec.deferContext(createUserMessage({ content: contentOf(value), source: { kind: 'plugin', plugin: 'canvas-workbench' } }));
+        // 会话格式 v4 要求 producer-owned source kind:{kind:'plugin',plugin:…} 旧包装会被
+        // v3→v4 校验整轮拒收(format v4 message requires a producer-owned source kind)。
+        // plugin:canvas-workbench 与迁移器对旧会话的改写结果一致,新旧会话形态统一。
+        exec.deferContext(createUserMessage({ content: contentOf(value), source: CANVAS_MESSAGE_SOURCE }));
       }
       return value;
     },
