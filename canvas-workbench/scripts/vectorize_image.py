@@ -144,7 +144,9 @@ def ensure_vtracer_runtime(skip_if_vecto: bool = True) -> None:
         subprocess.run(install_cmd + ["vtracer==" + VTRACER_VERSION, "pillow"], check=True, timeout=300)
         VTRACER_MARKER.write_text(VTRACER_VERSION + "\n", encoding="utf-8")
     # 让后续 import 与依赖都在隔离环境中运行。
-    os.execv(str(python), [str(python), *sys.argv])
+    # Windows 的 os.execv 不给带空格参数加引号,改 subprocess 透传(同 remove_background)。
+    result = subprocess.run([str(python), *sys.argv], check=False)
+    raise SystemExit(result.returncode)
 
 
 def image_complexity(path: Path) -> dict[str, Any]:

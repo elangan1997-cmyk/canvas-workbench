@@ -156,7 +156,10 @@ def ensure_runtime() -> None:
     current_executable = os.path.normpath(os.path.abspath(sys.executable))
     runtime_executable = os.path.normpath(os.path.abspath(str(python)))
     if current_executable != runtime_executable:
-        os.execv(str(python), [str(python), *sys.argv])
+        # Windows 的 os.execv 拼命令行不加引号,路径带空格时参数被拆碎(argparse usage 报错);
+        # 统一改 subprocess 透传参数与退出码。
+        result = subprocess.run([str(python), *sys.argv], check=False)
+        raise SystemExit(result.returncode)
 
 
 class ModelDownloadProgress:

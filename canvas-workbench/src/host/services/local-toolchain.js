@@ -277,11 +277,11 @@ async function ensureDshCodex() {
     const mirrorTarball = `${NPM_MIRROR}/dsh-codex/-/dsh-codex-${DSH_CODEX_VERSION}.tgz`;
     const archivePath = join(work, 'pkg.tgz');
     await download([mirrorTarball, tarball], archivePath);
-    const { open: openHandle, close: closeHandle } = await import('node:fs/promises');
+    const { open: openHandle } = await import('node:fs/promises');
     const handle = await openHandle(archivePath, 'r');
     const head = Buffer.alloc(2);
     await handle.read(head, 0, 2, 0);
-    await closeHandle(handle);
+    await handle.close();
     if (head[0] !== 0x1f || head[1] !== 0x8b) {
       await rm(archivePath, { force: true }).catch(() => {});
       throw new Error('下载内容校验失败(非 gzip,源被干扰),可稍后在状态卡点「立即准备」重试');
