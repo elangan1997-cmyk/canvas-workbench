@@ -35,13 +35,31 @@ async function moduleCandidates() {
 }
 
 async function loadCodexModule() {
+  let lastMissing = '';
+  let sawFile = false;
   for (const filename of await moduleCandidates()) {
     try {
       await access(filename);
+    } catch {
+      continue;
+    }
+    sawFile = true;
+    try {
       return await import(pathToFileURL(filename).href);
-    } catch {}
+    } catch (error) {
+      // dsh-codex 的入口静态依赖一组由宿主提供的 peer 包（pi-ai、cordis 等）。
+      // 宿主加载 dsh-codex 走应用内部解析；本处的 Node 原生导入依赖
+      // ~/.dsh 层级的解析链。缺包时记下第一个缺失包名，供健康检查透出。
+      const match = error && error.code === 'ERR_MODULE_NOT_FOUND'
+        ? /Cannot find package '([^']+)'/.exec(error.message || '') : null;
+      if (match) lastMissing = match[1];
+    }
   }
-  throw new Error('未找到 dsh-codex，请先在当前 DSH profile 安装 dsh-codex');
+  if (lastMissing) {
+    throw new Error(`dsh-codex 依赖的 ${lastMissing} 在本机解析链中缺失。可在终端执行：npm install --prefix ~/.dsh/profiles ${lastMissing}，然后重启 DSH`);
+  }
+  if (!sawFile) throw new Error('未找到 dsh-codex，请先在当前 DSH profile 安装 dsh-codex');
+  throw new Error('dsh-codex 模块加载失败，请重启 DSH 后重试');
 }
 
 async function generateWithDshCodex({ ctx, image, prompt, signal }) {
@@ -65,7 +83,13 @@ export const dshCodexProvider = {
   },
   async health(ctx) {
     let installed = false;
-    try { await loadCodexModule(); installed = true; } catch {}
+    let detail = '';
+    try {
+      await loadCodexModule();
+      installed = true;
+    } catch (error) {
+      detail = error instanceof Error ? error.message : String(error);
+    }
     let authenticated = false;
     try {
       const service = typeof ctx.get === 'function' ? ctx.get('openAICodex') : null;
@@ -75,6 +99,8 @@ export const dshCodexProvider = {
         if (module.openAICodexAuthStatus) authenticated = Boolean((await module.openAICodexAuthStatus()).authenticated);
       }
     } catch {}
-    return { installed, authenticated, ready: installed && authenticated };
+    return installed
+      ? { installed, authenticated, ready: installed && authenticated }
+      : { installed, authenticated, ready: false, detail };
   }
 };
