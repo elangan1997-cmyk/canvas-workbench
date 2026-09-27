@@ -9,7 +9,7 @@ import {
   normalizeImageEngine, normalizeApiBaseUrl, effectiveApiBase, DEFAULT_API_BASE_URL, DEFAULT_API_MODEL,
   readImageEngineSettings, writeImageEngineSettings, imageEngineSettingsPath
 } from '../../src/host/services/image-engine-settings.js';
-import { parseImagePayload, imageApiRetryDelay, modelIdsFromPayload, RETRYABLE_IMAGE_API_STATUSES } from '../../src/providers/image/openai-compatible.provider.js';
+import { parseImagePayload, imageApiRetryDelay, modelIdsFromPayload, RETRYABLE_IMAGE_API_STATUSES, gatewaySizeFor } from '../../src/providers/image/openai-compatible.provider.js';
 import { imageMediaType, dataUrl } from '../../src/shared/utils/image-bytes.js';
 import { imageProviders, generateImage } from '../../src/providers/image-engine.js';
 import * as libShim from '../../lib/image-engine.js';
@@ -123,4 +123,16 @@ test('imageMediaType / dataUrl', () => {
 
 test('generateImage：空输入报错；未知引擎经 normalize 回落 dsh-codex（不触网）', async () => {
   await assert.rejects(generateImage({ ctx: { get: () => null }, image: Buffer.alloc(0), prompt: 'x' }), /图片输入为空/);
+});
+
+test('gatewaySizeFor:非标比例映射到网关标准三档(对数距离最近)', () => {
+  const cases = {
+    '1024x1024': '1024x1024', '1536x1024': '1536x1024', '1024x1536': '1024x1536',
+    '1080x1920': '1024x1536', '1920x1080': '1536x1024', '2560x1080': '1536x1024',
+    '1280x960': '1536x1024', '960x1280': '1024x1536', '2048x1024': '1536x1024',
+    '1024x2048': '1024x1536', '1280x1024': '1536x1024', '1024x1280': '1024x1536'
+  };
+  for (const [input, expected] of Object.entries(cases)) assert.equal(gatewaySizeFor(input), expected, input);
+  assert.equal(gatewaySizeFor('auto'), '');
+  assert.equal(gatewaySizeFor('bogus'), '');
 });
