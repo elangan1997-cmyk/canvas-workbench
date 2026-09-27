@@ -100,7 +100,7 @@ function backfillDocFrames(){
   var changed=false;var now=Date.now();
   var updated=els.map(function(item){
     if(!item||item.type!=="image"||item.isDeleted)return item;
-    var tag=docFormatTagOf(item.customData&&item.customData.dshSourceKind);
+    var tag=docFormatTagOfElement(item);
     if(!tag)return item;
     if(item.customData&&item.customData.dshTagColor)return item;
     changed=true;
@@ -263,7 +263,9 @@ function dims2(d){return new Promise(function(res){var i=new Image();i.onload=fu
      存元素 customData.dshTagColor,渲染与用户标记同一套(屏幕空间,不随画布缩放)。 */
   var DSH_FORMAT_TAG_HEX={psd:"#31A8FF",ai:"#FF9A00",pdf:"#E5322D",svg:"#8B5CF6"};
   function docFormatTagOf(kind){var k=String(kind||"").toLowerCase();return DSH_FORMAT_TAG_HEX[k]?k:null;}
-  function applyDefaultFormatTag(customData,kind){var tag=docFormatTagOf(kind);if(!tag)return customData||null;var custom=Object.assign({},customData||{});if(!custom.dshTagColor)custom.dshTagColor=tag;return custom;}
+  /* 旧元素可能没存 dshSourceKind:按源路径/文件名扩展名推断格式(.psd/.ai/.pdf/.svg)。 */
+  function docFormatTagOfElement(item){var cd=item&&item.customData||{};var path=String(cd.dshSourcePath||cd.dshFileName||"");var m=/\.(psd|ai|pdf|svg)\s*$/i.exec(path);if(m)return m[1].toLowerCase();return docFormatTagOf(cd.dshSourceKind);}
+  function applyDefaultFormatTag(customData,kind){var probe=Object.assign({},customData||{});if(!kind&&customData&&customData.dshSourceKind)kind=customData.dshSourceKind;var tag=docFormatTagOf(kind)||docFormatTagOfElement({customData:customData});if(!tag)return customData||null;var custom=Object.assign({},customData||{});if(!custom.dshTagColor)custom.dshTagColor=tag;return custom;}
   function setCanvasImageTag(ids,color){if(!api||!Array.isArray(ids)||!ids.length)return 0;var all=api.getSceneElements()||[],wanted={};ids.forEach(function(id){wanted[id]=true;});var count=0,now=Date.now();var updated=all.map(function(item){if(!item||item.type!=="image"||!wanted[item.id]||item.isDeleted)return item;var custom=Object.assign({},item.customData||{});if(color)custom.dshTagColor=color;else delete custom.dshTagColor;count++;return Object.assign({},item,{customData:custom,version:Number(item.version||1)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now});});if(!count)return 0;api.updateScene({elements:updated,appState:Object.assign({},api.getAppState()||empty),commitToHistory:true});post({type:"tag-images",ids:ids,color:color||"",count:count});return count;}
   function arrangeCanvasImages(detail){if(!api)return;var order=String(detail&&detail.order||"name"),tag=detail&&detail.tag===undefined?"":String(detail.tag||"");
     var collect=(api.getSceneElements()||[]).filter(function(item){return item&&item.type==="image"&&!item.isDeleted;});
