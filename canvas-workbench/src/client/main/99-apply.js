@@ -94,6 +94,11 @@
       safeSlot(ctx, 'conversation.chat.turnTail', {
         options: {
           name: 'conversation.chat.turnTail',
+          // 新版官方桌面的列表插槽要求条目带稳定 id,缺 id 的注册会被静默忽略
+          // (对照官方 schedule-created 条目)。数据获取双保险:select(旧版宿主调用)
+          // + ImageTail 组件内从 props.turn 自取(新版宿主直接传插槽载荷)。
+          id: 'dsh-canvas-image-tail',
+          order: 10,
           select: (owner) => {
             try {
               const data = owner && owner.turn && owner.turn.data && typeof owner.turn.data.get === 'function' ? owner.turn.data.get('canvas-images') : null;

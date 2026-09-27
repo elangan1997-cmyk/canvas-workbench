@@ -8,8 +8,13 @@
     let activeChatSessionId = '';
     let activeCanvasProjectPath = '';
     let activeChatContextRevision = 0;
+    function conversationServiceUsable(service) {
+      // 新版官方桌面把 createDraftImages(sessionId, files) 改名为 createDrafts;
+      // 两条签名都认,旧版 DSH 不受影响。
+      return Boolean(service) && (typeof service.createDrafts === 'function' || typeof service.createDraftImages === 'function');
+    }
     function currentConversationService() {
-      if (conversationApi && typeof conversationApi.createDraftImages === 'function') return conversationApi;
+      if (conversationApi && conversationServiceUsable(conversationApi)) return conversationApi;
       var root = clientRootContext;
       var candidate = null;
       try { candidate = root && typeof root.get === 'function' ? (root.get('conversation') || root.get('uiConversation')) : null; } catch (e) {}
@@ -22,7 +27,7 @@
     async function waitForConversationService() {
       for (var attempt = 0; attempt < 12; attempt += 1) {
         var service = currentConversationService();
-        if (service && typeof service.createDraftImages === 'function') return service;
+        if (service && conversationServiceUsable(service)) return service;
         await new Promise(function(resolve){setTimeout(resolve,100);});
       }
       return null;

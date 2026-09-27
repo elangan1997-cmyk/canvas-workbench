@@ -26,6 +26,7 @@
       const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
       const [imageRatio, setImageRatio] = React.useState('auto');
       const [imageCount, setImageCount] = React.useState(1);
+      const [engineIsApi, setEngineIsApi] = React.useState(true);
       const [ratioOpen, setRatioOpen] = React.useState(false);
       const [ratioAnchor, setRatioAnchor] = React.useState(null);
       const ratioWrapRef = React.useRef(null);
@@ -57,6 +58,7 @@
           if (d && d.ok) {
             if (d.imageSize) setImageRatio(String(d.imageSize));
             if (d.imageCount) setImageCount(Number(d.imageCount) || 1);
+            setEngineIsApi(String(d.engine || 'api') === 'api');
           }
         }).catch(() => {});
       }, []);
@@ -111,14 +113,22 @@
           const batchIndex = Number(event.detail && event.detail.index || 0);
           const batchTotal = Number(event.detail && event.detail.total || images.length);
           if (!images.length) { setAttachState('⚠ 没有取得所选图片数据'); return; }
-          if (!props.inputActions || typeof props.inputActions.addImages !== 'function') { setAttachState('⚠ 当前聊天输入框暂不可附加图片'); return; }
+          // 新版官方桌面把 addImages 改名为 addAttachments;旧版保留原名。
+          const attachToInput = props.inputActions
+            ? (props.inputActions.addAttachments || props.inputActions.addImages)
+            : null;
+          if (typeof attachToInput !== 'function') { setAttachState('⚠ 当前聊天输入框暂不可附加图片'); return; }
           const attachmentApi = await waitForConversationService();
           if (!attachmentApi) { setAttachState('⚠ DSH 会话附件服务尚未就绪，请稍后再点一次'); return; }
           try {
             const files = await Promise.all(images.map((item, index) => rasterizeSVGForChat(item, index)));
-            const drafts = attachmentApi.createDraftImages(files);
-            if (!props.inputActions.addImages(drafts.map((item) => item.id))) {
-              attachmentApi.releaseDraftImages(drafts);
+            // createDrafts(新) 需要 sessionId;createDraftImages(旧) 只收文件列表。
+            const drafts = typeof attachmentApi.createDrafts === 'function'
+              ? attachmentApi.createDrafts(props.sessionId || activeChatSessionId || '', files)
+              : attachmentApi.createDraftImages(files);
+            if (!attachToInput.call(props.inputActions, drafts.map((item) => item.id))) {
+              const release = attachmentApi.releaseDraftAttachments || attachmentApi.releaseDraftImages;
+              if (typeof release === 'function') release.call(attachmentApi, drafts);
               setAttachState('图片附件数量或大小超出限制');
               return;
             }
@@ -131,7 +141,7 @@
         };
         window.addEventListener('dsh-canvas:attach-selection', receive);
         return () => window.removeEventListener('dsh-canvas:attach-selection', receive);
-      }, [props.inputActions]);
+      }, [props.inputActions, props.sessionId]);
       const toggleRatioPopover = (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         const viewportWidth = window.innerWidth || 1024;
@@ -151,6 +161,9 @@
         style: { left: ratioAnchor.left + 'px', top: ratioAnchor.top + 'px' }
       },
         React.createElement('div', { className: 'dsh-canvas-ratio-pop-title' }, '生图比例'),
+        !engineIsApi ? React.createElement('div', { className: 'dsh-canvas-ratio-engine-warn' },
+          '⚠ 当前图像引擎是 dsh-codex，比例与数量不生效。请到「更多 → 图像引擎设置」切换为 API 引擎。'
+        ) : null,
         React.createElement('div', { className: 'dsh-canvas-ratio-grid' },
           IMAGE_RATIO_OPTIONS.map((option) => React.createElement('button', {
             key: option.value,
@@ -178,7 +191,7 @@
             onClick: () => applyImageCount(count)
           }, '×' + count))
         ),
-        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
+        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；画布编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
       ) : null;
       return React.createElement('div', { className: 'dsh-canvas-dock' },
         React.createElement('button', {

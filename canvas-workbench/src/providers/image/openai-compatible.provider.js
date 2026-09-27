@@ -65,7 +65,7 @@ export function waitForImageApiRetry(ms, signal) {
   });
 }
 
-async function generateWithApi({ image, images, mask, prompt, settings, signal }) {
+async function generateWithApi({ image, images, mask, prompt, settings, signal, sizeOnEdit }) {
   const auth = await readLegacyApiAuth();
   if (!auth.configured) throw new Error(`未配置 image2 API 密钥：${auth.filename}`);
   // 保留旧版 auth.json 中的自定义网关；只有设置文件明确改过默认地址时才覆盖它。
@@ -94,6 +94,9 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal }
         form.append(inputImages.length > 1 ? 'image[]' : 'image', new Blob([bytes], { type: imageMediaType(bytes) }), `input-${index + 1}.png`);
       }
       if (mask) form.append('mask', new Blob([mask], { type: 'image/png' }), 'mask.png');
+      // 聊天生图的编辑路径:用户在输入区显式选了比例时尊重其意图传 size;
+      // 画布编辑/智能擦除(sizeOnEdit 未传)保持跟随原图,避免裁切意外。
+      if (sizeOnEdit && settings.imageSize && settings.imageSize !== 'auto') form.append('size', String(settings.imageSize));
       body = form;
     } else {
       headers['content-type'] = 'application/json';
@@ -190,8 +193,8 @@ export async function testImageApiConnection() {
 export const openAICompatibleProvider = {
   id: 'api',
   capabilities: ['image.generate', 'image.edit', 'image.mask'],
-  async generate({ images, mask, prompt, settings, signal }) {
-    return generateWithApi({ images, mask, prompt, settings, signal });
+  async generate({ images, mask, prompt, settings, signal, sizeOnEdit }) {
+    return generateWithApi({ images, mask, prompt, settings, signal, sizeOnEdit });
   },
   async health() {
     const settings = await readImageEngineSettings();

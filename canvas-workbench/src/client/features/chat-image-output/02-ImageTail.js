@@ -1,6 +1,17 @@
     // ---- turn-tail inline images ----
     function ImageTail(props) {
-      const images = props.matched || [];
+      // 新版 DSH(官方桌面)不再调用插槽 select:turnTail 列表项组件直接收到
+      // {turn, seq, openFile} 插槽载荷,数据要从 turn.data 里自取;
+      // 旧版把 select 结果作为 props.matched 传入。两条路都保留。
+      let matched = Array.isArray(props.matched) ? props.matched : null;
+      if (!matched && props.turn && props.turn.data && typeof props.turn.data.get === 'function') {
+        try {
+          const data = props.turn.data.get('canvas-images');
+          const scoped = data && Array.isArray(data.images) ? data.images.filter((i) => i && props.seq != null ? i.seq <= props.seq : true) : [];
+          matched = scoped.length ? scoped : null;
+        } catch (error) { matched = null; }
+      }
+      const images = matched || [];
       // 本轮开始时间由聚合节点写进每个条目；旧会话条目没有该字段时为 0，跳过新旧过滤。
       const turnStart = (images.length && images[0] && images[0].startTime) || 0;
       const [preview, setPreview] = React.useState(null);

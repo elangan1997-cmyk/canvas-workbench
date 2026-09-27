@@ -1153,7 +1153,18 @@ window.__ModuleLoader__.load({
 
     // ---- turn-tail inline images ----
     function ImageTail(props) {
-      const images = props.matched || [];
+      // 新版 DSH(官方桌面)不再调用插槽 select:turnTail 列表项组件直接收到
+      // {turn, seq, openFile} 插槽载荷,数据要从 turn.data 里自取;
+      // 旧版把 select 结果作为 props.matched 传入。两条路都保留。
+      let matched = Array.isArray(props.matched) ? props.matched : null;
+      if (!matched && props.turn && props.turn.data && typeof props.turn.data.get === 'function') {
+        try {
+          const data = props.turn.data.get('canvas-images');
+          const scoped = data && Array.isArray(data.images) ? data.images.filter((i) => i && props.seq != null ? i.seq <= props.seq : true) : [];
+          matched = scoped.length ? scoped : null;
+        } catch (error) { matched = null; }
+      }
+      const images = matched || [];
       // 本轮开始时间由聚合节点写进每个条目；旧会话条目没有该字段时为 0，跳过新旧过滤。
       const turnStart = (images.length && images[0] && images[0].startTime) || 0;
       const [preview, setPreview] = React.useState(null);
@@ -1739,8 +1750,13 @@ window.__ModuleLoader__.load({
     let activeChatSessionId = '';
     let activeCanvasProjectPath = '';
     let activeChatContextRevision = 0;
+    function conversationServiceUsable(service) {
+      // 新版官方桌面把 createDraftImages(sessionId, files) 改名为 createDrafts;
+      // 两条签名都认,旧版 DSH 不受影响。
+      return Boolean(service) && (typeof service.createDrafts === 'function' || typeof service.createDraftImages === 'function');
+    }
     function currentConversationService() {
-      if (conversationApi && typeof conversationApi.createDraftImages === 'function') return conversationApi;
+      if (conversationApi && conversationServiceUsable(conversationApi)) return conversationApi;
       var root = clientRootContext;
       var candidate = null;
       try { candidate = root && typeof root.get === 'function' ? (root.get('conversation') || root.get('uiConversation')) : null; } catch (e) {}
@@ -1753,7 +1769,7 @@ window.__ModuleLoader__.load({
     async function waitForConversationService() {
       for (var attempt = 0; attempt < 12; attempt += 1) {
         var service = currentConversationService();
-        if (service && typeof service.createDraftImages === 'function') return service;
+        if (service && conversationServiceUsable(service)) return service;
         await new Promise(function(resolve){setTimeout(resolve,100);});
       }
       return null;
@@ -1814,6 +1830,7 @@ window.__ModuleLoader__.load({
       const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
       const [imageRatio, setImageRatio] = React.useState('auto');
       const [imageCount, setImageCount] = React.useState(1);
+      const [engineIsApi, setEngineIsApi] = React.useState(true);
       const [ratioOpen, setRatioOpen] = React.useState(false);
       const [ratioAnchor, setRatioAnchor] = React.useState(null);
       const ratioWrapRef = React.useRef(null);
@@ -1845,6 +1862,7 @@ window.__ModuleLoader__.load({
           if (d && d.ok) {
             if (d.imageSize) setImageRatio(String(d.imageSize));
             if (d.imageCount) setImageCount(Number(d.imageCount) || 1);
+            setEngineIsApi(String(d.engine || 'api') === 'api');
           }
         }).catch(() => {});
       }, []);
@@ -1899,14 +1917,22 @@ window.__ModuleLoader__.load({
           const batchIndex = Number(event.detail && event.detail.index || 0);
           const batchTotal = Number(event.detail && event.detail.total || images.length);
           if (!images.length) { setAttachState('⚠ 没有取得所选图片数据'); return; }
-          if (!props.inputActions || typeof props.inputActions.addImages !== 'function') { setAttachState('⚠ 当前聊天输入框暂不可附加图片'); return; }
+          // 新版官方桌面把 addImages 改名为 addAttachments;旧版保留原名。
+          const attachToInput = props.inputActions
+            ? (props.inputActions.addAttachments || props.inputActions.addImages)
+            : null;
+          if (typeof attachToInput !== 'function') { setAttachState('⚠ 当前聊天输入框暂不可附加图片'); return; }
           const attachmentApi = await waitForConversationService();
           if (!attachmentApi) { setAttachState('⚠ DSH 会话附件服务尚未就绪，请稍后再点一次'); return; }
           try {
             const files = await Promise.all(images.map((item, index) => rasterizeSVGForChat(item, index)));
-            const drafts = attachmentApi.createDraftImages(files);
-            if (!props.inputActions.addImages(drafts.map((item) => item.id))) {
-              attachmentApi.releaseDraftImages(drafts);
+            // createDrafts(新) 需要 sessionId;createDraftImages(旧) 只收文件列表。
+            const drafts = typeof attachmentApi.createDrafts === 'function'
+              ? attachmentApi.createDrafts(props.sessionId || activeChatSessionId || '', files)
+              : attachmentApi.createDraftImages(files);
+            if (!attachToInput.call(props.inputActions, drafts.map((item) => item.id))) {
+              const release = attachmentApi.releaseDraftAttachments || attachmentApi.releaseDraftImages;
+              if (typeof release === 'function') release.call(attachmentApi, drafts);
               setAttachState('图片附件数量或大小超出限制');
               return;
             }
@@ -1919,7 +1945,7 @@ window.__ModuleLoader__.load({
         };
         window.addEventListener('dsh-canvas:attach-selection', receive);
         return () => window.removeEventListener('dsh-canvas:attach-selection', receive);
-      }, [props.inputActions]);
+      }, [props.inputActions, props.sessionId]);
       const toggleRatioPopover = (e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         const viewportWidth = window.innerWidth || 1024;
@@ -1939,6 +1965,9 @@ window.__ModuleLoader__.load({
         style: { left: ratioAnchor.left + 'px', top: ratioAnchor.top + 'px' }
       },
         React.createElement('div', { className: 'dsh-canvas-ratio-pop-title' }, '生图比例'),
+        !engineIsApi ? React.createElement('div', { className: 'dsh-canvas-ratio-engine-warn' },
+          '⚠ 当前图像引擎是 dsh-codex，比例与数量不生效。请到「更多 → 图像引擎设置」切换为 API 引擎。'
+        ) : null,
         React.createElement('div', { className: 'dsh-canvas-ratio-grid' },
           IMAGE_RATIO_OPTIONS.map((option) => React.createElement('button', {
             key: option.value,
@@ -1966,7 +1995,7 @@ window.__ModuleLoader__.load({
             onClick: () => applyImageCount(count)
           }, '×' + count))
         ),
-        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
+        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；画布编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
       ) : null;
       return React.createElement('div', { className: 'dsh-canvas-dock' },
         React.createElement('button', {
@@ -5450,6 +5479,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'.dsh-canvas-ratio-chip-caret{font-size:10px;opacity:.6;transform:translateY(1px)}'
       ,'.dsh-canvas-ratio-pop{position:fixed;z-index:9999;width:328px;box-sizing:border-box;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e2e2e6);box-shadow:0 10px 30px rgba(0,0,0,.16);transform:translateY(calc(-100% - 10px));display:flex;flex-direction:column;gap:8px}'
       ,'.dsh-canvas-ratio-pop-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#6b7280)}'
+      ,'.dsh-canvas-ratio-engine-warn{padding:7px 9px;border-radius:8px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.45);color:#b45309;font-size:11.5px;line-height:16px}'
       ,'.dsh-canvas-ratio-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}'
       ,'.dsh-canvas-ratio-card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:66px;padding:8px 2px 7px;border-radius:9px;border:1px solid var(--dsw-alias-border-l2,#e5e7eb);background:transparent;cursor:pointer;font:inherit}'
       ,'.dsh-canvas-ratio-card:hover{border-color:rgba(59,130,246,.5);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.08))}'
@@ -5602,6 +5632,11 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       safeSlot(ctx, 'conversation.chat.turnTail', {
         options: {
           name: 'conversation.chat.turnTail',
+          // 新版官方桌面的列表插槽要求条目带稳定 id,缺 id 的注册会被静默忽略
+          // (对照官方 schedule-created 条目)。数据获取双保险:select(旧版宿主调用)
+          // + ImageTail 组件内从 props.turn 自取(新版宿主直接传插槽载荷)。
+          id: 'dsh-canvas-image-tail',
+          order: 10,
           select: (owner) => {
             try {
               const data = owner && owner.turn && owner.turn.data && typeof owner.turn.data.get === 'function' ? owner.turn.data.get('canvas-images') : null;
