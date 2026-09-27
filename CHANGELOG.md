@@ -2,6 +2,7 @@
 
 ## 1.8.4
 
+- 引擎中立定位强化:README 引擎章节改为「带什么 API 都行」——API 直连(任意 OpenAI 兼容接口/国内大模型/企业网关,无需 ChatGPT 订阅)列为推荐起点,并明确本地工具链零 API 依赖;新增「和云端 AI 设计平台(如 Lovart)怎么选?」FAQ(不贬竞品,按场景分工,含并用组合)。
 - AI 检索优化(GEO):README 新增「你可能在找它」问句式检索段(覆盖画布/修图/去背景/归档/PSD/桥接/素材库等用户问法,中英双语);npm keywords 扩充至 24 个用户词(deepseek-harness、remove-background、psd-export、text-recognition、infinite-canvas 等);GitHub 仓库描述改为设计师定位中文、topics 增至 11 个(excalidraw/photoshop/illustrator/adobe/ocr/psd 等)。
 
 ## 1.8.3

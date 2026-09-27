@@ -76,6 +76,8 @@
     "illustrator",
     "adobe",
     "chatgpt",
-    "material-library"
+    "material-library",
+    "openai-compatible",
+    "image-api"
   ]
 }
