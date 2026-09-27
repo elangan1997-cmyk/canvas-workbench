@@ -5,6 +5,7 @@
       rembg: '去背景引擎',
       vectorize: '转矢量引擎',
       rembgModel: '识别模型(约170MB)',
+      ocr: 'OCR 文字识别',
       dshCodex: 'dsh-codex 引擎'
     };
 

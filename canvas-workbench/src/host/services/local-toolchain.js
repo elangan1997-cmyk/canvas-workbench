@@ -322,6 +322,7 @@ export function startToolchainProvisioning(ctx) {
       if (python) {
         await preparePythonTool(python, 'remove_background.py', 'rembg');
         await preparePythonTool(python, 'vectorize_image.py', 'vectorize');
+        await preparePythonTool(python, 'ocr_image.py', 'ocr');
       }
       await ensureRembgModel();
       await ensureDshCodex();
@@ -344,6 +345,7 @@ export async function runToolchainProvisioning(ctx) {
     if (python) {
       await preparePythonTool(python, 'remove_background.py', 'rembg');
       await preparePythonTool(python, 'vectorize_image.py', 'vectorize');
+      await preparePythonTool(python, 'ocr_image.py', 'ocr');
     }
     await ensureRembgModel();
     await ensureDshCodex();
