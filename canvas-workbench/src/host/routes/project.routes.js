@@ -185,7 +185,8 @@ export function register(router, h) {
             if (!info.isDirectory()) throw new Error('项目目录不存在');
             await stat(join(projectDir, 'canvas.json'));
             const recycleDir = join(dirname(projectDir), '已删除画布项目');
-            if (projectDir === recycleDir || projectDir.startsWith(recycleDir + '/')) throw new Error('项目已在回收目录中');
+            const normDir = (v) => String(v).replace(/\\/g, '/');
+            if (projectDir === recycleDir || normDir(projectDir).startsWith(normDir(recycleDir) + '/')) throw new Error('项目已在回收目录中');
             await mkdir(recycleDir, { recursive: true });
             const stamp = new Date().toISOString().replace(/[:.]/g, '-');
             const base = basename(projectDir);

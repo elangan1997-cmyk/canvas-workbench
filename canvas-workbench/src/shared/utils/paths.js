@@ -47,7 +47,9 @@ function isPathWithin(parent, child) {
   const insensitive = /^[A-Za-z]:\//.test(base) || /^[A-Za-z]:\//.test(target);
   const left = insensitive ? base.toLowerCase() : base;
   const right = insensitive ? target.toLowerCase() : target;
-  return right === left || right.startsWith(left + '/');
+  // Windows 路径是反斜杠:比对前统一成正斜杠,否则宿主扫描的归属判定恒为 false。
+  const norm = (value) => String(value).replace(/\\/g, '/');
+  return norm(right) === norm(left) || norm(right).startsWith(norm(left) + '/');
 }
 
 export { expandHome, normalizeLocalPath, materialDirectory, pathComparable, isPathWithin };

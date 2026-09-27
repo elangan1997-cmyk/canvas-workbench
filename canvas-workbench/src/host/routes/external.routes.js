@@ -101,7 +101,8 @@ export function register(router, h) {
               const previous = baseline.get(path);
               const changed = !previous || Math.abs(Number(previous.mtime || 0) - info.mtimeMs) > 1 || Number(previous.size || 0) !== info.size;
               if (!changed) continue;
-              outputs.push({ path, name: entry.name, mtime: info.mtimeMs, size: info.size, kind: 'psd', managed: path.startsWith(join(projectDir, 'assets') + '/'), url: previewUrl(path, info.mtimeMs) });
+              const normExt = (v) => String(v).replace(/\\/g, '/');
+              outputs.push({ path, name: entry.name, mtime: info.mtimeMs, size: info.size, kind: 'psd', managed: normExt(path).startsWith(normExt(join(projectDir, 'assets')) + '/'), url: previewUrl(path, info.mtimeMs) });
             }
             respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, outputs }));
           } catch (err) {

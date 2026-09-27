@@ -140,7 +140,7 @@ async function sessionArchiveFolder(sessionId, session, current) {
     : await archiveBaseFor(current);
   const folders = await readFolderIndex();
   const entry = folders[sessionId];
-  let folder = entry && entry.folder && entry.folder.indexOf('/') >= 0 ? entry.folder : '';
+  let folder = entry && entry.folder && String(entry.folder).replace(/\\/g, '/').indexOf('/') >= 0 ? entry.folder : '';
   // 标题没变、文件夹仍在 → 直接复用。
   if (folder && entry.title === title && pathKey(dirname(folder)) === pathKey(root) && await exists(folder)) return folder;
   // 解析目标名：同标题文件夹若归属其他会话，追加短会话号区分。

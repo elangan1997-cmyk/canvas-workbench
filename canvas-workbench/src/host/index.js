@@ -288,7 +288,7 @@ function apply(ctx) {
     }
     if (!saved) throw new Error('无法生成不重名的项目图片');
     const info = await stat(saved);
-    return { path: saved, name: saved.slice(saved.lastIndexOf('/') + 1), mtime: info.mtimeMs, size: info.size, kind: 'image', managed: true, url: previewUrl(saved, info.mtimeMs) };
+    return { path: saved, name: basename(saved), mtime: info.mtimeMs, size: info.size, kind: 'image', managed: true, url: previewUrl(saved, info.mtimeMs) };
   };
   const writeManagedSource = async (projectDir, requestedName, bytes, fallbackExt) => {
     if (!bytes || bytes.byteLength === 0 || bytes.byteLength > MAX_SOURCE_BYTES) throw new Error('源文件为空或超过 128MB');

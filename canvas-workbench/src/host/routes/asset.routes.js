@@ -149,11 +149,13 @@ export function register(router, h) {
             const recycleDir = join(projectDir, '画布回收站');
             const records = [];
             for (const source of paths) {
-              if (!source || !source.startsWith(projectDir + '/') || !isSourceImagePath(source) || source.includes('/画布回收站/')) continue;
+              const sourceNorm = String(source || '').replace(/\\/g, '/');
+              if (!source || !sourceNorm.startsWith(String(projectDir).replace(/\\/g, '/') + '/') || !isSourceImagePath(source) || sourceNorm.includes('/画布回收站/')) continue;
               try {
                 await access(source);
                 await mkdir(recycleDir, { recursive: true });
-                const originalName = source.slice(source.lastIndexOf('/') + 1);
+                const cut = Math.max(source.lastIndexOf('/'), source.lastIndexOf('\\'));
+                const originalName = cut >= 0 ? source.slice(cut + 1) : source;
                 let target = join(recycleDir, originalName);
                 for (let index = 1; index <= 1000; index += 1) {
                   try { await access(target); target = join(recycleDir, originalName.replace(/(\.[^.]+)?$/, '-删除于-' + stamp + (index > 1 ? '-' + index : '') + '$1')); }
@@ -176,7 +178,8 @@ export function register(router, h) {
             const projectDir = projectDirectory(body.cwd, body.project);
             const archived = expandHome(String(body.archived || ''));
             const original = expandHome(String(body.original || ''));
-            if (!projectDir || !archived.startsWith(join(projectDir, '画布回收站') + '/') || !original.startsWith(projectDir + '/')) throw new Error('恢复路径无效');
+            const normPath = (v) => String(v).replace(/\\/g, '/');
+            if (!projectDir || !normPath(archived).startsWith(normPath(join(projectDir, '画布回收站')) + '/') || !normPath(original).startsWith(normPath(projectDir) + '/')) throw new Error('恢复路径无效');
             await mkdir(dirname(original), { recursive: true });
             try { await access(original); throw new Error('原位置已有同名文件'); } catch (err) { if (err && err.message === '原位置已有同名文件') throw err; }
             await rename(archived, original);

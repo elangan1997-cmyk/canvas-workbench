@@ -3123,7 +3123,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 // 占位原位替换还是兜底加入,只处理一次,否则会出现两张一样的图。
                 if (chatHandledRef.current.has(path)) continue;
                 chatHandledRef.current.add(path);
-                const name = path.slice(path.lastIndexOf('/') + 1) || '聊天生成.png';
+                const name = imageName(path) || '聊天生成.png';
                 const slotId = pending.shift();
                 if (slotId) {
                   post({ type: 'chat-gen-resolve', id: slotId, url: '/dsh-canvas/image?path=' + encodeURIComponent(path), path, name });
@@ -4891,7 +4891,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                       pendingRef.current.push({ ...item, explicit: true });
                     }
                     flushPending();
-                    setFeedback('✓ 检测到项目新增文件，已加入画布：' + fresh.map((f) => f.name || f.path.split('/').pop()).join('、'));
+                    setFeedback('✓ 检测到项目新增文件，已加入画布：' + fresh.map((f) => f.name || imageName(f.path)).join('、'));
                   }
                 }
               } catch (errAuto) {}
