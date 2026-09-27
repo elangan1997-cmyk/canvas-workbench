@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.2
+
+- **修复自动上画布出现两张重复图**:宿主的完成记录是环形列表、每轮轮询都会重放,占位替换路径此前未登记去重,第二轮轮询走了兜底"普通加入"导致同图两次入画。现在同一路径无论占位替换还是兜底加入都只处理一次(上限 500 条防无界)。
+- **修复画布冷启动窗口丢占位**:生成开始时若画布 iframe 尚未就绪(大项目快照加载中),占位创建此前被直接丢弃;现在 iframe 回报 deferred,客户端下一轮轮询自动重建,占位不再因撞上冷启动而消失。
+
 ## 1.9.1
 
 - **修复聊天生图整轮报错(v4 会话格式不兼容)**:设计模式下调 imagegen 后,注入的上下文消息仍用 v3 旧写法 `source:{kind:'plugin',plugin:'canvas-workbench'}`,被会话格式 v4 的 producer-owned 校验整轮拒收(「本轮运行失败 format v4 message requires a producer-owned source kind」),重试全部失败、后续任务卡住。改为 `Object.freeze({kind:'plugin:canvas-workbench'})`(dsh-codex 同款模式,与 v3→v4 迁移器对旧会话的改写结果一致,新旧会话形态统一);文字分析服务的同类旧写法一并修正。
