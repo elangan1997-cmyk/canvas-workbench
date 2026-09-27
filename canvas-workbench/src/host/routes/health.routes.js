@@ -2,6 +2,7 @@
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
 import { readFile } from 'node:fs/promises';
 import { imageEngineHealth } from '../../../lib/image-engine.js';
+import { chatGenerationStatus } from '../services/chat-generation.js';
 import { isMac, isWindows, platformCapabilities } from '../../../lib/platform.js';
 import { VENDOR_ASSETS } from '../vendor-assets.js';
 import { respond } from '../server/http.js';
@@ -9,6 +10,12 @@ import { name } from '../plugin-meta.js';
 
 export function register(router, h) {
   const { ctx, runProcess } = h;
+
+  // 聊天生图状态:进行中数量 + 最近完成的产出路径(客户端轮询,驱动
+  // 「生成中占位提示」与「完成后自动上画布」)。只读,无副作用。
+  router.add({ method: 'GET', path: '/dsh-canvas/generation-status', prefix: false }, async (req, res, { CORS }) => {
+    respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, ...chatGenerationStatus() }));
+  });
   // The canvas renderer must not depend on a public CDN.  DSH Desktop
   // may block third-party scripts inside srcdoc frames, and domestic or
   // offline networks can leave the iframe waiting forever.  Serve the

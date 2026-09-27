@@ -4,9 +4,11 @@ import { basename, dirname, extname, join } from 'node:path';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { generateChatImage } from './image-engine.js';
+import { beginChatGeneration, endChatGeneration, noteChatGenerationCompleted } from '../src/host/services/chat-generation.js';
 
 const TOOL_NAME = 'imagegen';
 const MAX_REFERENCE_IMAGES = 5;
+
 
 function safeBaseName(value) {
   const clean = String(value || '聊天生成图片').replace(/[\\/:*?"<>|\x00-\x1f]/g, '-').trim().slice(0, 80);
@@ -239,7 +241,13 @@ function routedTool(ctx, original, getChatContext) {
       // 现在生成与聊天推送照常，仅跳过归档并在结果里提示绑定。
       const args = parseArgs(rawArgs);
       const images = args.paths.length ? await workspaceImages(ctx, exec, args.paths) : args.count ? await recentImages(ctx, exec, args.count) : [];
-      const generated = await generateChatImage({ ctx, images, prompt: args.prompt, signal: exec.signal });
+      beginChatGeneration();
+      let generated;
+      try {
+        generated = await generateChatImage({ ctx, images, prompt: args.prompt, signal: exec.signal });
+      } finally {
+        endChatGeneration();
+      }
       const ref = await ctx.attachments.saveImage({ data: generated.bytes, mediaType: 'image/png', name: 'generated.png' });
       const value = {
         prompt: args.prompt,
@@ -271,6 +279,7 @@ function routedTool(ctx, original, getChatContext) {
         await writeFile(outputPath, generated.bytes, { flag: 'wx' });
         value.image.name = basename(outputPath);
         value.file = { path: outputPath, operation: 'create' };
+        noteChatGenerationCompleted(outputPath);
         if (archiveNotice) value.notice = archiveNotice;
       } catch (err) {
         value.writeError = String((err && err.message) || err);

@@ -23,6 +23,30 @@
           detail: { cwd: activeChatCwd, sessionId: activeChatSessionId, project: activeCanvasProjectPath }
         }));
       }, [projectInfo.project]);
+      // 聊天生图状态轮询:宿主是生成起止与产出路径的唯一权威来源。
+      // active>0 → 画布显示「生成中」占位徽标;新完成的产出路径且
+      // 自动上画布开启 → 走与手动按钮相同的令牌通道派发进画布。
+      React.useEffect(() => {
+        if (!on) { setChatGenerating(0); return; }
+        let stopped = false;
+        const tick = async () => {
+          try {
+            const res = await fetch('/dsh-canvas/generation-status', { headers: { accept: 'application/json' } });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (stopped) return;
+            setChatGenerating(Number(data.active) || 0);
+            if (Array.isArray(data.completed) && canvasAutoAddEnabled()) {
+              for (const item of data.completed) {
+                if (item && item.path) dispatchGeneratedToCanvas(String(item.path));
+              }
+            }
+          } catch (err) {}
+        };
+        tick();
+        const timer = window.setInterval(tick, 2000);
+        return () => { stopped = true; window.clearInterval(timer); };
+      }, [on]);
       const [projectDialog, setProjectDialog] = React.useState(null);
       const [projectList, setProjectList] = React.useState({ loading: false, items: [], error: '' });
       const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
@@ -31,6 +55,8 @@
       const [adobeInstall, setAdobeInstall] = React.useState({ scriptsInstalled: true, cepInstalled: true });
       const [imageSettings, setImageSettings] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
+      const [chatGenerating, setChatGenerating] = React.useState(0);
+      const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
@@ -1827,6 +1853,10 @@
           onPointerDown: startResize,
           title: '拖动调整宽度'
         }),
+        chatGenerating > 0 && autoAddOn ? React.createElement('div', { className: 'dsh-canvas-gen-badge' },
+          React.createElement('span', { className: 'dsh-canvas-gen-badge-dot' }),
+          React.createElement('span', null, '聊天生图中 ×' + chatGenerating + (chatGenerating > 1 ? ',完成自动上画布' : '…完成后自动上画布'))
+        ) : null,
         React.createElement('div', { className: 'dsh-canvas-toolbar' },
           React.createElement('span', { className: 'dsh-canvas-title' }, '无限画布'),
           React.createElement('button', { className: 'dsh-canvas-project', title: '打开项目管理', onClick: openProjectList },
@@ -1926,6 +1956,22 @@
                   React.createElement('span', null,
                     React.createElement('strong', null, 'API ', React.createElement('em', { className: 'dsh-canvas-engine-badge ' + (imageSettings.health && imageSettings.health.api && imageSettings.health.api.ready ? 'is-ready' : '') }, imageSettings.health && imageSettings.health.api && imageSettings.health.api.ready ? '已配置' : '待配置')),
                     React.createElement('small', null, '连接 OpenAI 兼容图片接口，适合企业网关或独立 image2 服务。')
+                  )
+                )
+              ),
+              React.createElement('div', { className: 'dsh-canvas-engine-autoadd' },
+                React.createElement('label', { className: 'dsh-canvas-engine-autoadd-row' },
+                  React.createElement('input', {
+                    type: 'checkbox',
+                    checked: autoAddOn,
+                    onChange: (e) => {
+                      const next = Boolean(e.target.checked);
+                      setCanvasAutoAddEnabled(next);
+                      setAutoAddOnState(next);
+                    }
+                  }),
+                  React.createElement('span', null, '聊天生图完成后自动上画布',
+                    React.createElement('small', null, '默认开启:生成中在画布显示占位提示,完成后自动加入,无需逐张点「加入画布」。批量生图或大量抽卡重跑时建议关闭,改回卡片手动加入,避免画布被占满。')
                   )
                 )
               ),
