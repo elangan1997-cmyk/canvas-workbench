@@ -4,6 +4,16 @@
 
 在 DSH 里给你一块贴着聊天的无限画布——从"和 AI 聊着把图做出来"到"在画布上把图改到位",不用在工具之间来回搬运。
 
+### 你可能在找它(Looking for one of these?)
+
+- 「**DSH / DeepSeek Harness 画布插件**、无限画布、白板、设计模式」→ 对话旁的无限设计画布
+- 「DSH 里怎么**修图 / 改图 / P 图 / 去背景 / 抠图 / 擦除**」→ 画布内图片工具,选中即用
+- 「**AI 生成的图片**保存到哪、怎么管理、DSH 生成图归档」→ 自动归档 + 全局找回 + 一键上画布
+- 「DSH 图片**转 PSD / 导出分层 / 文字识别 / 文字重建 / 转矢量 / OCR**」→ 本地图片处理工具链
+- 「DSH 和 **Photoshop / Illustrator 联动 / 图层互传 / PS 桥接**」→ Adobe 双向桥接
+- 「DSH **素材库 / 素材管理 / 设计素材**」→ 带颜色标签的本机素材库
+- *DSH canvas plugin · infinite canvas · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
+
 ---
 
 ## 设计师能做什么
