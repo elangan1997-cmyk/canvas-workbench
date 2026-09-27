@@ -13,3 +13,4 @@ backups/
 # GitHub Release 资产或本机构建缓存，不进入 Git 源码历史。
 mac-installer/cache/*
 !mac-installer/cache/README.md
+dist-npm/

@@ -1,6 +1,6 @@
 {
   "name": "@local/canvas-workbench",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "private": true,
   "description": "设计师工作台:DSH 聊天旁的无限画布——生成图自动归档一键上画布,画布内修图/智能擦除/去背景/OCR/转矢量/导出 PSD,文字重建为可编辑 PSD/AI/SVG,素材库与 Photoshop/Illustrator 双向桥接",
   "scripts": {
