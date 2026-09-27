@@ -2,10 +2,11 @@
 // pnpm 完成 profile 依赖/锁文件/白名单升级——与手动升级流程完全一致,不再依赖
 // 插件市场检索节奏(市场有 minimumReleaseAge 24h 策略,且未必及时提供更新按钮)。
 // 源码/开发副本安装(@local)不支持,提示走同步脚本。
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dshHome } from './image-engine-settings.js';
 
 const SELF_PATH = fileURLToPath(import.meta.url);
 const NPM_REGISTRY = 'https://registry.npmjs.org';
@@ -14,15 +15,37 @@ const PACKAGE_NAME = 'canvas-workbench';
 
 function normalizeSlashes(path) { return String(path || '').replace(/\\/g, '/'); }
 
-/** 由本文件所在路径推导安装形态与 profile 目录。 */
-export function installContext() {
+async function profileDeclaresPlugin(profileDir) {
+  try {
+    const pkg = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'));
+    return Boolean(pkg && pkg.dependencies && pkg.dependencies[PACKAGE_NAME]);
+  } catch { return false; }
+}
+
+/**
+ * 推导安装形态与目标 profile。运行副本可能装在非常规位置(根级 profiles/node_modules、
+ * 清理残留后进程仍挂在旧路径等),路径推导只作首选,必须校验该目录确有声明本插件依赖的
+ * package.json;不通则扫描 profiles 目录下各 profile,找到真正声明依赖的那个(Win 实机教训)。
+ */
+export async function installContext() {
   const self = normalizeSlashes(SELF_PATH);
   const marker = '/node_modules/' + PACKAGE_NAME + '/';
   const index = self.indexOf(marker);
   if (index < 0) return { mode: 'source' };
-  const installRoot = self.slice(0, index); // <profile>/node_modules 或 <profiles>/node_modules/@local
-  if (installRoot.endsWith('/@local') || installRoot.endsWith('\\@local')) return { mode: 'local' };
-  return { mode: 'profile', profileDir: dirname(installRoot) };
+  const installRoot = self.slice(0, index);
+  if (installRoot.endsWith('/@local')) return { mode: 'local' };
+  const derived = dirname(installRoot);
+  if (await profileDeclaresPlugin(derived)) return { mode: 'profile', profileDir: derived };
+  // 兜底:扫描 profiles 下声明了 canvas-workbench 依赖的目录(可能有多处,取第一个)。
+  try {
+    const profilesRoot = join(dshHome(), 'profiles');
+    for (const entry of await readdir(profilesRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const candidate = join(profilesRoot, entry.name);
+      if (await profileDeclaresPlugin(candidate)) return { mode: 'profile', profileDir: candidate, relocated: true };
+    }
+  } catch {}
+  return { mode: 'source', reason: '未找到声明 canvas-workbench 依赖的 profile' };
 }
 
 function compareVersions(a, b) {
@@ -55,7 +78,7 @@ export async function readInstalledVersion() {
 
 /** 检查更新:返回当前/最新/是否有更新,以及安装形态(source/local 不支持一键更新)。 */
 export async function checkUpdate() {
-  const context = installContext();
+  const context = await installContext();
   const current = await readInstalledVersion();
   let latest = '';
   let registry = '';
@@ -98,7 +121,7 @@ function runUpdater(exe, args, env, onOutput) {
  * Windows 下若个别文件被占用(EBUSY),返回可复制的 PowerShell 兜底命令。
  */
 export async function performSelfUpdate() {
-  const context = installContext();
+  const context = await installContext();
   if (context.mode !== 'profile') {
     return { ok: false, error: context.mode === 'local' ? '本机为开发副本安装,请用仓库同步脚本更新' : '源码运行环境不支持一键更新' };
   }
