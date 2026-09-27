@@ -219,6 +219,17 @@
 
   /* ===================== 置入 / 打开 ===================== */
   function placeFile(file) {
+    try {
+      return placeFileOnce(file);
+    } catch (ePlace) {
+      /* 发件箱路径含中文/空格时 ActionManager 置入报"常规 Photoshop 错误"(Windows 实测):
+         复制到 ASCII 临时目录再置入,与 openDocSafe 的既有兜底同款。 */
+      var tempPlace = new File(B.child(B.tempFolder(), 'place-' + B.rand4() + '-' + file.name));
+      if (!file.copy(tempPlace)) throw ePlace;
+      return placeFileOnce(tempPlace);
+    }
+  }
+  function placeFileOnce(file) {
     var d = new ActionDescriptor();
     d.putPath(cTID('null'), file);
     d.putEnumerated(cTID('FTcs'), cTID('QCSt'), cTID('Qcsa'));

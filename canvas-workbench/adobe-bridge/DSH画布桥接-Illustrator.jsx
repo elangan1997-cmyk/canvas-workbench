@@ -191,8 +191,19 @@
   /* 置入为链接对象；归位时把清单的 y 向下坐标换回页面坐标：x = 画板.left + left；y = 画板.top − top */
   function placeInto(doc, file, origin, alwaysHome, label) {
     var ab = activeArtboard(doc);
-    var pi = doc.placedItems.add();
-    pi.file = file;
+    var pi = null;
+    try {
+      pi = doc.placedItems.add();
+      pi.file = file;
+    } catch (eDirect) {
+      /* 发件箱路径含中文/空格时 PlacedItem.file 校验误报路径无效(Windows 实测):
+         复制到 ASCII 临时目录再置入,与 openDocSafe 的既有兜底同款。 */
+      if (pi) { try { pi.remove(); } catch (eRemove) {} }
+      var tempPlace = new File(B.child(B.tempFolder(), 'place-' + B.rand4() + '-' + file.name));
+      if (!file.copy(tempPlace)) throw eDirect;
+      pi = doc.placedItems.add();
+      pi.file = tempPlace;
+    }
     try { pi.name = label + ' ← 画布'; } catch (e) {}
     if (B.shouldHome(origin, doc.name, alwaysHome)) {
       var W = origin.bounds.right - origin.bounds.left, H = origin.bounds.bottom - origin.bounds.top;

@@ -21,7 +21,27 @@ export function isAbsolutePath(value) {
   return isAbsolute(expanded) || win32.isAbsolute(expanded);
 }
 
+/** Windows 系统目录里的关键 exe:新版桌面沙箱的 PATH 不一定包含 C:\Windows,
+ *  探测列表前先试 SystemRoot 绝对路径,explorer/powershell 不再依赖 PATH。 */
+function windowsAbsoluteCandidates(names) {
+  if (!isWindows || !Array.isArray(names)) return [];
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const out = [];
+  for (const name of names) {
+    if (!/\.exe$/i.test(name)) continue;
+    out.push(join(root, 'System32', name), join(root, name));
+  }
+  return out;
+}
+
 async function resolveFirst(ctx, names) {
+  const absolute = windowsAbsoluteCandidates(names);
+  if (absolute.length) {
+    const { access } = await import('node:fs/promises');
+    for (const candidate of absolute) {
+      try { await access(candidate); return candidate; } catch {}
+    }
+  }
   for (const name of names) {
     try {
       const executable = await ctx.subprocess.resolveExecutable(name);
