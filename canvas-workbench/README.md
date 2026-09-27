@@ -1,11 +1,12 @@
-# Canvas Workbench · 设计师工作台
+# Canvas Workbench · 本地生图工作台
 
-> A designer's workbench inside DeepSeek Harness: an infinite canvas beside your chat, automatic archiving of every generated image, in-canvas editing (erase / background removal / OCR / vectorize / PSD export), text rebuild into editable PSD/AI/SVG, a tagged material library, and a two-way bridge to Photoshop & Illustrator.
+> A local-first AI image workstation inside DeepSeek Harness — an affordable, bring-your-own-API alternative to cloud design agents like Lovart: generate, edit, and deliver from your own machine, with layer-level Photoshop/Illustrator round-trip as the premium edge.
 
-在 DSH 里给你一块贴着聊天的无限画布——从"和 AI 聊着把图做出来"到"在画布上把图改到位",不用在工具之间来回搬运。
+**开自己的 API 生图,不交订阅费**——在 DSH 里完成「生成 → 编辑 → 交付」整条链路:聊天生图、画布排版、修图擦除、可编辑 PSD/AI 交付,文件全程在你自己的磁盘上。可视为**本地版的 Lovart 平价平替**:核心链路对齐,成本是你自己的 API 用量;再叠加两个云端产品给不了的溢价点——**PS/AI 图层级双向联动**与**可编辑文件交付**。
 
 ### 你可能在找它(Looking for one of these?)
 
+- 「**本地生图工具 / Lovart 平替 / 不想交订阅费的 AI 设计**」→ 开自己的 API(任意 OpenAI 兼容接口,国内大模型/企业网关直连),本地零订阅
 - 「**DSH / DeepSeek Harness 画布插件**、无限画布、白板、设计模式」→ 对话旁的无限设计画布
 - 「DSH 里怎么**修图 / 改图 / P 图 / 去背景 / 抠图 / 擦除**」→ 画布内图片工具,选中即用
 - 「**AI 生成的图片**保存到哪、怎么管理、DSH 生成图归档」→ 自动归档 + 全局找回 + 一键上画布
@@ -13,7 +14,7 @@
 - 「DSH 和 **Photoshop / Illustrator 联动 / 图层互传 / PS 桥接**」→ Adobe 双向桥接
 - 「DSH **素材库 / 素材管理 / 设计素材**」→ 带颜色标签的本机素材库
 - 「不想开 ChatGPT 订阅,**用自己的图片 API / 国内大模型 API / 企业网关**做设计」→ 任意 OpenAI 兼容接口直连
-- *DSH canvas plugin · infinite canvas · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
+- *DSH canvas plugin · local Lovart alternative · infinite canvas · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
 
 ---
 
@@ -76,14 +77,15 @@ dsh plugin --profile web add canvas-workbench
 
 引擎不会静默切换,状态面板实时显示安装/登录/凭据状态。
 
-## 和云端 AI 设计平台(如 Lovart)怎么选?
+## 是 Lovart 的平价平替吗?
 
-两者解决不同的问题,也可以并用:
+对**核心链路——生图 → 编辑 → 交付**来说,是:
 
-- 需要**团队协作、模板灵感生态、视频/网页/PPT 全品类**,选云端平台——开箱即用,代价是订阅费用与数据在云端;
-- 需要**图层级 Photoshop/Illustrator 往返、可编辑 PSD/AI 交付、数据全本地、自己带 API(模型与计费自由)**,选 canvas-workbench——MIT 开源,文件永远在你自己的磁盘上。
+- **成本**:开你自己的 API(国内大模型/企业网关/ChatGPT 订阅均可),按用量付费,没有平台订阅;去背景/OCR/转矢量/PSD 导出/文字重建是**本地工具链,零 API 成本**;
+- **数据**:画布即本地项目文件,生成图自动归档落盘,不上云;
+- **独有溢价**:图层级 **Photoshop/Illustrator 双向桥接**与**可编辑 PSD/AI/SVG 交付**——云端产品架构上做不到与本机 Adobe 图层级往返。
 
-常见组合:云端平台出概念稿,canvas-workbench 做本地精修与印刷交付。
+不在当前范围的:团队云端协作、视频/动效、模板灵感生态——需要这些时配合云端平台使用(云端出概念稿,本地精修交付)。
 
 ## 系统要求
 
