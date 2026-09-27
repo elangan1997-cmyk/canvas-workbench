@@ -21,6 +21,7 @@ import time
 REMBG_VERSION = "2.0.61"
 RUNTIME_ROOT = Path.home() / ".dsh" / "canvas-workbench" / "rembg-runtime"
 MODEL_ROOT = Path.home() / ".dsh" / "canvas-workbench" / "rembg-models"
+MODEL_URL = os.environ.get("DSH_REMBG_MODEL_URL", "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx")
 MARKER = RUNTIME_ROOT / ("rembg-" + REMBG_VERSION + ".ready")
 PROGRESS_PATH: Path | None = None
 
@@ -61,6 +62,16 @@ def run_checked(argv: list[str], label: str) -> None:
         raise RuntimeError(label + "失败（退出码 " + str(exc.returncode) + "）") from exc
 
 
+PIP_INDEX_URL = os.environ.get("DSH_PIP_INDEX", "").strip()
+
+
+def pip_install_args() -> list[str]:
+    args = ["-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary", "--timeout", "120"]
+    if PIP_INDEX_URL:
+        args += ["-i", PIP_INDEX_URL]
+    return args
+
+
 def install_runtime() -> Path:
     python = runtime_python()
     RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
@@ -71,13 +82,7 @@ def install_runtime() -> Path:
     run_checked(
         [
             str(python),
-            "-m",
-            "pip",
-            "install",
-            "--disable-pip-version-check",
-            "--prefer-binary",
-            "--timeout",
-            "120",
+            *pip_install_args(),
             "rembg[cpu]==" + REMBG_VERSION,
         ],
         "安装 rembg 本地运行环境",
@@ -85,6 +90,42 @@ def install_runtime() -> Path:
     MARKER.write_text(REMBG_VERSION + "\n", encoding="utf-8")
     emit_progress("environment", "rembg 运行环境准备完成", 45)
     return python
+
+
+def ensure_runtime_no_exec() -> None:
+    """prepare 模式:确保隔离 venv 存在(由当前解释器直接调用 install_runtime)。"""
+    if importlib.util.find_spec("rembg") is not None:
+        return
+    python = runtime_python()
+    if MARKER.exists() and python.exists():
+        probe = subprocess.run(
+            [str(python), "-c", "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('rembg') else 1)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+        )
+        if probe.returncode == 0:
+            return
+    install_runtime()
+
+
+def prepare_model() -> None:
+    """预下载 isnet 模型到 REMBG_HOME(pooch 之后按文件命中缓存,不再联网)。"""
+    MODEL_ROOT.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("REMBG_HOME", str(MODEL_ROOT))
+    os.environ.setdefault("U2NET_HOME", str(MODEL_ROOT))
+    os.environ.setdefault("OMP_NUM_THREADS", "2")
+    emit_progress("model", "正在预下载 isnet-general-use 模型", 55)
+    try:
+        import pooch  # type: ignore
+        pooch.retrieve(
+            url=MODEL_URL,
+            known_hash=None,
+            fname="isnet-general-use.onnx",
+            path=str(MODEL_ROOT),
+            progressbar=False,
+        )
+        emit_progress("model", "模型预下载完成", 85)
+    except Exception as exc:  # noqa: BLE001 - 预下载失败不致命,首次使用时会再试
+        emit_progress("model", "模型预下载失败(首次使用时会重试): " + str(exc)[:120], 55)
 
 
 def ensure_runtime() -> None:
@@ -169,11 +210,19 @@ def new_session_with_progress(new_session, model: str):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--input", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--model", default="isnet-general-use")
     parser.add_argument("--progress-file", type=Path, default=None)
+    parser.add_argument("--prepare", action="store_true", help="只准备运行环境与模型(后台预置),不做推理")
     args = parser.parse_args()
+    if args.prepare:
+        ensure_runtime_no_exec()
+        prepare_model()
+        print(json.dumps({"ok": True, "prepared": True}, ensure_ascii=False), flush=True)
+        return 0
+    if not args.input or not args.output:
+        raise RuntimeError("缺少 --input/--output")
     global PROGRESS_PATH
     PROGRESS_PATH = args.progress_file
     emit_progress("environment", "正在准备本地 rembg 环境", 3)

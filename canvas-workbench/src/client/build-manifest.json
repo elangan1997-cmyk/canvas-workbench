@@ -211,6 +211,9 @@
       ]
     },
     {
+      "file": "app/025-ToolchainCard.js"
+    },
+    {
       "file": "app/02-CanvasOverlay.js",
       "note": "CanvasOverlay 主组件（素材库 / 引擎设置 / 编辑工具 / 主题同步）",
       "lines": [

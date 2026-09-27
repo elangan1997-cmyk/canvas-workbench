@@ -1,6 +1,7 @@
 // 自 lib/index.js apply() 机械迁移（v1.8 Phase 2）：每个 handler 体逐字未改，
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
 import { imageEngineHealth, readImageEngineSettings, testImageApiConnection, writeImageEngineSettings, writeLegacyApiAuth } from '../../../lib/image-engine.js';
+import { readToolchainStatus, runToolchainProvisioning } from '../services/local-toolchain.js';
 import { isAbsolutePath } from '../../../lib/platform.js';
 import { stat } from 'node:fs/promises';
 import { parseQuery, readBody, respond } from '../server/http.js';
@@ -56,6 +57,22 @@ export function register(router, h) {
           } catch (err) {
             respond(res, 400, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
           }
+          return;
+  });
+
+  router.add({ method: 'GET', path: '/dsh-canvas/toolchain-status', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          const status = await readToolchainStatus();
+          respond(res, 200, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: true, status }));
+          return;
+  });
+
+  router.add({ method: 'POST', path: '/dsh-canvas/toolchain-prepare', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          if (!sameOriginRequest()) {
+            respond(res, 403, { 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: '仅允许从当前 DSH 页面执行配置操作' }));
+            return;
+          }
+          const result = await runToolchainProvisioning(ctx);
+          respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify(result));
           return;
   });
 

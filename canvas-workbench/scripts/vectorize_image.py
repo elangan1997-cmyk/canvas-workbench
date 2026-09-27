@@ -137,11 +137,11 @@ def ensure_vtracer_runtime(skip_if_vecto: bool = True) -> None:
         VTRACER_RUNTIME.mkdir(parents=True, exist_ok=True)
         if not python.exists():
             subprocess.run([sys.executable, "-m", "venv", str(VTRACER_RUNTIME)], check=True, timeout=120)
-        subprocess.run(
-            [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary", "--timeout", "120", "vtracer==" + VTRACER_VERSION, "pillow"],
-            check=True,
-            timeout=300,
-        )
+        install_cmd = [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary", "--timeout", "120"]
+        pip_index = os.environ.get("DSH_PIP_INDEX", "").strip()
+        if pip_index:
+            install_cmd += ["-i", pip_index]
+        subprocess.run(install_cmd + ["vtracer==" + VTRACER_VERSION, "pillow"], check=True, timeout=300)
         VTRACER_MARKER.write_text(VTRACER_VERSION + "\n", encoding="utf-8")
     # 让后续 import 与依赖都在隔离环境中运行。
     os.execv(str(python), [str(python), *sys.argv])
@@ -529,13 +529,43 @@ def run_vecto(path: Path, output: Path, info: dict[str, Any], vector_mode: str =
             temp_dir.cleanup()
 
 
+def prepare_runtime() -> None:
+    """后台预置:确保 vtracer 隔离 venv 就绪(不 exec 重入、不推理)。"""
+    if importlib.util.find_spec("vtracer") or find_executable(["vtracer"]):
+        return
+    python = runtime_python()
+    if VTRACER_MARKER.exists() and python.exists():
+        probe = subprocess.run(
+            [str(python), "-c", "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('vtracer') else 1)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+        )
+        if probe.returncode == 0:
+            return
+    VTRACER_RUNTIME.mkdir(parents=True, exist_ok=True)
+    if not python.exists():
+        subprocess.run([sys.executable, "-m", "venv", str(VTRACER_RUNTIME)], check=True, timeout=120)
+    install_cmd = [str(python), "-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary", "--timeout", "120"]
+    pip_index = os.environ.get("DSH_PIP_INDEX", "").strip()
+    if pip_index:
+        install_cmd += ["-i", pip_index]
+    subprocess.run(install_cmd + ["vtracer==" + VTRACER_VERSION, "pillow"], check=True, timeout=300)
+    VTRACER_MARKER.write_text(VTRACER_VERSION + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--input", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--backend", choices=["auto", "imagetracer", "vtracer", "vecto"], default="auto")
     parser.add_argument("--vector-mode", choices=sorted(VECTOR_MODES), default="auto")
+    parser.add_argument("--prepare", action="store_true", help="只准备 vtracer 运行环境(后台预置)")
     args = parser.parse_args()
+    if args.prepare:
+        prepare_runtime()
+        print(json.dumps({"ok": True, "prepared": True}, ensure_ascii=False), flush=True)
+        return 0
+    if not args.input or not args.output:
+        return fail("缺少 --input/--output")
     if not args.input.exists() or not args.input.is_file():
         return fail("输入图片不存在")
     if args.input.suffix.lower().lstrip(".") not in RASTER_EXTENSIONS:

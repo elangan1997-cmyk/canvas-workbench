@@ -136,6 +136,7 @@
       // 缺菜单脚本 / CEP 面板才显示对应安装入口（装完按钮即消失，避免常驻三个一次性动作）。
       const [adobeInstall, setAdobeInstall] = React.useState({ scriptsInstalled: true, cepInstalled: true });
       const [imageSettings, setImageSettings] = React.useState(null);
+      const [toolchain, setToolchain] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
@@ -803,6 +804,7 @@
       const openImageSettings = () => {
         setMoreMenuOpen(false);
         setImageSettings({ loading: true, error: '' });
+        fetch('/dsh-canvas/toolchain-status').then((r) => r.json()).then((d) => { if (d && d.ok) setToolchain(d.status); }).catch(() => {});
         fetch('/dsh-canvas/image-settings')
           .then((r) => r.json().then((data) => ({ ok: r.ok, data })))
           .then((result) => {
@@ -2109,6 +2111,7 @@
               ),
               imageSettings.error ? React.createElement('div', { className: 'dsh-canvas-engine-error' }, '⚠ ' + imageSettings.error) : null,
               imageSettings.notice ? React.createElement('div', { className: 'dsh-canvas-engine-notice' }, imageSettings.notice) : null,
+              React.createElement(ToolchainCard, { toolchain, onRefresh: () => { fetch('/dsh-canvas/toolchain-status').then((r) => r.json()).then((d) => { if (d && d.ok) setToolchain(d.status); }).catch(() => {}); } }),
               React.createElement('div', { className: 'dsh-canvas-engine-note' }, '安全说明：OAuth 与 API Key 分开保存，前端永远读不到完整凭据；不会写入画布项目、聊天消息或 Git 仓库。'),
               React.createElement('div', { className: 'dsh-canvas-project-actions' },
                 React.createElement('button', { className: 'dsh-canvas-tb', disabled: imageSettingsBusy, onClick: () => setImageSettings(null) }, '取消'),

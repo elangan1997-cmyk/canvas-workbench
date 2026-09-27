@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { isMac, isWindows, resolvePython } from '../../lib/platform.js';
 import { PLUGIN_ROOT } from './vendor-assets.js';
 import { createPythonToolRegistry } from './adapters/python.adapter.js';
+import { startToolchainProvisioning } from './services/local-toolchain.js';
 import { register as registerContracts } from './routes/contracts.routes.js';
 import { installChatImageRouter } from '../../lib/chat-image-router.js';
 import { expandHome, isPathWithin } from '../shared/utils/paths.js';
@@ -376,6 +377,8 @@ function apply(ctx) {
   });
   // 启动时静默确保 Adobe 脚本已安装（幂等：版本一致且文件在位就跳过；不会弹窗、不提权）。
   adobeBridge.ensureInstalled().catch(() => {});
+  // 本地工具链后台预置:镜像兜底下载部署并自检,首次点击即就绪;任何失败只记状态不阻断。
+  startToolchainProvisioning(ctx);
   const h = { adobeBridge, jobs, pythonTools, chatContexts, ctx, documentPreviewPath, svgInlinePreviewPath, flattenRecycleBin, previewUrl, progressPathFor, projectDirectory, projectStatePath, psdPreviewPath, runProcess, runProcessWithTimeout, scanProjectImagesShared, stateWriteChains, writeManagedImage, writeManagedSource, writeManagedSvg, writeProgressFile };
   const router = createRouter();
   router.use(jobTrackingMiddleware(jobs));
