@@ -129,19 +129,6 @@
       const [imageSettings, setImageSettings] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
-      const [imageSize, setImageSizeState] = React.useState('auto');
-      React.useEffect(() => {
-        if (!on) return;
-        let alive = true;
-        fetch('/dsh-canvas/image-settings').then((r) => r.json()).then((d) => {
-          if (alive && d && d.ok && d.imageSize) setImageSizeState(d.imageSize);
-        }).catch(() => {});
-        return () => { alive = false; };
-      }, [on]);
-      // 引擎设置弹窗保存后同步比例显示
-      React.useEffect(() => {
-        if (imageSettings && imageSettings.imageSize) setImageSizeState(String(imageSettings.imageSize));
-      }, [imageSettings]);
       const [textRebuild, setTextRebuild] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
@@ -1971,26 +1958,7 @@
           ),
           React.createElement('span', { className: 'dsh-canvas-status dsh-canvas-status-' + status },
             status === 'ready' ? '已就绪' : (status === 'error' ? '加载失败' : '加载中…')),
-          React.createElement('select', {
-            className: 'dsh-canvas-ratio',
-            title: '生图尺寸比例(仅 API 引擎生效;编辑/擦除跟随原图)',
-            value: imageSize,
-            onChange: (e) => {
-              const next = e.target.value;
-              setImageSizeState(next);
-              fetch('/dsh-canvas/image-settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imageSize: next })
-              }).then(() => setFeedback('✓ 生图比例:' + (next === 'auto' ? '自动' : next))).catch(() => setFeedback('⚠ 比例保存失败'));
-            }
-          },
-            React.createElement('option', { value: 'auto' }, '比例 自动'),
-            React.createElement('option', { value: '1024x1024' }, '1:1 · 1024'),
-            React.createElement('option', { value: '1536x1024' }, '3:2 横 · 1536×1024'),
-            React.createElement('option', { value: '1024x1536' }, '2:3 竖 · 1024×1536'),
-            React.createElement('option', { value: '2048x2048' }, '1:1 高清 · 2048')
-          ),
+
           removeProgress ? React.createElement('span', { className: 'dsh-canvas-operation-progress', title: String(removeProgress.message || '') },
             React.createElement('span', { className: 'dsh-canvas-operation-progress-track' },
               React.createElement('span', {

@@ -17,7 +17,7 @@ export function imageEngineSettingsPath() {
 }
 
 /** image2 网关支持的生图尺寸(gpt-image 系);auto = 不传 size,由服务端决定。 */
-export const IMAGE_SIZE_VALUES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048']);
+export const IMAGE_SIZE_VALUES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '1280x960', '960x1280', '1920x1080', '1080x1920', '2048x2048', '2048x1152', '1152x2048', '3840x2160', '2160x3840']);
 export function normalizeImageSize(value) {
   return IMAGE_SIZE_VALUES.has(String(value || '').trim()) ? String(value || '').trim() : 'auto';
 }

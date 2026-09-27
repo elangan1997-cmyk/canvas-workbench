@@ -67,6 +67,8 @@ test('settings 读写：缺文件给默认值；写入 0600 并可读回', async
     assert.deepEqual(next, { engine: 'api', apiBaseUrl: 'https://x.test', apiModel: 'm1', imageSize: 'auto' });
     const sized = await writeImageEngineSettings({ imageSize: '1536x1024' });
     assert.equal(sized.imageSize, '1536x1024');
+    assert.equal((await writeImageEngineSettings({ imageSize: '1920x1080' })).imageSize, '1920x1080');
+    assert.equal((await writeImageEngineSettings({ imageSize: '3840x2160' })).imageSize, '3840x2160');
     assert.equal((await writeImageEngineSettings({ imageSize: 'bogus' })).imageSize, 'auto');
     const mode = (await stat(imageEngineSettingsPath())).mode & 0o777;
     assert.equal(mode, 0o600);

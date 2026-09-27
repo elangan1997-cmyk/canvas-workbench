@@ -1786,10 +1786,34 @@ window.__ModuleLoader__.load({
       }
       dispatchAddImage(path, displaySourceUrl(path));
     }
+    // 聊天输入区的生图比例选择：值域与宿主 image-engine-settings 白名单一一对应。
+    // 2K/4K 变体的长边走网关支持的高清档；编辑/擦除不经过这里（跟随原图尺寸）。
+    const IMAGE_RATIO_OPTIONS = [
+      { value: '1024x1024', label: '1:1', px: '1024', icon: [15, 15] },
+      { value: '1536x1024', label: '3:2', px: '1536×1024', icon: [18, 12] },
+      { value: '1024x1536', label: '2:3', px: '1024×1536', icon: [12, 18] },
+      { value: '1280x960', label: '4:3', px: '1280×960', icon: [18, 13.5] },
+      { value: '960x1280', label: '3:4', px: '960×1280', icon: [13.5, 18] },
+      { value: '1920x1080', label: '16:9', px: '1920×1080', icon: [20, 11.25] },
+      { value: '1080x1920', label: '9:16', px: '1080×1920', icon: [11.25, 20] },
+      { value: '2048x2048', label: '1:1', tag: '2K', px: '2048', icon: [15, 15] },
+      { value: '2048x1152', label: '16:9', tag: '2K', px: '2048×1152', icon: [20, 11.25] },
+      { value: '1152x2048', label: '9:16', tag: '2K', px: '1152×2048', icon: [11.25, 20] },
+      { value: '3840x2160', label: '16:9', tag: '4K', px: '3840×2160', icon: [20, 11.25] },
+      { value: '2160x3840', label: '9:16', tag: '4K', px: '2160×3840', icon: [11.25, 20] }
+    ];
+    function ratioOptionLabel(option) {
+      return option.label + (option.tag ? ' ' + option.tag : '');
+    }
+
     function DesignModeToggle(props) {
       const [on, setOn] = React.useState(getMode());
       const [attachState, setAttachState] = React.useState('');
       const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
+      const [imageRatio, setImageRatio] = React.useState('auto');
+      const [ratioOpen, setRatioOpen] = React.useState(false);
+      const [ratioAnchor, setRatioAnchor] = React.useState(null);
+      const ratioWrapRef = React.useRef(null);
       const [modelCapabilityRevision, setModelCapabilityRevision] = React.useState(0);
       const sessionSummary = props.useSessions((state) => state && state.byId ? state.byId[props.sessionId] : undefined);
       React.useEffect(() => {
@@ -1813,6 +1837,34 @@ window.__ModuleLoader__.load({
         return directory.store && typeof directory.store.subscribe === 'function' ? directory.store.subscribe(update) : undefined;
       }, [props.sessionId, modelCapabilityRevision]);
       React.useEffect(() => subscribeMode(setOn), []);
+      React.useEffect(() => {
+        fetch('/dsh-canvas/image-settings').then((r) => r.json()).then((d) => {
+          if (d && d.ok && d.imageSize) setImageRatio(String(d.imageSize));
+        }).catch(() => {});
+      }, []);
+      React.useEffect(() => {
+        if (!ratioOpen) return;
+        const onDocDown = (e) => {
+          if (ratioWrapRef.current && !ratioWrapRef.current.contains(e.target)) setRatioOpen(false);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') setRatioOpen(false); };
+        document.addEventListener('mousedown', onDocDown);
+        document.addEventListener('keydown', onKey);
+        return () => {
+          document.removeEventListener('mousedown', onDocDown);
+          document.removeEventListener('keydown', onKey);
+        };
+      }, [ratioOpen]);
+      const applyImageRatio = (value) => {
+        setRatioOpen(false);
+        if (value === imageRatio) return;
+        setImageRatio(value);
+        fetch('/dsh-canvas/image-settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ imageSize: value })
+        }).catch(() => {});
+      };
       React.useEffect(() => {
         const onGenState = (event) => {
           const detail = event.detail || {};
@@ -1853,6 +1905,45 @@ window.__ModuleLoader__.load({
         window.addEventListener('dsh-canvas:attach-selection', receive);
         return () => window.removeEventListener('dsh-canvas:attach-selection', receive);
       }, [props.inputActions]);
+      const toggleRatioPopover = (e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const viewportWidth = window.innerWidth || 1024;
+        setRatioAnchor({ left: Math.max(8, Math.min(rect.left, viewportWidth - 336)), top: rect.top });
+        setRatioOpen((v) => !v);
+      };
+      const currentRatioOption = IMAGE_RATIO_OPTIONS.find((option) => option.value === imageRatio);
+      const ratioChipIcon = currentRatioOption
+        ? React.createElement('span', {
+            className: 'dsh-canvas-ratio-card-icon',
+            style: { width: currentRatioOption.icon[0] + 'px', height: currentRatioOption.icon[1] + 'px' }
+          })
+        : React.createElement('span', { className: 'dsh-canvas-ratio-card-icon dsh-canvas-ratio-icon-auto' });
+      const ratioPopover = ratioOpen && ratioAnchor ? React.createElement('div', {
+        className: 'dsh-canvas-ratio-pop',
+        style: { left: ratioAnchor.left + 'px', top: ratioAnchor.top + 'px' }
+      },
+        React.createElement('div', { className: 'dsh-canvas-ratio-pop-title' }, '生图比例'),
+        React.createElement('div', { className: 'dsh-canvas-ratio-grid' },
+          IMAGE_RATIO_OPTIONS.map((option) => React.createElement('button', {
+            key: option.value,
+            className: 'dsh-canvas-ratio-card' + (imageRatio === option.value ? ' is-selected' : ''),
+            title: option.px,
+            onClick: () => applyImageRatio(option.value)
+          },
+            React.createElement('span', {
+              className: 'dsh-canvas-ratio-card-icon',
+              style: { width: option.icon[0] + 'px', height: option.icon[1] + 'px' }
+            }),
+            React.createElement('span', { className: 'dsh-canvas-ratio-card-label' }, ratioOptionLabel(option)),
+            React.createElement('span', { className: 'dsh-canvas-ratio-card-px' }, option.px)
+          ))
+        ),
+        React.createElement('button', {
+          className: 'dsh-canvas-ratio-auto' + (imageRatio === 'auto' ? ' is-selected' : ''),
+          onClick: () => applyImageRatio('auto')
+        }, '✦ 自动 · 由模型决定'),
+        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；编辑 / 智能擦除跟随原图尺寸')
+      ) : null;
       return React.createElement('div', { className: 'dsh-canvas-dock' },
         React.createElement('button', {
           className: 'dsh-canvas-mode' + (on ? ' dsh-canvas-mode-on' : ''),
@@ -1862,6 +1953,18 @@ window.__ModuleLoader__.load({
           React.createElement('span', { className: 'dsh-canvas-mode-dot' }),
           React.createElement('span', null, '设计模式'),
           React.createElement('span', { className: 'dsh-canvas-mode-state' }, on ? '开' : '关')
+        ),
+        React.createElement('div', { className: 'dsh-canvas-ratio-wrap', ref: ratioWrapRef },
+          React.createElement('button', {
+            className: 'dsh-canvas-ratio-chip' + (imageRatio !== 'auto' ? ' dsh-canvas-ratio-chip-set' : ''),
+            title: '生图比例：选择后聊天生图优先使用该尺寸（仅 API 引擎生效）',
+            onClick: toggleRatioPopover
+          },
+            ratioChipIcon,
+            React.createElement('span', null, currentRatioOption ? ratioOptionLabel(currentRatioOption) : '自动比例'),
+            React.createElement('span', { className: 'dsh-canvas-ratio-chip-caret' }, '⌄')
+          ),
+          ratioPopover
         ),
         attachState ? React.createElement('span', { className: 'dsh-canvas-attach-state' }, attachState) : null,
         on && genAsk.show ? React.createElement('span', { className: 'dsh-canvas-gen-ask' },
@@ -2933,19 +3036,6 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       const [imageSettings, setImageSettings] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
-      const [imageSize, setImageSizeState] = React.useState('auto');
-      React.useEffect(() => {
-        if (!on) return;
-        let alive = true;
-        fetch('/dsh-canvas/image-settings').then((r) => r.json()).then((d) => {
-          if (alive && d && d.ok && d.imageSize) setImageSizeState(d.imageSize);
-        }).catch(() => {});
-        return () => { alive = false; };
-      }, [on]);
-      // 引擎设置弹窗保存后同步比例显示
-      React.useEffect(() => {
-        if (imageSettings && imageSettings.imageSize) setImageSizeState(String(imageSettings.imageSize));
-      }, [imageSettings]);
       const [textRebuild, setTextRebuild] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
@@ -4775,26 +4865,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           ),
           React.createElement('span', { className: 'dsh-canvas-status dsh-canvas-status-' + status },
             status === 'ready' ? '已就绪' : (status === 'error' ? '加载失败' : '加载中…')),
-          React.createElement('select', {
-            className: 'dsh-canvas-ratio',
-            title: '生图尺寸比例(仅 API 引擎生效;编辑/擦除跟随原图)',
-            value: imageSize,
-            onChange: (e) => {
-              const next = e.target.value;
-              setImageSizeState(next);
-              fetch('/dsh-canvas/image-settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imageSize: next })
-              }).then(() => setFeedback('✓ 生图比例:' + (next === 'auto' ? '自动' : next))).catch(() => setFeedback('⚠ 比例保存失败'));
-            }
-          },
-            React.createElement('option', { value: 'auto' }, '比例 自动'),
-            React.createElement('option', { value: '1024x1024' }, '1:1 · 1024'),
-            React.createElement('option', { value: '1536x1024' }, '3:2 横 · 1536×1024'),
-            React.createElement('option', { value: '1024x1536' }, '2:3 竖 · 1024×1536'),
-            React.createElement('option', { value: '2048x2048' }, '1:1 高清 · 2048')
-          ),
+
           removeProgress ? React.createElement('span', { className: 'dsh-canvas-operation-progress', title: String(removeProgress.message || '') },
             React.createElement('span', { className: 'dsh-canvas-operation-progress-track' },
               React.createElement('span', {
@@ -5334,8 +5405,6 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'@container (max-width:920px){.dsh-canvas-toolbar{flex-wrap:wrap}.dsh-canvas-hint,.dsh-canvas-feedback{order:20;flex:1 0 calc(100% - 24px);min-height:16px}.dsh-canvas-project{max-width:110px}.dsh-canvas-tb{padding:5px 9px;font-size:12px}}'
       ,'@container (max-width:680px){.dsh-canvas-status{display:none}.dsh-canvas-title{font-size:13px}.dsh-canvas-project{max-width:92px}.dsh-canvas-toolbar{gap:6px;padding:7px 9px}.dsh-canvas-tb{padding:5px 7px;font-size:11px}}'
       ,'/* 聊天生图:生成中占位徽标与自动上画布开关(v1.9) */'
-      ,'.dsh-canvas-ratio{padding:4px 8px;border:1px solid var(--dsw-alias-border-l2,#e2e2e6);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:12px system-ui,-apple-system,PingFang SC,sans-serif;cursor:pointer;max-width:150px}'
-      ,'.dsh-canvas-ratio:hover{border-color:var(--dsw-alias-accent,#3b82f6)}'
       ,'.dsh-canvas-gen-ask{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:5px 10px;border-radius:9px;background:rgba(10,132,255,.08);border:1px solid rgba(10,132,255,.3);font-size:12px;max-width:100%}'
       ,'.dsh-canvas-gen-ask-text{color:var(--dsw-alias-label-primary,#1f2328)}'
       ,'.dsh-canvas-gen-ask button{padding:3px 9px;border:1px solid rgba(10,132,255,.4);border-radius:6px;background:#fff;color:#0a84ff;font-size:12px;cursor:pointer;white-space:nowrap}'
@@ -5347,6 +5416,29 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'.dsh-canvas-engine-autoadd-row input{margin-top:3px;flex:0 0 auto}'
       ,'.dsh-canvas-engine-autoadd-row span{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,#1f2328)}'
       ,'.dsh-canvas-engine-autoadd-row small{display:block;margin-top:3px;font-size:11px;line-height:16px;font-weight:400;color:var(--dsw-alias-label-secondary,#6b7280)}'
+      ,'/* 聊天输入区生图比例选择(v1.9.2):芯片 + 向上弹出的比例卡片网格 */'
+      ,'.dsh-canvas-ratio-wrap{position:relative;display:inline-flex;flex:none}'
+      ,'.dsh-canvas-ratio-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;line-height:1;padding:5px 12px;border-radius:999px;border:1px solid rgba(128,128,128,.4);background:transparent;color:var(--dsw-alias-label-primary,#333);cursor:pointer;white-space:nowrap}'
+      ,'.dsh-canvas-ratio-chip:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}'
+      ,'.dsh-canvas-ratio-chip-set{border-color:rgba(59,130,246,.55);background:rgba(59,130,246,.1);color:#1d4ed8}'
+      ,'.dsh-canvas-ratio-chip-set .dsh-canvas-ratio-card-icon{border-color:#1d4ed8}'
+      ,'.dsh-canvas-ratio-chip-caret{font-size:10px;opacity:.6;transform:translateY(1px)}'
+      ,'.dsh-canvas-ratio-pop{position:fixed;z-index:9999;width:328px;box-sizing:border-box;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e2e2e6);box-shadow:0 10px 30px rgba(0,0,0,.16);transform:translateY(calc(-100% - 10px));display:flex;flex-direction:column;gap:8px}'
+      ,'.dsh-canvas-ratio-pop-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#6b7280)}'
+      ,'.dsh-canvas-ratio-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}'
+      ,'.dsh-canvas-ratio-card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:66px;padding:8px 2px 7px;border-radius:9px;border:1px solid var(--dsw-alias-border-l2,#e5e7eb);background:transparent;cursor:pointer;font:inherit}'
+      ,'.dsh-canvas-ratio-card:hover{border-color:rgba(59,130,246,.5);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.08))}'
+      ,'.dsh-canvas-ratio-card.is-selected{border-color:#3b82f6;background:rgba(59,130,246,.1)}'
+      ,'.dsh-canvas-ratio-card-icon{display:block;width:15px;height:15px;border:1.6px solid var(--dsw-alias-label-primary,#4b5563);border-radius:3px;flex:none}'
+      ,'.dsh-canvas-ratio-card.is-selected .dsh-canvas-ratio-card-icon{border-color:#1d4ed8}'
+      ,'.dsh-canvas-ratio-icon-auto{border-style:dashed;border-color:var(--dsw-alias-label-secondary,#9ca3af)}'
+      ,'.dsh-canvas-ratio-card-label{font-size:11.5px;line-height:1;color:var(--dsw-alias-label-primary,#1f2328)}'
+      ,'.dsh-canvas-ratio-card.is-selected .dsh-canvas-ratio-card-label{color:#1d4ed8;font-weight:600}'
+      ,'.dsh-canvas-ratio-card-px{font-size:10px;line-height:1;color:var(--dsw-alias-label-secondary,#9ca3af)}'
+      ,'.dsh-canvas-ratio-auto{display:flex;align-items:center;justify-content:center;gap:6px;padding:6px;border-radius:8px;border:1px dashed var(--dsw-alias-border-l2,#d1d5db);background:transparent;font:inherit;font-size:12px;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer}'
+      ,'.dsh-canvas-ratio-auto:hover{border-color:rgba(59,130,246,.55);color:#1d4ed8}'
+      ,'.dsh-canvas-ratio-auto.is-selected{border-style:solid;border-color:#3b82f6;color:#1d4ed8;background:rgba(59,130,246,.08)}'
+      ,'.dsh-canvas-ratio-pop-note{font-size:10.5px;line-height:14px;color:var(--dsw-alias-label-secondary,#9ca3af)}'
     ].join('\n');
     // ---- plugin ----
     function compatibilityLogger(ctx, level, message, error) {
