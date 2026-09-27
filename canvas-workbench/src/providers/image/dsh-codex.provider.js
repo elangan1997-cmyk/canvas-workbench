@@ -74,6 +74,20 @@ async function generateWithDshCodex({ ctx, image, prompt, signal }) {
   return Buffer.from(await client.generate(prompt, images.map(dataUrl), signal || AbortSignal.timeout(360000)));
 }
 
+/** 比例提示词:让模型主动按所选比例构图(不靠裁切丢画面)。 */
+function ratioHintFor(imageSize) {
+  const match = /^(\d+)x(\d+)$/.exec(String(imageSize || ''));
+  if (!match) return '';
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+  if (!w || !h) return '';
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const divisor = gcd(w, h) || 1;
+  const ratio = (w / divisor) + ':' + (h / divisor);
+  const orient = w === h ? '正方形' : (w > h ? '横版' : '竖版');
+  return '【画面比例】请以' + orient + ' ' + ratio + '（' + w + '×' + h + '）构图，主体与关键细节避开四边，最终画面会按该比例输出。';
+}
+
 /**
  * dsh-codex 上游把 size 写死为 "auto",比例只能生成后裁:
  * 用自带 Python 运行时按目标比例居中裁切(cover,只裁不放大)。
@@ -113,16 +127,19 @@ export const dshCodexProvider = {
   async generate({ ctx, images, prompt, signal, settings = {}, sizeOnEdit }) {
     // 数量:dsh-codex 上游没有 n 参数,并行发多次请求,每次一张。
     const count = Math.max(1, Math.min(8, Number(settings.imageCount) || 1));
+    // 比例:上游 size 恒 auto——先在提示词里要求模型按比例构图(不丢画面),
+    // 生成后再居中裁切兜底(模型给对比例时为无操作)。与 API 引擎同规则:
+    // 纯生成始终生效;编辑仅 sizeOnEdit(聊天路径)才生效。
+    const wantsRatio = Boolean(settings.imageSize && settings.imageSize !== 'auto')
+      && ((Array.isArray(images) && images.length === 0) || sizeOnEdit === true);
+    const hint = wantsRatio ? ratioHintFor(settings.imageSize) : '';
+    const finalPrompt = hint ? String(prompt) + '\n' + hint : prompt;
     const jobs = [];
     for (let index = 0; index < count; index += 1) {
-      jobs.push(generateWithDshCodex({ ctx, image: images, prompt, signal }));
+      jobs.push(generateWithDshCodex({ ctx, image: images, prompt: finalPrompt, signal }));
     }
     const buffers = await Promise.all(jobs);
-    // 比例:上游 size 恒 auto,显式选了比例时生成后居中裁切。
-    // 与 API 引擎同规则:纯生成始终裁;编辑仅 sizeOnEdit(聊天路径)才裁。
-    const wantsCrop = Boolean(settings.imageSize && settings.imageSize !== 'auto')
-      && ((Array.isArray(images) && images.length === 0) || sizeOnEdit === true);
-    if (!wantsCrop) return buffers;
+    if (!wantsRatio) return buffers;
     return Promise.all(buffers.map((buffer) => cropToRatio(ctx, buffer, settings.imageSize)));
   },
   async health(ctx) {
