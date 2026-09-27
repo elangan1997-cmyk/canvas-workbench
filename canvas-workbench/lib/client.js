@@ -2933,6 +2933,19 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       const [imageSettings, setImageSettings] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
+      const [imageSize, setImageSizeState] = React.useState('auto');
+      React.useEffect(() => {
+        if (!on) return;
+        let alive = true;
+        fetch('/dsh-canvas/image-settings').then((r) => r.json()).then((d) => {
+          if (alive && d && d.ok && d.imageSize) setImageSizeState(d.imageSize);
+        }).catch(() => {});
+        return () => { alive = false; };
+      }, [on]);
+      // 引擎设置弹窗保存后同步比例显示
+      React.useEffect(() => {
+        if (imageSettings && imageSettings.imageSize) setImageSizeState(String(imageSettings.imageSize));
+      }, [imageSettings]);
       const [textRebuild, setTextRebuild] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
@@ -4762,18 +4775,18 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           ),
           React.createElement('span', { className: 'dsh-canvas-status dsh-canvas-status-' + status },
             status === 'ready' ? '已就绪' : (status === 'error' ? '加载失败' : '加载中…')),
-          imageSettings ? React.createElement('select', {
+          React.createElement('select', {
             className: 'dsh-canvas-ratio',
             title: '生图尺寸比例(仅 API 引擎生效;编辑/擦除跟随原图)',
-            value: imageSettings.imageSize || 'auto',
+            value: imageSize,
             onChange: (e) => {
-              const imageSize = e.target.value;
-              setImageSettings({ ...imageSettings, imageSize });
+              const next = e.target.value;
+              setImageSizeState(next);
               fetch('/dsh-canvas/image-settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imageSize })
-              }).then(() => setFeedback('✓ 生图比例:' + (imageSize === 'auto' ? '自动' : imageSize))).catch(() => setFeedback('⚠ 比例保存失败'));
+                body: JSON.stringify({ imageSize: next })
+              }).then(() => setFeedback('✓ 生图比例:' + (next === 'auto' ? '自动' : next))).catch(() => setFeedback('⚠ 比例保存失败'));
             }
           },
             React.createElement('option', { value: 'auto' }, '比例 自动'),
@@ -4781,7 +4794,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
             React.createElement('option', { value: '1536x1024' }, '3:2 横 · 1536×1024'),
             React.createElement('option', { value: '1024x1536' }, '2:3 竖 · 1024×1536'),
             React.createElement('option', { value: '2048x2048' }, '1:1 高清 · 2048')
-          ) : null,
+          ),
           removeProgress ? React.createElement('span', { className: 'dsh-canvas-operation-progress', title: String(removeProgress.message || '') },
             React.createElement('span', { className: 'dsh-canvas-operation-progress-track' },
               React.createElement('span', {
