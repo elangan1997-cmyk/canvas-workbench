@@ -1,6 +1,6 @@
 {
   "name": "@local/canvas-workbench",
-  "version": "1.9.15",
+  "version": "1.9.16",
   "private": true,
   "description": "本地生图工作台,Lovart 平价平替:开自己的 API 生图(任意 OpenAI 兼容接口,零订阅),画布排版+修图/擦除/去背景/OCR/转矢量,可编辑 PSD/AI 交付,Photoshop/Illustrator 图层级双向桥接",
   "scripts": {
