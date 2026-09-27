@@ -80,7 +80,11 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal }
       body = form;
     } else {
       headers['content-type'] = 'application/json';
-      body = JSON.stringify({ model: String(settings.apiModel || DEFAULT_API_MODEL), prompt, quality: 'high', size: '2048x2048' });
+      // 尺寸比例:选了具体比例才传 size(默认 auto 不传,由服务端决定);
+      // 编辑/擦除路径(带输入图)不传 size,输出跟随输入比例。
+      const request = { model: String(settings.apiModel || DEFAULT_API_MODEL), prompt, quality: 'high' };
+      if (settings.imageSize && settings.imageSize !== 'auto') request.size = String(settings.imageSize);
+      body = JSON.stringify(request);
     }
     let response;
     try {

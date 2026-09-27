@@ -16,6 +16,12 @@ export function imageEngineSettingsPath() {
   return join(dshHome(), 'canvas-workbench', 'image-engine.json');
 }
 
+/** image2 网关支持的生图尺寸(gpt-image 系);auto = 不传 size,由服务端决定。 */
+export const IMAGE_SIZE_VALUES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048']);
+export function normalizeImageSize(value) {
+  return IMAGE_SIZE_VALUES.has(String(value || '').trim()) ? String(value || '').trim() : 'auto';
+}
+
 export function normalizeImageEngine(value) {
   return ENGINE_VALUES.has(String(value || '').trim()) ? String(value).trim() : 'dsh-codex';
 }
@@ -26,7 +32,7 @@ export function normalizeApiBaseUrl(value, fallback = DEFAULT_API_BASE_URL) {
 }
 
 export async function readImageEngineSettings() {
-  const defaults = { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL };
+  const defaults = { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL, imageSize: 'auto' };
   try {
     const parsed = JSON.parse(await readFile(imageEngineSettingsPath(), 'utf8'));
     if (!parsed || typeof parsed !== 'object') return defaults;
@@ -36,6 +42,7 @@ export async function readImageEngineSettings() {
       engine: normalizeImageEngine(parsed.engine),
       apiBaseUrl: normalizeApiBaseUrl(parsed.apiBaseUrl, defaults.apiBaseUrl),
       apiModel: String(parsed.apiModel || defaults.apiModel).trim() || defaults.apiModel,
+      imageSize: normalizeImageSize(parsed.imageSize),
     };
   } catch {
     return defaults;
@@ -50,6 +57,7 @@ export async function writeImageEngineSettings(patch = {}) {
     engine: normalizeImageEngine(patch.engine ?? current.engine),
     apiBaseUrl: normalizeApiBaseUrl(patch.apiBaseUrl ?? current.apiBaseUrl),
     apiModel: String(patch.apiModel ?? current.apiModel).trim() || DEFAULT_API_MODEL,
+    imageSize: normalizeImageSize(patch.imageSize ?? current.imageSize),
   };
   const filename = imageEngineSettingsPath();
   await mkdir(dirname(filename), { recursive: true, mode: 0o700 });

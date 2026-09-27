@@ -4762,6 +4762,26 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           ),
           React.createElement('span', { className: 'dsh-canvas-status dsh-canvas-status-' + status },
             status === 'ready' ? '已就绪' : (status === 'error' ? '加载失败' : '加载中…')),
+          imageSettings ? React.createElement('select', {
+            className: 'dsh-canvas-ratio',
+            title: '生图尺寸比例(仅 API 引擎生效;编辑/擦除跟随原图)',
+            value: imageSettings.imageSize || 'auto',
+            onChange: (e) => {
+              const imageSize = e.target.value;
+              setImageSettings({ ...imageSettings, imageSize });
+              fetch('/dsh-canvas/image-settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ imageSize })
+              }).then(() => setFeedback('✓ 生图比例:' + (imageSize === 'auto' ? '自动' : imageSize))).catch(() => setFeedback('⚠ 比例保存失败'));
+            }
+          },
+            React.createElement('option', { value: 'auto' }, '比例 自动'),
+            React.createElement('option', { value: '1024x1024' }, '1:1 · 1024'),
+            React.createElement('option', { value: '1536x1024' }, '3:2 横 · 1536×1024'),
+            React.createElement('option', { value: '1024x1536' }, '2:3 竖 · 1024×1536'),
+            React.createElement('option', { value: '2048x2048' }, '1:1 高清 · 2048')
+          ) : null,
           removeProgress ? React.createElement('span', { className: 'dsh-canvas-operation-progress', title: String(removeProgress.message || '') },
             React.createElement('span', { className: 'dsh-canvas-operation-progress-track' },
               React.createElement('span', {
@@ -5301,6 +5321,8 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'@container (max-width:920px){.dsh-canvas-toolbar{flex-wrap:wrap}.dsh-canvas-hint,.dsh-canvas-feedback{order:20;flex:1 0 calc(100% - 24px);min-height:16px}.dsh-canvas-project{max-width:110px}.dsh-canvas-tb{padding:5px 9px;font-size:12px}}'
       ,'@container (max-width:680px){.dsh-canvas-status{display:none}.dsh-canvas-title{font-size:13px}.dsh-canvas-project{max-width:92px}.dsh-canvas-toolbar{gap:6px;padding:7px 9px}.dsh-canvas-tb{padding:5px 7px;font-size:11px}}'
       ,'/* 聊天生图:生成中占位徽标与自动上画布开关(v1.9) */'
+      ,'.dsh-canvas-ratio{padding:4px 8px;border:1px solid var(--dsw-alias-border-l2,#e2e2e6);border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#1f2328);font:12px system-ui,-apple-system,PingFang SC,sans-serif;cursor:pointer;max-width:150px}'
+      ,'.dsh-canvas-ratio:hover{border-color:var(--dsw-alias-accent,#3b82f6)}'
       ,'.dsh-canvas-gen-ask{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:5px 10px;border-radius:9px;background:rgba(10,132,255,.08);border:1px solid rgba(10,132,255,.3);font-size:12px;max-width:100%}'
       ,'.dsh-canvas-gen-ask-text{color:var(--dsw-alias-label-primary,#1f2328)}'
       ,'.dsh-canvas-gen-ask button{padding:3px 9px;border:1px solid rgba(10,132,255,.4);border-radius:6px;background:#fff;color:#0a84ff;font-size:12px;cursor:pointer;white-space:nowrap}'

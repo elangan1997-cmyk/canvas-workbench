@@ -20,6 +20,7 @@ export function register(router, h) {
             engine: settings.engine,
             apiBaseUrl: settings.apiBaseUrl,
             apiModel: settings.apiModel,
+            imageSize: settings.imageSize,
             health
           }));
           return;
@@ -35,7 +36,8 @@ export function register(router, h) {
             const settings = await writeImageEngineSettings({
               engine: body.engine,
               apiBaseUrl: body.apiBaseUrl,
-              apiModel: body.apiModel
+              apiModel: body.apiModel,
+              imageSize: body.imageSize
             });
             if (body.apiKey || body.clearApiKey === true) {
               await writeLegacyApiAuth({ apiKey: body.apiKey, baseUrl: settings.apiBaseUrl, clear: body.clearApiKey === true });
