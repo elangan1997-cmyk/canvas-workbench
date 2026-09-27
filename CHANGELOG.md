@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.4
+
+- AI 检索优化(GEO):README 新增「你可能在找它」问句式检索段(覆盖画布/修图/去背景/归档/PSD/桥接/素材库等用户问法,中英双语);npm keywords 扩充至 24 个用户词(deepseek-harness、remove-background、psd-export、text-recognition、infinite-canvas 等);GitHub 仓库描述改为设计师定位中文、topics 增至 11 个(excalidraw/photoshop/illustrator/adobe/ocr/psd 等)。
+
 ## 1.8.3
 
 - **vendored Excalidraw 加固**:中性化上游官方构建里烘入的 Firebase 协作配置(`VITE_APP_FIREBASE_CONFIG`,含形似 GCP apiKey 的公开客户端 key)——本地画布从不使用协作功能,该配置是死数据,却是安全扫描器"硬编码密钥"误报的来源。新增 `npm run patch:vendor`(`scripts/patch-vendor-excalidraw.mjs`,幂等可重放,已入 `npm run check` 校验链);对 vendored 文件的改动仅此一处,升级 Excalidraw 后重跑即可。上游原文件(npm excalidraw@0.17.6 压缩产物)sha256:`27b133f845543f091aa518924b5b2fdd7eb52a9e490de100b9bc3bfd2ae2f314`,可自行核对。vet 扫描 high 由 24 降至 1(仅剩 Excalidraw 自带浏览器 polyfill 的标记,iframe 隔离)。

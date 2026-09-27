@@ -1,6 +1,6 @@
 {
   "name": "@local/canvas-workbench",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "private": true,
   "description": "设计师工作台:DSH 聊天旁的无限画布——生成图自动归档一键上画布,画布内修图/智能擦除/去背景/OCR/转矢量/导出 PSD,文字重建为可编辑 PSD/AI/SVG,素材库与 Photoshop/Illustrator 双向桥接",
   "scripts": {
@@ -54,19 +54,28 @@
   },
   "keywords": [
     "dsh",
+    "deepseek-harness",
     "dsh-plugin",
-    "dsh-bundle",
+    "dsh-canvas",
     "canvas",
     "excalidraw",
-    "design",
+    "infinite-canvas",
+    "whiteboard",
     "designer",
+    "design-tools",
     "image-editing",
-    "psd",
+    "image-generation",
+    "remove-background",
+    "erase",
     "ocr",
-    "background-removal",
+    "text-recognition",
     "vectorize",
+    "psd",
+    "psd-export",
     "photoshop",
     "illustrator",
-    "adobe"
+    "adobe",
+    "chatgpt",
+    "material-library"
   ]
 }
