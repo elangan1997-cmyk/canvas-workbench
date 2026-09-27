@@ -133,7 +133,7 @@ function dims2(d){return new Promise(function(res){var i=new Image();i.onload=fu
     var dataURL=editStatusDataURL("聊天生图中…",String(detail.subtitle||"完成后自动加入画布"),"processing",ratio);
     var pos=chatPlaceholderAnchor(detail.index||0),w=220,h=Math.round(w/ratio);
     api.addFiles([{id:fileId,dataURL:dataURL,mimeType:"image/svg+xml",created:now,lastRetrieved:now}]);
-    var el={type:"image",id:id,fileId:fileId,x:pos.x,y:pos.y,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:now,link:null,locked:false,roundness:null,mimeType:"image/svg+xml",customData:{dshFileName:"聊天生图中…",dshSourceKind:"placeholder",dshManaged:false,dshChatGen:true,dshChatGenState:"processing",dshChatGenStartedAt:now}};
+    var el={type:"image",id:id,fileId:fileId,x:pos.x,y:pos.y,width:w,height:h,angle:0,strokeColor:"transparent",backgroundColor:"transparent",fillStyle:"solid",strokeWidth:1,strokeStyle:"solid",roughness:0,opacity:100,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],frameId:null,boundElements:null,updated:now,created:now,link:null,locked:false,roundness:null,status:"saved",scale:[1,1],mimeType:"image/svg+xml",customData:{dshFileName:"聊天生图中…",dshSourceKind:"placeholder",dshManaged:false,dshChatGen:true,dshChatGenState:"processing",dshChatGenStartedAt:now}};
     api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});
     setTimeout(function(){if(api&&typeof api.scrollToContent==="function")api.scrollToContent([el],{fitToContent:false,animate:true});},60);
   }
