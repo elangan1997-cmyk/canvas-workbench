@@ -167,27 +167,43 @@ async function ensurePython(ctx) {
   }
 }
 
+async function runPrepareOnce(python, scriptName, pipIndex, extraEnv) {
+  return new Promise((resolve) => {
+    const child = spawn(python, [join(PLUGIN_ROOT, 'scripts', scriptName), '--prepare'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, DSH_PIP_INDEX: pipIndex, ...extraEnv },
+    });
+    let out = '';
+    let err = '';
+    child.stdout && child.stdout.on('data', (c) => { out += c; });
+    child.stderr && child.stderr.on('data', (c) => { err += c; });
+    child.on('error', (e) => resolve({ ok: false, error: String(e) }));
+    child.on('close', (code) => resolve({ ok: code === 0, out: out.slice(-300), err: err.slice(-300) }));
+  });
+}
+
 async function preparePythonTool(python, scriptName, statusKey, extraEnv = {}) {
   try {
     await patchStatus({ [statusKey]: { state: 'preparing' } });
     // PyPI 直连不可达时走清华镜像(镜像全球可用,只是境外稍慢)。
     let pipIndex = '';
     if (!(await reachable('https://pypi.org/simple/'))) pipIndex = PIP_MIRROR;
-    const result = await new Promise((resolve) => {
-      const child = spawn(python, [join(PLUGIN_ROOT, 'scripts', scriptName), '--prepare'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, DSH_PIP_INDEX: pipIndex, ...extraEnv },
-      });
-      let out = '';
-      let err = '';
-      child.stdout && child.stdout.on('data', (c) => { out += c; });
-      child.stderr && child.stderr.on('data', (c) => { err += c; });
-      child.on('error', (e) => resolve({ ok: false, error: String(e) }));
-      child.on('close', (code) => resolve({ ok: code === 0, out: out.slice(-300), err: err.slice(-300) }));
-    });
-    if (!result.ok) throw new Error((result.err || result.out || 'prepare 退出码非 0').slice(0, 200));
-    await patchStatus({ [statusKey]: { state: 'ready' } });
-    return true;
+    // Windows 上杀软实时扫描会短暂锁住新落盘的依赖文件(WinError 32,实测 onnxruntime),
+    // 属瞬时占用:失败等 20 秒重试,最多 3 次。
+    let lastError = '';
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const result = await runPrepareOnce(python, scriptName, pipIndex, extraEnv);
+      if (result.ok) {
+        await patchStatus({ [statusKey]: { state: 'ready' } });
+        return true;
+      }
+      lastError = (result.err || result.out || result.error || 'prepare 退出码非 0').slice(0, 200);
+      if (attempt < 3) {
+        await patchStatus({ [statusKey]: { state: 'preparing', retry: attempt + 1 } });
+        await new Promise((resolve) => setTimeout(resolve, 20000));
+      }
+    }
+    throw new Error(lastError);
   } catch (error) {
     await patchStatus({ [statusKey]: { state: 'error', error: String((error && error.message) || error).slice(0, 200) } });
     return false;
@@ -256,8 +272,21 @@ async function ensureDshCodex() {
     const work = join(tmpdir(), 'dsh-codex-' + Date.now().toString(36));
     await mkdir(work, { recursive: true });
     const target = join(profileDir, 'node_modules', 'dsh-codex');
-    await download([tarball], join(work, 'pkg.tgz'));
-    const extracted = await runCommand('tar', ['-xzf', join(work, 'pkg.tgz'), '-C', work]);
+    // tarball 下载:npmmirror 优先(大陆对官方源 tarball CDN 常被干扰成乱码,实测 HTTP 200 但内容损坏),
+    // 下载后校验 gzip 魔数(1F 8B),不是 gzip 就换下一个源重试。
+    const mirrorTarball = `${NPM_MIRROR}/dsh-codex/-/dsh-codex-${DSH_CODEX_VERSION}.tgz`;
+    const archivePath = join(work, 'pkg.tgz');
+    await download([mirrorTarball, tarball], archivePath);
+    const { open: openHandle, close: closeHandle } = await import('node:fs/promises');
+    const handle = await openHandle(archivePath, 'r');
+    const head = Buffer.alloc(2);
+    await handle.read(head, 0, 2, 0);
+    await closeHandle(handle);
+    if (head[0] !== 0x1f || head[1] !== 0x8b) {
+      await rm(archivePath, { force: true }).catch(() => {});
+      throw new Error('下载内容校验失败(非 gzip,源被干扰),可稍后在状态卡点「立即准备」重试');
+    }
+    const extracted = await runCommand('tar', ['-xzf', archivePath, '-C', work]);
     if (!extracted.ok) throw new Error('解压失败: ' + extracted.stderr);
     await mkdir(target, { recursive: true });
     // tarball 顶层是 package/,内容平移到目标。
