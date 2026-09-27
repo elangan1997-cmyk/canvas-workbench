@@ -12,6 +12,7 @@
 - 「DSH 图片**转 PSD / 导出分层 / 文字识别 / 文字重建 / 转矢量 / OCR**」→ 本地图片处理工具链
 - 「DSH 和 **Photoshop / Illustrator 联动 / 图层互传 / PS 桥接**」→ Adobe 双向桥接
 - 「DSH **素材库 / 素材管理 / 设计素材**」→ 带颜色标签的本机素材库
+- 「不想开 ChatGPT 订阅,**用自己的图片 API / 国内大模型 API / 企业网关**做设计」→ 任意 OpenAI 兼容接口直连
 - *DSH canvas plugin · infinite canvas · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
 
 ---
@@ -62,16 +63,27 @@ dsh plugin --profile web add canvas-workbench
 
 中国大陆网络:插件管理器会自动回退到 registry.npmmirror.com 镜像,无需额外配置。
 
-## 图片引擎(二选一)
+## 图片引擎(带什么 API 都行)
 
-画布右上角「更多 → 图像引擎设置」:
+画布右上角「更多 → 图像引擎设置」,两条路线自由切换,不锁定任何厂商:
 
 | 引擎 | 适合 | 说明 |
 |---|---|---|
-| `dsh-codex` | 有 ChatGPT 订阅 | 与 [dsh-codex](https://www.npmjs.com/package/dsh-codex) 插件共用 OAuth 与订阅额度,聊天生图同一路由 |
-| `API` | 企业网关 / 自有服务 | 任意 OpenAI 兼容图片接口,密钥只存本机 |
+| `API`(推荐起点) | **任何 OpenAI 兼容图片接口** | 国内大模型 API、企业网关、自建服务均可直连——不需要 ChatGPT 订阅,不用科学上网;密钥只存本机 |
+| `dsh-codex` | 已有 ChatGPT 订阅 | 与 [dsh-codex](https://www.npmjs.com/package/dsh-codex) 插件共用 OAuth 与订阅额度,聊天生图同一路由 |
+
+另有**本地工具链完全不依赖任何 API**:去背景、OCR、转矢量、PSD 导出、文字重建全部在本机 Python 环境运行,断网可用、零调用成本。
 
 引擎不会静默切换,状态面板实时显示安装/登录/凭据状态。
+
+## 和云端 AI 设计平台(如 Lovart)怎么选?
+
+两者解决不同的问题,也可以并用:
+
+- 需要**团队协作、模板灵感生态、视频/网页/PPT 全品类**,选云端平台——开箱即用,代价是订阅费用与数据在云端;
+- 需要**图层级 Photoshop/Illustrator 往返、可编辑 PSD/AI 交付、数据全本地、自己带 API(模型与计费自由)**,选 canvas-workbench——MIT 开源,文件永远在你自己的磁盘上。
+
+常见组合:云端平台出概念稿,canvas-workbench 做本地精修与印刷交付。
 
 ## 系统要求
 
