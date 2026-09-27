@@ -1830,7 +1830,6 @@ window.__ModuleLoader__.load({
       const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
       const [imageRatio, setImageRatio] = React.useState('auto');
       const [imageCount, setImageCount] = React.useState(1);
-      const [engineIsApi, setEngineIsApi] = React.useState(true);
       const [ratioOpen, setRatioOpen] = React.useState(false);
       const [ratioAnchor, setRatioAnchor] = React.useState(null);
       const ratioWrapRef = React.useRef(null);
@@ -1862,7 +1861,6 @@ window.__ModuleLoader__.load({
           if (d && d.ok) {
             if (d.imageSize) setImageRatio(String(d.imageSize));
             if (d.imageCount) setImageCount(Number(d.imageCount) || 1);
-            setEngineIsApi(String(d.engine || 'api') === 'api');
           }
         }).catch(() => {});
       }, []);
@@ -1959,9 +1957,6 @@ window.__ModuleLoader__.load({
         style: { left: ratioAnchor.left + 'px', top: ratioAnchor.top + 'px' }
       },
         React.createElement('div', { className: 'dsh-canvas-ratio-pop-title' }, '生图比例'),
-        !engineIsApi ? React.createElement('div', { className: 'dsh-canvas-ratio-engine-warn' },
-          '⚠ 当前图像引擎是 dsh-codex，比例与数量不生效。请到「更多 → 图像引擎设置」切换为 API 引擎。'
-        ) : null,
         React.createElement('div', { className: 'dsh-canvas-ratio-grid' },
           IMAGE_RATIO_OPTIONS.map((option) => React.createElement('button', {
             key: option.value,
@@ -1989,7 +1984,7 @@ window.__ModuleLoader__.load({
             onClick: () => applyImageCount(count)
           }, '×' + count))
         ),
-        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；画布编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
+        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '聊天生图与聊天编辑生效（dsh-codex 引擎按所选比例居中裁切）；画布编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
       ) : null;
       return React.createElement('div', { className: 'dsh-canvas-dock' },
         React.createElement('button', {
@@ -2005,7 +2000,7 @@ window.__ModuleLoader__.load({
         on ? React.createElement('div', { className: 'dsh-canvas-ratio-wrap', ref: ratioWrapRef },
           React.createElement('button', {
             className: 'dsh-canvas-ratio-chip' + (imageRatio !== 'auto' ? ' dsh-canvas-ratio-chip-set' : ''),
-            title: '生图比例与数量：选择后聊天生图优先使用（仅 API 引擎生效）',
+            title: '生图比例与数量：选择后聊天生图优先使用',
             onClick: toggleRatioPopover
           },
             React.createElement('span', null, (currentRatioOption ? ratioOptionLabel(currentRatioOption) : '自动比例') + countSuffix),
@@ -5471,7 +5466,6 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'.dsh-canvas-ratio-chip-caret{font-size:10px;opacity:.6;transform:translateY(1px)}'
       ,'.dsh-canvas-ratio-pop{position:fixed;z-index:9999;width:328px;box-sizing:border-box;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e2e2e6);box-shadow:0 10px 30px rgba(0,0,0,.16);transform:translateY(calc(-100% - 10px));display:flex;flex-direction:column;gap:8px}'
       ,'.dsh-canvas-ratio-pop-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#6b7280)}'
-      ,'.dsh-canvas-ratio-engine-warn{padding:7px 9px;border-radius:8px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.45);color:#b45309;font-size:11.5px;line-height:16px}'
       ,'.dsh-canvas-ratio-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}'
       ,'.dsh-canvas-ratio-card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;min-height:66px;padding:8px 2px 7px;border-radius:9px;border:1px solid var(--dsw-alias-border-l2,#e5e7eb);background:transparent;cursor:pointer;font:inherit}'
       ,'.dsh-canvas-ratio-card:hover{border-color:rgba(59,130,246,.5);background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.08))}'

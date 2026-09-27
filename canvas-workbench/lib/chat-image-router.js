@@ -245,9 +245,10 @@ function routedTool(ctx, original, getChatContext) {
       // 现在生成与聊天推送照常，仅跳过归档并在结果里提示绑定。
       const args = parseArgs(rawArgs);
       const images = args.paths.length ? await workspaceImages(ctx, exec, args.paths) : args.count ? await recentImages(ctx, exec, args.count) : [];
-      // 生成数量(仅 API 引擎):begin/end 计数与产出张数一致,画布端占位与补位逻辑无需感知差异。
+      // 生成数量(两个引擎都支持:API 走 n 参数,dsh-codex 并行多请求):
+      // begin/end 计数与产出张数一致,画布端占位与补位逻辑无需感知差异。
       const engineSettings = await readImageEngineSettings();
-      const requestedCount = engineSettings.engine === 'api' ? normalizeImageCount(engineSettings.imageCount) : 1;
+      const requestedCount = normalizeImageCount(engineSettings.imageCount);
       for (let i = 0; i < requestedCount; i += 1) beginChatGeneration();
       let generated;
       try {

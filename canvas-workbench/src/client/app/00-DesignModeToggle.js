@@ -26,7 +26,6 @@
       const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
       const [imageRatio, setImageRatio] = React.useState('auto');
       const [imageCount, setImageCount] = React.useState(1);
-      const [engineIsApi, setEngineIsApi] = React.useState(true);
       const [ratioOpen, setRatioOpen] = React.useState(false);
       const [ratioAnchor, setRatioAnchor] = React.useState(null);
       const ratioWrapRef = React.useRef(null);
@@ -58,7 +57,6 @@
           if (d && d.ok) {
             if (d.imageSize) setImageRatio(String(d.imageSize));
             if (d.imageCount) setImageCount(Number(d.imageCount) || 1);
-            setEngineIsApi(String(d.engine || 'api') === 'api');
           }
         }).catch(() => {});
       }, []);
@@ -155,9 +153,6 @@
         style: { left: ratioAnchor.left + 'px', top: ratioAnchor.top + 'px' }
       },
         React.createElement('div', { className: 'dsh-canvas-ratio-pop-title' }, '生图比例'),
-        !engineIsApi ? React.createElement('div', { className: 'dsh-canvas-ratio-engine-warn' },
-          '⚠ 当前图像引擎是 dsh-codex，比例与数量不生效。请到「更多 → 图像引擎设置」切换为 API 引擎。'
-        ) : null,
         React.createElement('div', { className: 'dsh-canvas-ratio-grid' },
           IMAGE_RATIO_OPTIONS.map((option) => React.createElement('button', {
             key: option.value,
@@ -185,7 +180,7 @@
             onClick: () => applyImageCount(count)
           }, '×' + count))
         ),
-        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '仅 API 生图引擎生效；画布编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
+        React.createElement('div', { className: 'dsh-canvas-ratio-pop-note' }, '聊天生图与聊天编辑生效（dsh-codex 引擎按所选比例居中裁切）；画布编辑 / 智能擦除跟随原图尺寸，数量恒为 1')
       ) : null;
       return React.createElement('div', { className: 'dsh-canvas-dock' },
         React.createElement('button', {
@@ -201,7 +196,7 @@
         on ? React.createElement('div', { className: 'dsh-canvas-ratio-wrap', ref: ratioWrapRef },
           React.createElement('button', {
             className: 'dsh-canvas-ratio-chip' + (imageRatio !== 'auto' ? ' dsh-canvas-ratio-chip-set' : ''),
-            title: '生图比例与数量：选择后聊天生图优先使用（仅 API 引擎生效）',
+            title: '生图比例与数量：选择后聊天生图优先使用',
             onClick: toggleRatioPopover
           },
             React.createElement('span', null, (currentRatioOption ? ratioOptionLabel(currentRatioOption) : '自动比例') + countSuffix),

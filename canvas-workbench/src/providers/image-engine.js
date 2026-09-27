@@ -32,11 +32,8 @@ export async function generateChatImage({ ctx, images = [], prompt, engine, sign
   const trimmed = String(prompt).trim();
   // 聊天路径显式选了比例时,编辑请求也带 size(尊重用户意图);
   // 画布编辑/智能擦除走 generateImage,不传 sizeOnEdit,输出跟随原图。
-  if (selected === 'dsh-codex') {
-    const bytes = await provider.generate({ ctx, images: inputs, prompt: trimmed, settings, signal });
-    return { engine: selected, bytes: Array.isArray(bytes) ? bytes[0] : bytes, images: [Array.isArray(bytes) ? bytes[0] : bytes] };
-  }
-  const buffers = await provider.generate({ images: inputs, prompt: trimmed, settings, signal, sizeOnEdit: true });
+  // 两个 Provider 的 generate 现在都返回 Buffer[](dsh-codex 并行多张 / API n 参数)。
+  const buffers = await provider.generate({ ctx, images: inputs, prompt: trimmed, settings, signal, sizeOnEdit: true });
   const list = Array.isArray(buffers) && buffers.length ? buffers : [buffers];
   return { engine: selected, bytes: list[0], images: list };
 }
