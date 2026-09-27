@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.3
+
+- **vendored Excalidraw 加固**:中性化上游官方构建里烘入的 Firebase 协作配置(`VITE_APP_FIREBASE_CONFIG`,含形似 GCP apiKey 的公开客户端 key)——本地画布从不使用协作功能,该配置是死数据,却是安全扫描器"硬编码密钥"误报的来源。新增 `npm run patch:vendor`(`scripts/patch-vendor-excalidraw.mjs`,幂等可重放,已入 `npm run check` 校验链);对 vendored 文件的改动仅此一处,升级 Excalidraw 后重跑即可。上游原文件(npm excalidraw@0.17.6 压缩产物)sha256:`27b133f845543f091aa518924b5b2fdd7eb52a9e490de100b9bc3bfd2ae2f314`,可自行核对。vet 扫描 high 由 24 降至 1(仅剩 Excalidraw 自带浏览器 polyfill 的标记,iframe 隔离)。
+
 ## 1.8.2
 
 - npm 门面重写(面向设计师):简介与 README 改为设计师工作流视角——画布内修图/擦除/去背景/OCR/转矢量/PSD 导出、文字重建为可编辑 PSD/AI/SVG、素材库、Photoshop/Illustrator 双向桥接、生成图自动归档;补装引擎说明、系统要求与数据隐私说明。补 keywords(designer/psd/ocr/photoshop 等)。
