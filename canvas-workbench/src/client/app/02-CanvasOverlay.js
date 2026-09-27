@@ -24,28 +24,69 @@
         }));
       }, [projectInfo.project]);
       // 聊天生图状态轮询:宿主是生成起止与产出路径的唯一权威来源。
-      // active>0 → 画布显示「生成中」占位徽标;新完成的产出路径且
-      // 自动上画布开启 → 走与手动按钮相同的令牌通道派发进画布。
+      // 自动上画布开启时:active 增长 → 在画布里创建与「编辑图片」同款的
+      // 生成中占位元素(斜纹+转圈 SVG,占据图片即将落地的位置);完成路径
+      // → 原位替换为真实图片;active 归零后的孤儿占位 → 标记失败。
+      // 没有占位可替换时(占位被用户删掉)回退到普通自动加入。
+      const chatPendingRef = React.useRef([]);
       React.useEffect(() => {
-        if (!on) { setChatGenerating(0); return; }
+        if (!on) { chatPendingRef.current = []; return; }
         let stopped = false;
+        const tokenOf = () => Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
         const tick = async () => {
           try {
             const res = await fetch('/dsh-canvas/generation-status', { headers: { accept: 'application/json' } });
             if (!res.ok) return;
             const data = await res.json();
             if (stopped) return;
-            setChatGenerating(Number(data.active) || 0);
+            const active = Number(data.active) || 0;
+            const pending = chatPendingRef.current;
+            if (canvasAutoAddEnabled()) {
+              // 占位数量对齐进行中数量(用户删掉的占位不重建,完成时走回退)
+              while (pending.length < active) {
+                const id = 'e_chat_pending_' + tokenOf();
+                post({ type: 'chat-gen-placeholder', id, index: pending.length, subtitle: active > 1 ? '批量生成中 ×' + active + ',完成后自动加入画布' : '完成后自动加入画布' });
+                pending.push(id);
+              }
+            }
             if (Array.isArray(data.completed) && canvasAutoAddEnabled()) {
               for (const item of data.completed) {
-                if (item && item.path) dispatchGeneratedToCanvas(String(item.path));
+                if (!item || !item.path) continue;
+                const path = String(item.path);
+                const name = path.slice(path.lastIndexOf('/') + 1) || '聊天生成.png';
+                const slotId = pending.shift();
+                if (slotId) {
+                  post({ type: 'chat-gen-resolve', id: slotId, url: '/dsh-canvas/image?path=' + encodeURIComponent(path), path, name });
+                } else {
+                  dispatchGeneratedToCanvas(path);
+                }
               }
+            }
+            // 生成全部结束但仍有占位:它们不会等来结果,标记失败(留观 4 秒防竞态)
+            if (active === 0 && pending.length) {
+              if (!tick.settleTimer) {
+                tick.settleTimer = window.setTimeout(() => {
+                  tick.settleTimer = null;
+                  const rest = chatPendingRef.current;
+                  if (rest.length && !stopped) {
+                    chatPendingRef.current = [];
+                    for (const id of rest) post({ type: 'chat-gen-fail', id, message: '生成已结束但没有等到结果——删除后重新生成即可' });
+                  }
+                }, 4000);
+              }
+            } else if (tick.settleTimer) {
+              window.clearTimeout(tick.settleTimer);
+              tick.settleTimer = null;
             }
           } catch (err) {}
         };
         tick();
         const timer = window.setInterval(tick, 2000);
-        return () => { stopped = true; window.clearInterval(timer); };
+        return () => {
+          stopped = true;
+          window.clearInterval(timer);
+          if (tick.settleTimer) window.clearTimeout(tick.settleTimer);
+        };
       }, [on]);
       const [projectDialog, setProjectDialog] = React.useState(null);
       const [projectList, setProjectList] = React.useState({ loading: false, items: [], error: '' });
@@ -55,7 +96,6 @@
       const [adobeInstall, setAdobeInstall] = React.useState({ scriptsInstalled: true, cepInstalled: true });
       const [imageSettings, setImageSettings] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
-      const [chatGenerating, setChatGenerating] = React.useState(0);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
@@ -1853,10 +1893,6 @@
           onPointerDown: startResize,
           title: '拖动调整宽度'
         }),
-        chatGenerating > 0 && autoAddOn ? React.createElement('div', { className: 'dsh-canvas-gen-badge' },
-          React.createElement('span', { className: 'dsh-canvas-gen-badge-dot' }),
-          React.createElement('span', null, '聊天生图中 ×' + chatGenerating + (chatGenerating > 1 ? ',完成自动上画布' : '…完成后自动上画布'))
-        ) : null,
         React.createElement('div', { className: 'dsh-canvas-toolbar' },
           React.createElement('span', { className: 'dsh-canvas-title' }, '无限画布'),
           React.createElement('button', { className: 'dsh-canvas-project', title: '打开项目管理', onClick: openProjectList },
