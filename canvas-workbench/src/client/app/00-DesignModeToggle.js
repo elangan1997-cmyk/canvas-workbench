@@ -1,6 +1,7 @@
     function DesignModeToggle(props) {
       const [on, setOn] = React.useState(getMode());
       const [attachState, setAttachState] = React.useState('');
+      const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
       const [modelCapabilityRevision, setModelCapabilityRevision] = React.useState(0);
       const sessionSummary = props.useSessions((state) => state && state.byId ? state.byId[props.sessionId] : undefined);
       React.useEffect(() => {
@@ -24,6 +25,14 @@
         return directory.store && typeof directory.store.subscribe === 'function' ? directory.store.subscribe(update) : undefined;
       }, [props.sessionId, modelCapabilityRevision]);
       React.useEffect(() => subscribeMode(setOn), []);
+      React.useEffect(() => {
+        const onGenState = (event) => {
+          const detail = event.detail || {};
+          setGenAsk({ show: Boolean(detail.show), active: Number(detail.active) || 0 });
+        };
+        window.addEventListener('dsh-canvas:gen-state', onGenState);
+        return () => window.removeEventListener('dsh-canvas:gen-state', onGenState);
+      }, []);
       React.useEffect(() => {
         if (sessionSummary && sessionSummary.cwd) {
           setActiveChatContext(sessionSummary.cwd, props.sessionId || '');
@@ -66,7 +75,14 @@
           React.createElement('span', null, '设计模式'),
           React.createElement('span', { className: 'dsh-canvas-mode-state' }, on ? '开' : '关')
         ),
-        attachState ? React.createElement('span', { className: 'dsh-canvas-attach-state' }, attachState) : null
+        attachState ? React.createElement('span', { className: 'dsh-canvas-attach-state' }, attachState) : null,
+        on && genAsk.show ? React.createElement('span', { className: 'dsh-canvas-gen-ask' },
+          React.createElement('span', { className: 'dsh-canvas-gen-ask-text' },
+            genAsk.active > 0 ? '🎨 正在生成图片，本聊天还没绑定画布项目：' : '🎨 生成的图片还没上画布——本聊天未绑定画布项目：'),
+          React.createElement('button', { onClick: () => window.dispatchEvent(new CustomEvent('dsh-canvas:project-pick')) }, '选择已有项目'),
+          React.createElement('button', { onClick: () => window.dispatchEvent(new CustomEvent('dsh-canvas:project-new')) }, '新建画布'),
+          React.createElement('button', { className: 'dsh-canvas-gen-ask-dismiss', onClick: () => window.dispatchEvent(new CustomEvent('dsh-canvas:project-dismiss')) }, '本次手动加入')
+        ) : null
       );
     }
 
