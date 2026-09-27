@@ -2,6 +2,27 @@
     // 右上是系统最小化/关闭按钮)。画布工具栏若与它同行,点击会被拖拽区吞掉
     // (实测:换行到第二行的按钮就能点)。检测到 Windows 时整体下移避开。
     const IS_WINDOWS_UI = /Windows/i.test(String(navigator.userAgent || ''));
+    // 实测高度优先:应用的 [data-windows-titlebar] 标记元素 → 继承的 CSS 变量 → 经验值。
+    // 不直接依赖 CSS var(某些装配下不继承到 overlay,1.9.2 在 Win 实机未生效)。
+    const measureWindowsTitlebar = () => {
+      let height = 0;
+      let source = 'none';
+      try {
+        const marked = document.querySelector('[data-windows-titlebar]');
+        if (marked) {
+          const rect = marked.getBoundingClientRect();
+          if (rect && rect.height > 0 && rect.height < 120) { height = Math.ceil(rect.height); source = 'attr-rect'; }
+        }
+        if (!height) {
+          const probe = document.querySelector('[data-windows-titlebar] *') || document.body;
+          const value = getComputedStyle(probe).getPropertyValue('--dsh-windows-titlebar-height').trim();
+          const parsed = parseFloat(value);
+          if (Number.isFinite(parsed) && parsed > 0) { height = Math.ceil(parsed); source = 'css-var'; }
+        }
+      } catch (err) {}
+      if (!height) { height = 40; source += '+fallback'; }
+      return { height, source };
+    };
 
     function CanvasOverlay() {
       const [on, setOn] = React.useState(getMode());
@@ -1960,6 +1981,31 @@
       });
       const hidden = !on ? ' dsh-canvas-overlay-hidden' : '';
       const titlebarSafe = IS_WINDOWS_UI ? ' dsh-canvas-overlay-below-titlebar' : '';
+      // Windows:每 2 秒实测一次标题栏高度写进内联样式(应用布局稳定前可能量不到)。
+      React.useEffect(() => {
+        if (!IS_WINDOWS_UI) return undefined;
+        let stopped = false;
+        const apply = () => {
+          const measured = measureWindowsTitlebar();
+          const root = document.querySelector('.dsh-canvas-overlay');
+          if (root && !stopped) root.style.top = measured.height + 'px';
+          return measured;
+        };
+        const first = apply();
+        fetch('/dsh-canvas/client-debug', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            platform: navigator.platform,
+            ua: navigator.userAgent,
+            isWindowsUI: IS_WINDOWS_UI,
+            titlebar: first,
+            at: Date.now()
+          })
+        }).catch(() => {});
+        const timer = window.setInterval(apply, 2000);
+        return () => { stopped = true; window.clearInterval(timer); };
+      }, []);
 
       return React.createElement('div', { className: 'dsh-canvas-overlay' + titlebarSafe + hidden, style },
         React.createElement('div', {
