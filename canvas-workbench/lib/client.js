@@ -1789,6 +1789,7 @@ window.__ModuleLoader__.load({
     function DesignModeToggle(props) {
       const [on, setOn] = React.useState(getMode());
       const [attachState, setAttachState] = React.useState('');
+      const [genAsk, setGenAsk] = React.useState({ show: false, active: 0 });
       const [modelCapabilityRevision, setModelCapabilityRevision] = React.useState(0);
       const sessionSummary = props.useSessions((state) => state && state.byId ? state.byId[props.sessionId] : undefined);
       React.useEffect(() => {
@@ -1812,6 +1813,14 @@ window.__ModuleLoader__.load({
         return directory.store && typeof directory.store.subscribe === 'function' ? directory.store.subscribe(update) : undefined;
       }, [props.sessionId, modelCapabilityRevision]);
       React.useEffect(() => subscribeMode(setOn), []);
+      React.useEffect(() => {
+        const onGenState = (event) => {
+          const detail = event.detail || {};
+          setGenAsk({ show: Boolean(detail.show), active: Number(detail.active) || 0 });
+        };
+        window.addEventListener('dsh-canvas:gen-state', onGenState);
+        return () => window.removeEventListener('dsh-canvas:gen-state', onGenState);
+      }, []);
       React.useEffect(() => {
         if (sessionSummary && sessionSummary.cwd) {
           setActiveChatContext(sessionSummary.cwd, props.sessionId || '');
@@ -1854,7 +1863,14 @@ window.__ModuleLoader__.load({
           React.createElement('span', null, '设计模式'),
           React.createElement('span', { className: 'dsh-canvas-mode-state' }, on ? '开' : '关')
         ),
-        attachState ? React.createElement('span', { className: 'dsh-canvas-attach-state' }, attachState) : null
+        attachState ? React.createElement('span', { className: 'dsh-canvas-attach-state' }, attachState) : null,
+        on && genAsk.show ? React.createElement('span', { className: 'dsh-canvas-gen-ask' },
+          React.createElement('span', { className: 'dsh-canvas-gen-ask-text' },
+            genAsk.active > 0 ? '🎨 正在生成图片，本聊天还没绑定画布项目：' : '🎨 生成的图片还没上画布——本聊天未绑定画布项目：'),
+          React.createElement('button', { onClick: () => window.dispatchEvent(new CustomEvent('dsh-canvas:project-pick')) }, '选择已有项目'),
+          React.createElement('button', { onClick: () => window.dispatchEvent(new CustomEvent('dsh-canvas:project-new')) }, '新建画布'),
+          React.createElement('button', { className: 'dsh-canvas-gen-ask-dismiss', onClick: () => window.dispatchEvent(new CustomEvent('dsh-canvas:project-dismiss')) }, '本次手动加入')
+        ) : null
       );
     }
 
@@ -2689,7 +2705,7 @@ window.addEventListener("message",function(e){
     return dims2(dataURL).then(function(dm){addImageDataURL(dataURL,dm,{name:d.name||baseName2(d.path||""),path:d.path||"",mtime:d.mtime||0,size:d.size||0,kind:d.kind||"image",managed:d.managed,batchIndex:d.batchIndex,batchTotal:d.batchTotal,batchColumns:d.batchColumns,customData:d.customData||null,openEditor:d.openEditor===true,editorMode:"edit"});});
   });}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)});});
 },true);
-var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"error",message:"创建生成占位失败: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"error",message:"生成图上画布失败: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if(d.type==="export"&&api){var elements=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted&&item.id!=="dsh_theme_backdrop";});if(!elements.length){post({type:"exported",error:"empty"});return;}var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;if(typeof exporter!=="function"){post({type:"error",message:"导出失败: 当前 Excalidraw 未提供 PNG 导出器"});return;}var state=Object.assign({},api.getAppState()||empty,{exportBackground:true,exportWithDarkMode:false,exportScale:1});Promise.resolve(exporter({elements:elements,appState:state,files:fileObject(api.getFiles?api.getFiles():{}),mimeType:"image/png"})).then(function(blob){var fr=new FileReader();fr.onloadend=function(){post({type:"exported",dataUrl:fr.result})};fr.onerror=function(){post({type:"error",message:"导出失败: 无法读取 PNG 数据"})};fr.readAsDataURL(blob)}).catch(function(err){post({type:"error",message:"导出失败: "+String(err&&err.message||err)})})}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;
+var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"chat-gen-soft-error",message:"生成占位未创建: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"chat-gen-soft-error",message:"生成图未上画布: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if(d.type==="export"&&api){var elements=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted&&item.id!=="dsh_theme_backdrop";});if(!elements.length){post({type:"exported",error:"empty"});return;}var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;if(typeof exporter!=="function"){post({type:"error",message:"导出失败: 当前 Excalidraw 未提供 PNG 导出器"});return;}var state=Object.assign({},api.getAppState()||empty,{exportBackground:true,exportWithDarkMode:false,exportScale:1});Promise.resolve(exporter({elements:elements,appState:state,files:fileObject(api.getFiles?api.getFiles():{}),mimeType:"image/png"})).then(function(blob){var fr=new FileReader();fr.onloadend=function(){post({type:"exported",dataUrl:fr.result})};fr.onerror=function(){post({type:"error",message:"导出失败: 无法读取 PNG 数据"})};fr.readAsDataURL(blob)}).catch(function(err){post({type:"error",message:"导出失败: "+String(err&&err.message||err)})})}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;
 
     // Excalidraw/React are pinned vendor assets served by the plugin host.
     // Keeping these scripts off a public CDN prevents DSH srcdoc/CSP changes
@@ -2817,6 +2833,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       const chatPendingRef = React.useRef([]);
       const chatHandledRef = React.useRef(new Set());
       const chatProjectAskedRef = React.useRef({ sessionId: '', asked: false });
+      const openProjectListRefHolder = React.useRef(null);
       React.useEffect(() => {
         if (!on) { chatPendingRef.current = []; return; }
         let stopped = false;
@@ -2830,19 +2847,24 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
             const active = Number(data.active) || 0;
             const pending = chatPendingRef.current;
             const chatCtx = projectRef.current || {};
-            // 新聊天未绑定画布项目时,自动上画布没有明确去处:弹出项目选择器
-            // (选择已有 / 新建),选定前不建占位、不消费完成;关闭不选则本次
-            // 回手动模式(图仍在聊天卡片里可手动加入)。每个会话只问一次。
-            if (canvasAutoAddEnabled() && !chatCtx.project && active > 0) {
-              if (chatProjectAskedRef.current.sessionId !== chatCtx.sessionId) {
-                chatProjectAskedRef.current = { sessionId: chatCtx.sessionId, asked: true };
-                if (chatCtx.cwd) {
-                  setProjectDialog({ mode: 'list', reason: 'auto-add' });
-                  setProjectList({ loading: true, items: [], error: '' });
-                  listProjects(chatCtx.cwd).then((result) => {
-                    setProjectList({ loading: false, items: Array.isArray(result.projects) ? result.projects : [], error: result.error || '' });
-                  }).catch((err) => setProjectList({ loading: false, items: [], error: String((err && err.message) || err) }));
-                }
+            const unbound = !chatCtx.project;
+            const dismissedThisSession = chatProjectAskedRef.current.sessionId === chatCtx.sessionId && chatProjectAskedRef.current.dismissed;
+            const unprocessed = Array.isArray(data.completed)
+              ? data.completed.filter((item) => item && item.path && !chatHandledRef.current.has(String(item.path))).length
+              : 0;
+            // 未绑定画布项目:在聊天输入区(设计模式开关旁)显示询问横幅,不弹画布模态框
+            // (模态会盖住画布阻断交互)。横幅期间占位与自动上画暂缓,绑定后自动补上;
+            // 点「本次手动加入」后,本会话的完成路径标记为已处理,回纯手动模式。
+            const askShow = canvasAutoAddEnabled() && unbound && !dismissedThisSession && (active > 0 || unprocessed > 0);
+            const askState = JSON.stringify({ show: askShow, active });
+            if (window.__dshCanvasGenAskState !== askState) {
+              window.__dshCanvasGenAskState = askState;
+              window.dispatchEvent(new CustomEvent('dsh-canvas:gen-state', { detail: { show: askShow, active } }));
+            }
+            if (canvasAutoAddEnabled() && unbound && !dismissedThisSession && (active > 0 || unprocessed > 0)) return;
+            if (canvasAutoAddEnabled() && unbound && dismissedThisSession && Array.isArray(data.completed)) {
+              for (const item of data.completed) {
+                if (item && item.path) chatHandledRef.current.add(String(item.path));
               }
               return;
             }
@@ -3544,6 +3566,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
         });
       };
       const openProjectList = () => {
+        openProjectListRefHolder.current = openProjectList;
         if (!projectInfo.cwd) { setFeedback('⚠ 当前聊天没有工作目录'); return; }
         setMoreMenuOpen(false);
         setProjectDialog({ mode: 'list' });
@@ -4269,6 +4292,9 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           } else {
             setFeedback('⚠ 所选图片暂时无法读取，请稍后重试');
           }
+        } else if (d.type === 'chat-gen-soft-error') {
+          // 聊天生图占位/上画布的可恢复失败:只提示,不打成全局「加载失败」
+          setFeedback('⚠ ' + (d.message || '聊天生图未能上画布'));
         } else if (d.type === 'error') {
           setStatus('error');
           setFeedback('⚠ ' + (d.message || 'iframe 错误'));
@@ -4376,6 +4402,18 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           flushPending();
         };
         window.addEventListener('dsh-canvas:add-image', onAdd);
+        const openProjectListRef = { current: null };
+        const onProjectPick = () => { if (openProjectListRefHolder.current) openProjectListRefHolder.current(); };
+        const onProjectNew = () => { setMoreMenuOpen(false); setProjectDialog({ mode: 'new', value: '新画布项目' }); };
+        const onProjectDismiss = () => {
+          const current = projectRef.current || {};
+          chatProjectAskedRef.current = { sessionId: current.sessionId || '', dismissed: true };
+          window.__dshCanvasGenAskState = '';
+          window.dispatchEvent(new CustomEvent('dsh-canvas:gen-state', { detail: { show: false } }));
+        };
+        window.addEventListener('dsh-canvas:project-pick', onProjectPick);
+        window.addEventListener('dsh-canvas:project-new', onProjectNew);
+        window.addEventListener('dsh-canvas:project-dismiss', onProjectDismiss);
         const onProjectContext = (event) => {
           // 会话切换会重新挂载聊天输入区，即使 cwd 未变也必须重新测量分栏。
           notifySplitLayout();
@@ -4412,6 +4450,9 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
         if (activeChatCwd) onProjectContext({ detail: { cwd: activeChatCwd, sessionId: activeChatSessionId } });
         return () => {
           window.removeEventListener('dsh-canvas:add-image', onAdd);
+          window.removeEventListener('dsh-canvas:project-pick', onProjectPick);
+          window.removeEventListener('dsh-canvas:project-new', onProjectNew);
+          window.removeEventListener('dsh-canvas:project-dismiss', onProjectDismiss);
           window.removeEventListener('dsh-canvas:project-context', onProjectContext);
           window.removeEventListener('message', onFrameMessage);
           clearTimeout(saveTimer.current);
@@ -5258,6 +5299,11 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'@container (max-width:920px){.dsh-canvas-toolbar{flex-wrap:wrap}.dsh-canvas-hint,.dsh-canvas-feedback{order:20;flex:1 0 calc(100% - 24px);min-height:16px}.dsh-canvas-project{max-width:110px}.dsh-canvas-tb{padding:5px 9px;font-size:12px}}'
       ,'@container (max-width:680px){.dsh-canvas-status{display:none}.dsh-canvas-title{font-size:13px}.dsh-canvas-project{max-width:92px}.dsh-canvas-toolbar{gap:6px;padding:7px 9px}.dsh-canvas-tb{padding:5px 7px;font-size:11px}}'
       ,'/* 聊天生图:生成中占位徽标与自动上画布开关(v1.9) */'
+      ,'.dsh-canvas-gen-ask{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:5px 10px;border-radius:9px;background:rgba(10,132,255,.08);border:1px solid rgba(10,132,255,.3);font-size:12px;max-width:100%}'
+      ,'.dsh-canvas-gen-ask-text{color:var(--dsw-alias-label-primary,#1f2328)}'
+      ,'.dsh-canvas-gen-ask button{padding:3px 9px;border:1px solid rgba(10,132,255,.4);border-radius:6px;background:#fff;color:#0a84ff;font-size:12px;cursor:pointer;white-space:nowrap}'
+      ,'.dsh-canvas-gen-ask button:hover{background:rgba(10,132,255,.1)}'
+      ,'.dsh-canvas-gen-ask .dsh-canvas-gen-ask-dismiss{border-color:var(--dsw-alias-border-l2,#e2e2e6);color:var(--dsw-alias-label-secondary,#6b7280);background:transparent}'
       ,'.dsh-canvas-project-reason{margin:0 0 10px;padding:9px 12px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-accent,#0a84ff) 10%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-accent,#0a84ff) 35%,transparent);color:var(--dsw-alias-label-primary,#1f2328);font-size:12px;line-height:18px}'
       ,'.dsh-canvas-engine-autoadd{margin:10px 14px 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#e2e2e6);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fafafa)}'
       ,'.dsh-canvas-engine-autoadd-row{display:flex;align-items:flex-start;gap:9px;cursor:pointer}'

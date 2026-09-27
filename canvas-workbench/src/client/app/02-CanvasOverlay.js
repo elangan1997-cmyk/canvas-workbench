@@ -31,6 +31,7 @@
       const chatPendingRef = React.useRef([]);
       const chatHandledRef = React.useRef(new Set());
       const chatProjectAskedRef = React.useRef({ sessionId: '', asked: false });
+      const openProjectListRefHolder = React.useRef(null);
       React.useEffect(() => {
         if (!on) { chatPendingRef.current = []; return; }
         let stopped = false;
@@ -44,19 +45,24 @@
             const active = Number(data.active) || 0;
             const pending = chatPendingRef.current;
             const chatCtx = projectRef.current || {};
-            // 新聊天未绑定画布项目时,自动上画布没有明确去处:弹出项目选择器
-            // (选择已有 / 新建),选定前不建占位、不消费完成;关闭不选则本次
-            // 回手动模式(图仍在聊天卡片里可手动加入)。每个会话只问一次。
-            if (canvasAutoAddEnabled() && !chatCtx.project && active > 0) {
-              if (chatProjectAskedRef.current.sessionId !== chatCtx.sessionId) {
-                chatProjectAskedRef.current = { sessionId: chatCtx.sessionId, asked: true };
-                if (chatCtx.cwd) {
-                  setProjectDialog({ mode: 'list', reason: 'auto-add' });
-                  setProjectList({ loading: true, items: [], error: '' });
-                  listProjects(chatCtx.cwd).then((result) => {
-                    setProjectList({ loading: false, items: Array.isArray(result.projects) ? result.projects : [], error: result.error || '' });
-                  }).catch((err) => setProjectList({ loading: false, items: [], error: String((err && err.message) || err) }));
-                }
+            const unbound = !chatCtx.project;
+            const dismissedThisSession = chatProjectAskedRef.current.sessionId === chatCtx.sessionId && chatProjectAskedRef.current.dismissed;
+            const unprocessed = Array.isArray(data.completed)
+              ? data.completed.filter((item) => item && item.path && !chatHandledRef.current.has(String(item.path))).length
+              : 0;
+            // 未绑定画布项目:在聊天输入区(设计模式开关旁)显示询问横幅,不弹画布模态框
+            // (模态会盖住画布阻断交互)。横幅期间占位与自动上画暂缓,绑定后自动补上;
+            // 点「本次手动加入」后,本会话的完成路径标记为已处理,回纯手动模式。
+            const askShow = canvasAutoAddEnabled() && unbound && !dismissedThisSession && (active > 0 || unprocessed > 0);
+            const askState = JSON.stringify({ show: askShow, active });
+            if (window.__dshCanvasGenAskState !== askState) {
+              window.__dshCanvasGenAskState = askState;
+              window.dispatchEvent(new CustomEvent('dsh-canvas:gen-state', { detail: { show: askShow, active } }));
+            }
+            if (canvasAutoAddEnabled() && unbound && !dismissedThisSession && (active > 0 || unprocessed > 0)) return;
+            if (canvasAutoAddEnabled() && unbound && dismissedThisSession && Array.isArray(data.completed)) {
+              for (const item of data.completed) {
+                if (item && item.path) chatHandledRef.current.add(String(item.path));
               }
               return;
             }
@@ -758,6 +764,7 @@
         });
       };
       const openProjectList = () => {
+        openProjectListRefHolder.current = openProjectList;
         if (!projectInfo.cwd) { setFeedback('⚠ 当前聊天没有工作目录'); return; }
         setMoreMenuOpen(false);
         setProjectDialog({ mode: 'list' });
@@ -1483,6 +1490,9 @@
           } else {
             setFeedback('⚠ 所选图片暂时无法读取，请稍后重试');
           }
+        } else if (d.type === 'chat-gen-soft-error') {
+          // 聊天生图占位/上画布的可恢复失败:只提示,不打成全局「加载失败」
+          setFeedback('⚠ ' + (d.message || '聊天生图未能上画布'));
         } else if (d.type === 'error') {
           setStatus('error');
           setFeedback('⚠ ' + (d.message || 'iframe 错误'));
@@ -1590,6 +1600,18 @@
           flushPending();
         };
         window.addEventListener('dsh-canvas:add-image', onAdd);
+        const openProjectListRef = { current: null };
+        const onProjectPick = () => { if (openProjectListRefHolder.current) openProjectListRefHolder.current(); };
+        const onProjectNew = () => { setMoreMenuOpen(false); setProjectDialog({ mode: 'new', value: '新画布项目' }); };
+        const onProjectDismiss = () => {
+          const current = projectRef.current || {};
+          chatProjectAskedRef.current = { sessionId: current.sessionId || '', dismissed: true };
+          window.__dshCanvasGenAskState = '';
+          window.dispatchEvent(new CustomEvent('dsh-canvas:gen-state', { detail: { show: false } }));
+        };
+        window.addEventListener('dsh-canvas:project-pick', onProjectPick);
+        window.addEventListener('dsh-canvas:project-new', onProjectNew);
+        window.addEventListener('dsh-canvas:project-dismiss', onProjectDismiss);
         const onProjectContext = (event) => {
           // 会话切换会重新挂载聊天输入区，即使 cwd 未变也必须重新测量分栏。
           notifySplitLayout();
@@ -1626,6 +1648,9 @@
         if (activeChatCwd) onProjectContext({ detail: { cwd: activeChatCwd, sessionId: activeChatSessionId } });
         return () => {
           window.removeEventListener('dsh-canvas:add-image', onAdd);
+          window.removeEventListener('dsh-canvas:project-pick', onProjectPick);
+          window.removeEventListener('dsh-canvas:project-new', onProjectNew);
+          window.removeEventListener('dsh-canvas:project-dismiss', onProjectDismiss);
           window.removeEventListener('dsh-canvas:project-context', onProjectContext);
           window.removeEventListener('message', onFrameMessage);
           clearTimeout(saveTimer.current);
