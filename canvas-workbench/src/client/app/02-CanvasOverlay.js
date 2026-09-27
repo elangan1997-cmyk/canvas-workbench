@@ -29,6 +29,7 @@
       // → 原位替换为真实图片;active 归零后的孤儿占位 → 标记失败。
       // 没有占位可替换时(占位被用户删掉)回退到普通自动加入。
       const chatPendingRef = React.useRef([]);
+      const chatHandledRef = React.useRef(new Set());
       React.useEffect(() => {
         if (!on) { chatPendingRef.current = []; return; }
         let stopped = false;
@@ -53,6 +54,10 @@
               for (const item of data.completed) {
                 if (!item || !item.path) continue;
                 const path = String(item.path);
+                // 宿主的完成记录是环形列表,每轮轮询都会重放:同一路径无论走
+                // 占位原位替换还是兜底加入,只处理一次,否则会出现两张一样的图。
+                if (chatHandledRef.current.has(path)) continue;
+                chatHandledRef.current.add(path);
                 const name = path.slice(path.lastIndexOf('/') + 1) || '聊天生成.png';
                 const slotId = pending.shift();
                 if (slotId) {
@@ -60,6 +65,9 @@
                 } else {
                   dispatchGeneratedToCanvas(path);
                 }
+              }
+              if (chatHandledRef.current.size > 500) {
+                chatHandledRef.current = new Set([...chatHandledRef.current].slice(-500));
               }
             }
             // 生成全部结束但仍有占位:它们不会等来结果,标记失败(留观 4 秒防竞态)
@@ -1113,6 +1121,12 @@
         const frame = frameRef.current;
         if (!frame || event.source !== frame.contentWindow) return;
         const d = event.data || {};
+        // 画布尚未就绪时创建占位被延后:移出待办,下一轮轮询(2s 后)自动重建,
+        // 生成中的占位不会因为撞上画布冷启动窗口而丢失。
+        if (d.type === 'chat-gen-placeholder-deferred' && d.id) {
+          chatPendingRef.current = chatPendingRef.current.filter((id) => id !== d.id);
+          return;
+        }
         if (d.type === 'ready') {
           frameReady.current = true;
           setStatus('ready');
