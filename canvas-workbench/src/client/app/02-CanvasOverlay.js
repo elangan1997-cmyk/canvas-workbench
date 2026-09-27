@@ -1,3 +1,8 @@
+    // Windows 官方桌面用自绘标题栏(顶部一条 -webkit-app-region:drag 拖拽区,
+    // 右上是系统最小化/关闭按钮)。画布工具栏若与它同行,点击会被拖拽区吞掉
+    // (实测:换行到第二行的按钮就能点)。检测到 Windows 时整体下移避开。
+    const IS_WINDOWS_UI = /Windows/i.test(String(navigator.userAgent || ''));
+
     function CanvasOverlay() {
       const [on, setOn] = React.useState(getMode());
       const minimumChatWidth = 520;
@@ -1952,8 +1957,9 @@
         title: 'Infinite Canvas'
       });
       const hidden = !on ? ' dsh-canvas-overlay-hidden' : '';
+      const titlebarSafe = IS_WINDOWS_UI ? ' dsh-canvas-overlay-below-titlebar' : '';
 
-      return React.createElement('div', { className: 'dsh-canvas-overlay' + hidden, style },
+      return React.createElement('div', { className: 'dsh-canvas-overlay' + titlebarSafe + hidden, style },
         React.createElement('div', {
           className: 'dsh-canvas-resizer',
           onPointerDown: startResize,

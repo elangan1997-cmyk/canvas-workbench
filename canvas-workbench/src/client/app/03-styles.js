@@ -58,6 +58,8 @@
       '@media (prefers-color-scheme:light){.dsh-text-select-zoom{border-color:#93c5fd;background:#eff6ff;color:#1d4ed8}.dsh-text-zoom-overlay{background:rgba(226,232,240,.78)}.dsh-text-zoom-dialog{border-color:#d1d5db;background:#fff;box-shadow:0 24px 80px rgba(15,23,42,.25)}.dsh-text-zoom-head{border-color:#e5e7eb;color:#111827}.dsh-text-zoom-head button,.dsh-text-zoom-actions button{border-color:#d1d5db;background:#f3f4f6;color:#374151}.dsh-text-zoom-stage{background:#f8fafc}.dsh-text-zoom-actions{border-color:#e5e7eb}.dsh-text-zoom-empty{border-color:#e5e7eb;color:#6b7280}}',
       '.dsh-canvas-overlay{position:fixed;top:0;right:0;bottom:0;z-index:1000;display:flex;flex-direction:column;container-type:inline-size;background:var(--dsw-alias-bg-base,#15171c);border-left:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.1));color:var(--dsw-alias-label-primary,#e5e7eb);pointer-events:auto}',
       '.dsh-canvas-overlay-hidden{display:none!important}',
+      /* Windows 自绘标题栏避让:下移画布,高度取应用自己的标题栏变量(继承自 frame 层) */
+      '.dsh-canvas-overlay-below-titlebar{top:var(--dsh-windows-titlebar-height,36px)}',
       '.dsh-canvas-resizer{position:absolute;left:-3px;top:0;bottom:0;width:8px;cursor:col-resize;z-index:5;touch-action:none}',
       '.dsh-canvas-resizer:hover,.dsh-canvas-resizer:active{background:rgba(0,120,255,.25)}',
       '.dsh-canvas-toolbar{position:relative;display:flex;align-items:center;align-content:center;gap:7px 8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l2,rgba(255,255,255,.09));background:var(--dsw-alias-bg-layer-1,#1b1e24);color:var(--dsw-alias-label-primary,#e5e7eb);flex:none;overflow:visible}',
