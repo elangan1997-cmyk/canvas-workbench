@@ -2,6 +2,7 @@
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
 import { imageEngineHealth, readImageEngineSettings, testImageApiConnection, writeImageEngineSettings, writeLegacyApiAuth } from '../../../lib/image-engine.js';
 import { readToolchainStatus, runToolchainProvisioning } from '../services/local-toolchain.js';
+import { checkUpdate, performSelfUpdate } from '../services/self-update.js';
 import { isAbsolutePath } from '../../../lib/platform.js';
 import { stat } from 'node:fs/promises';
 import { parseQuery, readBody, respond } from '../server/http.js';
@@ -63,6 +64,37 @@ export function register(router, h) {
   router.add({ method: 'GET', path: '/dsh-canvas/toolchain-status', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
           const status = await readToolchainStatus();
           respond(res, 200, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: true, status }));
+          return;
+  });
+
+  router.add({ method: 'GET', path: '/dsh-canvas/update-check', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          respond(res, 200, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: true, ...(await checkUpdate()) }));
+          return;
+  });
+
+  router.add({ method: 'POST', path: '/dsh-canvas/self-update', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          if (!sameOriginRequest()) {
+            respond(res, 403, { 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: '仅允许从当前 DSH 页面执行更新' }));
+            return;
+          }
+          const result = await performSelfUpdate();
+          respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify(result));
+          return;
+  });
+
+  router.add({ method: 'POST', path: '/dsh-canvas/client-debug', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          try {
+            const body = JSON.parse(await readBody(req) || '{}');
+            const { writeFile: debugWrite, mkdir: debugMkdir } = await import('node:fs/promises');
+            const { join: debugJoin } = await import('node:path');
+            const { dshHome: debugHome } = await import('../services/image-engine-settings.js');
+            const debugDir = debugJoin(debugHome(), 'canvas-workbench');
+            await debugMkdir(debugDir, { recursive: true });
+            await debugWrite(debugJoin(debugDir, 'client-debug.json'), JSON.stringify(body, null, 2) + '\n', 'utf8');
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true }));
+          } catch (err) {
+            respond(res, 400, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false }));
+          }
           return;
   });
 

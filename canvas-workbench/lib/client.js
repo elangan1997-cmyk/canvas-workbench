@@ -3167,6 +3167,24 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       const [projectDialog, setProjectDialog] = React.useState(null);
       const [projectList, setProjectList] = React.useState({ loading: false, items: [], error: '' });
       const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
+      const [updateInfo, setUpdateInfo] = React.useState(null);
+      const [updating, setUpdating] = React.useState(false);
+      const refreshUpdateInfo = (silent) => {
+        fetch('/dsh-canvas/update-check', { cache: 'no-store' }).then((r) => r.json()).then((d) => {
+          setUpdateInfo(d);
+          if (!silent && d) {
+            setFeedback(d.hasUpdate ? '🔄 发现新版本 ' + d.latest + '（更多菜单可一键更新）' : '✓ 已是最新版 ' + (d.current || ''));
+          }
+        }).catch(() => {});
+      };
+      React.useEffect(() => {
+        let last = 0;
+        try { last = Number(window.localStorage.getItem('dsh-canvas-update-checked-at') || 0); } catch (err) {}
+        if (Date.now() - last < 24 * 60 * 60 * 1000) return undefined;
+        try { window.localStorage.setItem('dsh-canvas-update-checked-at', String(Date.now())); } catch (err) {}
+        const timer = window.setTimeout(() => refreshUpdateInfo(false), 6000);
+        return () => window.clearTimeout(timer);
+      }, []);
       // Adobe 桥接安装状态：默认按"已装"处理不显示安装按钮，打开「更多」菜单时查一次实际状态，
       // 缺菜单脚本 / CEP 面板才显示对应安装入口（装完按钮即消失，避免常驻三个一次性动作）。
       const [adobeInstall, setAdobeInstall] = React.useState({ scriptsInstalled: true, cepInstalled: true });
@@ -5086,6 +5104,29 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
             onClick: () => { saveNow(); clearTimeout(saveTimer.current); setMode(false); }
           }, '收起画布'),
           moreMenuOpen ? React.createElement('div', { className: 'dsh-canvas-more-menu' },
+            updateInfo && updateInfo.supported === false ? null : React.createElement('button', {
+              title: updateInfo && updateInfo.hasUpdate ? '一键更新到 ' + updateInfo.latest + '（应用自带安装器，完成后需重启 DSH）' : '检查 npm 上的最新版本（官方源/大陆镜像自动切换）',
+              disabled: updating || (updateInfo && updateInfo.hasUpdate === false && updateInfo.latest),
+              onClick: () => {
+                if (!(updateInfo && updateInfo.hasUpdate)) { refreshUpdateInfo(false); return; }
+                setUpdating(true);
+                setFeedback('⏳ 正在更新到 ' + updateInfo.latest + '，完成后需重启 DSH…');
+                fetch('/dsh-canvas/self-update', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                  .then((r) => r.json())
+                  .then((result) => {
+                    setUpdating(false);
+                    if (result && result.ok && result.installed) {
+                      setFeedback('✓ 已更新到 ' + result.installed + '，请完全退出并重启 DSH 生效');
+                      setMoreMenuOpen(false);
+                    } else if (result && result.upToDate) {
+                      setFeedback('✓ 已是最新版');
+                    } else {
+                      setFeedback('⚠ ' + String((result && result.error) || '更新失败').slice(0, 220));
+                    }
+                  })
+                  .catch((err) => { setUpdating(false); setFeedback('⚠ 更新请求失败:' + String((err && err.message) || err)); });
+              }
+            }, updating ? '⏳ 更新中…' : (updateInfo && updateInfo.hasUpdate ? '🔄 更新到 ' + updateInfo.latest + '（当前 ' + updateInfo.current + '）' : '🔄 检查更新')),
             React.createElement('button', {
               title: '开启后画布背景跟随 macOS 系统外观，关闭则跟随 DSH 的主题设置',
               onClick: () => {
