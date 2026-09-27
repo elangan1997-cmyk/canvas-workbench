@@ -1,17 +1,113 @@
-# DSH画布工作台
+# DSH 画布工作台 · Canvas Workbench
 
-面向 DSH Desktop 的可插拔设计画布套件，**最新版本 `1.8.0`（main 分支）**，包括：
+> A local-first AI image workstation inside DeepSeek Harness — an affordable, bring-your-own-API alternative to cloud design agents like Lovart: generate, edit, and deliver from your own machine, with layer-level Photoshop/Illustrator round-trip as the premium edge.
 
-- `canvas-workbench`：无限画布、项目持久化、聊天图片交互、渐进增强图片工具，以及 **Photoshop / Illustrator ⇄ 画布桥接**（取图层到画布、编辑后按格式归位返回）。
-- 独立文件浏览器已移除；项目目录选择与“在文件夹中显示”由画布插件自身提供。
-- macOS 安装工程；Windows 源码安装器（`install-windows.cmd`）。
-- 可选的内置 `dsh-codex` 兼容构建，用于在支持的 DSH Profile 中使用 Codex OAuth 路由。
+**开自己的 API 生图,不交订阅费**——在 DSH 里完成「生成 → 编辑 → 交付」整条链路:聊天生图**自动上画布**、画布排版、修图擦除、可编辑 PSD/AI 交付,文件全程在你自己的磁盘上。可视为**本地版的 Lovart 平价平替**:核心链路对齐,成本是你自己的 API 用量;再叠加两个云端产品给不了的溢价点——**PS/AI 图层级双向联动**与**可编辑文件交付**。
 
-## 快速安装最新版（v1.8.0）
+**最新版本 [`v1.9.0`](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.9.0)**:聊天生图全自动上画布(生成中占位 → 原位替换)、输入区生图**比例 13 档 + 数量 ×1~×8**、两引擎统一生效、新版官方桌面全面适配、Windows 推荐分支全量并入。
 
-最新功能版始终在 **main 分支**（版本号见 `canvas-workbench/package.json` 与 [CHANGELOG](CHANGELOG.md)）。已安装 DSH Desktop 的机器，克隆仓库后运行同步脚本即可：
+---
 
-**macOS：**
+## 你可能在找它(Looking for one of these?)
+
+- 「**本地生图工具 / Lovart 平替 / 不想交订阅费的 AI 设计**」→ 开自己的 API(任意 OpenAI 兼容接口,国内大模型/企业网关直连),本地零订阅
+- 「**批量生图 / 抽卡 / 一次生成多张**挑图」→ 数量 ×2/×4/×8,画布占位逐张替换,同规格排列
+- 「AI 生图**比例控制 / 9:16 竖版 / 16:9 / 21:9 电影感**」→ 输入区 13 档比例卡片,生成后精确裁切
+- 「**DSH / DeepSeek Harness 画布插件**、无限画布、白板、设计模式」→ 对话旁的无限设计画布
+- 「DSH 里怎么**修图 / 改图 / P 图 / 去背景 / 抠图 / 擦除**」→ 画布内图片工具,选中即用
+- 「**AI 生成的图片**保存到哪、怎么管理、自动上画布」→ 自动归档 + 全局找回 + 自动/一键上画布
+- 「DSH 图片**转 PSD / 导出分层 / 文字识别 / 文字重建 / 转矢量 / OCR**」→ 本地图片处理工具链
+- 「DSH 和 **Photoshop / Illustrator 联动 / 图层互传 / PS 桥接**」→ Adobe 双向桥接
+- 「DSH **素材库 / 素材管理 / 设计素材**」→ 带颜色标签的本机素材库
+- 「不想开 ChatGPT 订阅,**用自己的图片 API / 国内大模型 API / 企业网关**做设计」→ 任意 OpenAI 兼容接口直连
+- *DSH canvas plugin · local Lovart alternative · infinite canvas · auto image placement · batch generation · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
+
+---
+
+## 30 秒看懂
+
+1. DSH 聊天框上方点开**设计模式**,右侧出现无限画布;
+2. 输入区选好**比例**(比如 9:16)和**数量**(比如 ×4),直接在聊天里说"生成一张……";
+3. 画布上先出现 ×4 个**生成中占位**(和智能擦除同款动画),每张生成完**原位替换**成图;
+4. 原图同步归档到项目 `DSH聊天生成图片/会话/日期/`,永不丢;
+5. 选中图直接**改图/擦除/去背景/重建文字**,需要精修就**一键送进 PS/AI**,改完**像素级归位**。
+
+---
+
+## 设计师能做什么
+
+### 🖼 对话旁的无限画布
+- 输入框上方一键切换**设计模式**,左侧对话、右侧画布并排工作,分栏宽度可拖动。
+- 画布基于 Excalidraw:白板级自由排版——拖入、粘贴、多选、对齐、复制、撤销重做、PNG 导出;`Alt + 滚轮`缩放贴合 PS 习惯。
+- 画布内容就是本地项目文件(项目内 `canvas.json` 快照),断电不丢,跟项目走;删除画布元素不影响聊天原图。
+- 未绑定画布的聊天会生成图时,输入区横幅询问「选择已有项目 / 新建画布 / 本次手动加入」,绑定后自动补上。
+
+### 🤖 聊天生图全自动上画布(1.9.0)
+设计模式开启时,聊天里每一次生图都会:
+- **先占位**:画布立即出现"生成中"占位卡(智能擦除同款动画,跟随系统深浅主题),批量时标注 ×N;
+- **完成即替换**:每张成图**原位替换**对应占位,同一批生成的图尺寸规格完全一致(240 盒装),不会一大一小;
+- **失败有兜底**:占位替换万一失败(比如你手动删了占位),成图立即按当前视野放置并提示,不会"生成了却找不到";
+- **可关可调**:不想要自动上画布时在「更多 → 图像引擎设置」关闭,回到卡片上手动「加入画布」;批量抽卡场景建议保持开启。
+
+### 📐 生图比例与数量(1.9.0)
+聊天输入区、设计模式开关旁的比例芯片,点开是完整选择面板:
+- **13 档比例**:1:1、3:2/2:3、4:3/3:4、16:9/9:16、21:9/9:21(电影感)、2:1/1:2(banner/长图)、5:4/4:5(摄影/打印)+ 自动档;
+- **数量 ×1/×2/×4/×8**:串行逐张生成,占位与产出严格一一对应,适合抽卡;
+- **两个引擎都生效**:API 引擎请求自动映射到网关标准尺寸、生成后精确裁到所选比例;dsh-codex 引擎在提示词注入构图要求 + 生成后裁切双保险;
+- **编辑也认比例**:聊天里发起的改图,只要显式选了比例就按所选比例出图;画布上的编辑和智能擦除始终跟随原图,不会被意外裁切。
+
+### 📥 生成图不丢、随手可用
+- 聊天生成的每张图**自动归档**到 `DSH聊天生成图片/<会话标题>/<日期>/<时段>/`,文件夹名跟随会话标题自动同步;
+- 聊天里的**图片输出卡**逐轮聚合,支持「加入画布」「在文件夹中显示」;
+- 历史会话里的图按文件名全局找回,旧图引用不再裂图。
+
+### ✏️ 画布内直接改图
+选中画布上的图,不离开 DSH 完成:
+- **编辑图片**:提示词改图,可框选区域(未选区域自动作为"保持不变"约束),改完原位替换;
+- **智能擦除**:涂抹要擦掉的部分,按选区原生分辨率重绘,边缘色调匹配,无补丁感;
+- **去背景**:一键抠图,透明背景,选区自动扩展羽化;
+- **文字识别(OCR)**:整图+选区框交给视觉模型,返回结构化 JSON(文字/位置/颜色/字号/字体/置信度);
+- **转矢量**:位图转 SVG 线稿,印刷与放大可用;
+- **导出 PSD**:按图层/文字分层的 PSD 落盘;
+- 连续编辑以**原图母版**合成,多次蒙版不叠加、不糊图。
+
+### ✍️ 文字重建:图片上的字变成可编辑文字
+- 识别海报/包装上的文字后,用**免费商用字体**(阿里巴巴普惠体 3.0、思源黑体 SC、Inter 等)**重建为可编辑的 PSD / AI / SVG**——文字是活的,不是贴图;
+- 可直接生成**原生 Illustrator 文档(.ai)** 并自动回到画布(Windows 同样支持,走 COM 驱动);
+- PSD 输出含背景修复层 + 可编辑文字层,位置/字号/颜色按原图坐标换算。
+
+### 🗂 素材库
+- 画布右侧素材侧栏:**Mac 式七色标签**、多选批量标记、按颜色/类型/时间/尺寸/大小/名称排序筛选;
+- 画布 ↔ 素材库**双向拖拽**;素材集中存在本机,跨项目复用;
+- 项目文件夹里的新文件(PS/AI 另存、访达拷入)**实时刷新**自动上画布。
+
+### 🔁 Photoshop / Illustrator 双向桥接
+- 画布点**「取 Ps 图层」「取 Ai 对象」**:把 PS/AI 里选中的图层直接拉进画布(约 2 秒,PS 逐层裁到图层边界并记住坐标);
+- 画布选中图点**「→Ps」「→Ai」**:改完按格式归位——PSD 并图层进当前文档、AI/SVG 按对象并入,**像素级归位**(PS 2025 / AI 2026 真机验收);
+- 传输只靠本地文件夹握手,无端口无网络,CS6→2026 通用;
+- Windows 同样支持:远程驱动走 COM 自动化,自定义安装路径(如 `C:\ps\`)也能从注册表定位;
+- PS 2025+ 无旧扩展面板?画布按钮和「文件 → 脚本」一键脚本都可用。协议与排障见 [`canvas-workbench/adobe-bridge/PROTOCOL.md`](canvas-workbench/adobe-bridge/PROTOCOL.md)。
+
+### 🧾 操作日志
+「更多 → 操作日志」记录项目加载、文件刷新、图片落盘、模型请求、响应解析、预览转换、PSD 生成和失败原因。反馈问题时复制日志步骤即可,不含账号与 Key。
+
+---
+
+## 安装
+
+### 方式一:插件市场 / npm(推荐,已装 DSH 的机器)
+
+DSH 设置 → 插件 → 市场,搜索 `canvas-workbench`,点安装;或命令行:
+
+```sh
+dsh plugin --profile web add canvas-workbench
+```
+
+中国大陆网络会自动回退 registry.npmmirror.com 镜像,无需额外配置。
+
+### 方式二:源码同步(要最新 main / 参与开发)
+
+**macOS:**
 
 ```bash
 git clone https://github.com/elangan1997-cmyk/dsh-canvas-suite.git
@@ -19,384 +115,125 @@ cd dsh-canvas-suite
 ./sync-local-plugins.sh     # 同步插件到本机全部 DSH Profile 并做健康检查
 ```
 
-**Windows（PowerShell 或直接双击 `install-windows.cmd`）：**
+**Windows(PowerShell 或双击 `install-windows.cmd`):**
 
 ```powershell
 git clone https://github.com/elangan1997-cmyk/dsh-canvas-suite.git
 cd dsh-canvas-suite
-.\install-windows.cmd            # 同步 + 健康检查（先完全退出 DSH）
+.\install-windows.cmd            # 同步 + 健康检查(先完全退出 DSH)
 .\install-windows.cmd -CheckOnly # 只检查不改文件
 ```
 
-完成后完全退出并重启 DSH Desktop 生效。图像引擎（Codex OAuth 或 API）在「更多 → 图像引擎设置」里首次配置。
+安装后完全退出并重启 DSH Desktop 生效。
 
-## 先从设计师的工作开始看
+### 方式三:完整安装包(新电脑 / 没有 DSH)
 
-DSH 画布工作台不是把网页工具搬到桌面上，而是把设计师每天反复做的几件事连起来：找素材、生成图片、挑选区域、修改、确认效果、保留原图、交给 Photoshop/Illustrator 继续细化。
+| 情况 | 推荐 |
+|---|---|
+| macOS 新电脑 | [`v1.5.9` Release](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9) 的 `macOS-Complete` DMG/PKG(整机重装验收基线),装好后按方式一/二升级画布到 1.9.0 |
+| Windows 新电脑 | 源码安装(方式二,全量 Win 兼容修复已并入 main);或已实机验证的 `v1.4.0-windows-preview.4` 整包后升级 |
 
-你可以把它理解为一个“项目文件夹 + 无限画布 + 当前聊天模型 + 本地设计软件”的工作台：
-- 不必为了让模型看图而反复上传和下载；项目里的素材、聊天原图和画布元素有明确的落盘位置。
-- 不必在多个网页之间复制提示词；图片生成、编辑、识别和加入画布都围绕当前项目完成。
-- 不必猜测失败在哪里；操作日志会告诉你是选区、模型请求、响应解析、预览转换还是落盘阶段出错。
-- 不必牺牲后期编辑；文字重建可以输出 PSD 背景和可编辑文字层，原图尺寸和比例尽量保持。
+npm 包与源码包都不含 DSH 本体、Python 运行时、模型文件、账号或 API Key。
 
-## 设计师最容易感受到的便利
+---
 
-| 设计工作 | DSH 画布工作台的做法 |
-| --- | --- |
-| 找图和整理 | 打开项目文件夹即可看到实时更新的素材，画布和文件夹保持同一项目关系 |
-| 试几个方案 | 聊天生成的原图保留在项目目录，加入画布只是建立一个可排版的副本 |
-| 局部修改 | 框选后编辑、擦除或去字，未选区域作为“保持不变”的约束 |
-| 做交付文件 | 背景修复图、文字层和原图分开保留，可继续进 PSD 或 Adobe 软件 |
-| 处理失败 | “更多 → 操作日志”记录每一步，不需要把整段聊天或账号信息发给别人 |
-| 日常操作 | Alt + 滚轮缩放、拖拽平移、多选对齐，习惯接近 Photoshop |
+## 图片引擎(带什么 API 都行)
 
-## 和网页第三方设计 Agent 的区别
+画布右上角「更多 → 图像引擎设置」,两条路线自由切换,不锁定任何厂商:
 
-网页第三方工具适合临时试用、快速做一张图；DSH 更适合长期项目、批量素材和需要交付源文件的设计工作。主要差异在于：
-- **本地项目优先**：素材和生成原图在自己的项目文件夹中管理，不依赖网页会话是否还在、网页链接是否过期。
-- **模型路由可选择**：设计模式开启时统一走画布设置的 Codex 或 API；没有 Codex 会员时仍可以使用自己的 API。
-- **从生成到交付连贯**：网页工具通常停在一张扁平图片，DSH 可以继续做选区编辑、文字识别、PSD 分层、文件夹归档和 Adobe 衔接。
-- **对原始素材更友好**：编辑器使用原始分辨率，结果保留原图和独立文件，减少网页预览压缩、重复下载和版本混乱。
-- **更容易追责和复现**：项目路径、模型路由、失败步骤和输出文件都能在本机核对，便于团队复盘。
-- **隐私边界更清楚**：登录、API 凭据、项目内容和聊天原图留在使用者自己的电脑；只有调用所选模型服务时才发送必要的图片请求。
+| 引擎 | 适合 | 说明 |
+|---|---|---|
+| `API`(推荐起点) | **任何 OpenAI 兼容图片接口** | 国内大模型 API、企业网关、自建服务均可直连——不需要 ChatGPT 订阅;密钥只存本机(0600) |
+| `dsh-codex` | 已有 ChatGPT 订阅 | 与 [dsh-codex](https://www.npmjs.com/package/dsh-codex) 插件共用 OAuth 与订阅额度 |
 
-这并不意味着网页工具没有价值：网页服务通常免安装、适合快速试用或协作展示；如果你需要长期保留设计资产、可编辑交付和稳定的本地工作流，DSH 画布工作台会更合适。
+比例与数量对两个引擎**统一生效**。另有**本地工具链完全不依赖任何 API**:去背景、OCR、转矢量、PSD 导出、文字重建全部在本机 Python 环境运行,断网可用、零调用成本。引擎不会静默切换,状态面板实时显示安装/登录/凭据状态。
+
+---
+
+## 是 Lovart 的平价平替吗?
+
+对**核心链路——生图 → 编辑 → 交付**来说,是:
+
+| 维度 | 云端设计 Agent | DSH 画布工作台 |
+|---|---|---|
+| 成本 | 平台订阅 + 按量 | 自带 API 按用量;本地工具链零 API 成本 |
+| 数据 | 云端会话 | 本地项目文件 + 自动归档,不上云 |
+| 交付 | 多为扁平图 | **可编辑 PSD/AI/SVG** |
+| 联动 | 无 | **PS/AI 图层级双向往返** |
+| 追责复现 | 黑盒 | 项目路径/模型路由/失败步骤本机可查 |
+| 隐私 | 上传 | 凭据与内容留在本机,仅调用所选模型时发送必要请求 |
+
+不在当前范围的:团队云端协作、视频/动效、模板灵感生态——需要这些时配合云端平台使用(云端出概念稿,本地精修交付)。
+
+---
 
 ## 推荐的设计工作流
 
-1. **生成方向**：在当前聊天中描述方向，选择画布图像引擎，生成图片后点击“加入画布”。
-2. **整理方案**：在无限画布中排列多个版本，使用文件夹实时刷新的素材补充版面。
-3. **局部修改**：选中需要调整的区域，调用编辑图片、智能擦除或去除背景；未选区域保持原样。
-4. **文字重建**：框选文字，让视觉模型返回 JSON 和背景修复提示词，确认后输出背景图和 PSD 文字层。
-5. **交付和归档**：保留原图、修复背景、PSD 和操作日志；需要精修时从画布直接交给 Photoshop/Illustrator。
+1. **抽卡**:设计模式开 → 比例选 9:16、数量 ×4 → 聊天里描述方向 → 画布 4 个占位逐张替换 → 圈选满意的;
+2. **整理**:无限画布排列多版本,素材库七色标签分类,文件夹新素材实时刷新上画布;
+3. **局部修改**:选中调整区域 → 编辑/智能擦除/去背景,未选区域保持原样;
+4. **文字重建**:框选文字 → 视觉模型返回 JSON → 确认后输出背景图 + 可编辑 PSD/AI 文字层;
+5. **精修交付**:「→Ps」「→Ai」送进 Adobe 细化,改完归位;原图、修复背景、分层文件与操作日志全程保留。
 
-## 快速选择下载包
+---
 
-| 你的情况 | 推荐做法 |
-| --- | --- |
-| 想要**最新功能 1.8.0**（Adobe 桥接 / 架构重构 / 整理与颜色标记） | 按上方「快速安装」从 main 分支源码安装（macOS 与 Windows 都有脚本） |
-| macOS 新电脑、没有 DSH Desktop | 下载已验证的 1.5.9 完整 DMG/PKG（整机重装验收版），安装后登录自己的账号 |
-| Windows 新电脑或已有 DSH | 最新版用「快速安装」源码方式（Windows 代码层适配 + 自动检查已就绪，实机验收清单见 [WINDOWS-TEST-CHECKLIST](WINDOWS-TEST-CHECKLIST.md)）；要已实机验证的整包则用 `v1.4.0-windows-preview.4`，r5 之前的旧包不再推荐 |
-| 已有 DSH，只要稳定画布能力 | 独立插件 ZIP（1.5.9），退出 DSH 后运行安装脚本 |
-| 偏好包管理 | `dsh plugin add` 安装 Release 中的 `.tgz`（注意：npm registry 尚未发布，见下文 npm 章节） |
+## 系统要求
 
+- DeepSeek Harness(DSH),内核 0.1.0-rc.7 及以上,0.1.7-rc 系 / 官方桌面版最佳(1.9.0 已适配新版桌面的会话 v4 格式与附件 API)。
+- 去背景 / OCR / 转矢量 / PSD 导出 / Windows 真实预览(PyMuPDF/psd-tools)依赖本机 Python 3.11;缺 Python 时画布仍可用,仅对应本地图片处理停用。
+- Adobe 桥接需已安装 Photoshop / Illustrator(macOS 与 Windows 均支持,真机验收见 [WINDOWS-TEST-CHECKLIST](WINDOWS-TEST-CHECKLIST.md))。
 
-面向设计人员的 DSH Desktop 画布工作台，把图片生成、项目文件、无限画布、图片处理和 Photoshop/Illustrator 协作集中在一个工作区。你不需要先了解 Agent：按下面的下载说明安装后，就可以像使用普通设计工具一样开始工作。
+## 数据与隐私
 
-> **最新功能版：`v1.8.0`**（Photoshop/Illustrator ⇄ 画布桥接、架构重构、整理与颜色标记）——从 main 分支源码安装，见上方「快速安装」。
-> **整机重装验证基线：[`v1.5.9` macOS](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9)**；Windows 使用已完成实机验证的 `v1.4.0-windows-preview.4`（custom 20260906）。r5 之前的 Windows 旧包不再推荐。
+所有文件都在你的本地项目目录与 `~/.dsh` 下:画布即项目文件,生成图即归档原图,素材库即本机素材目录。不云同步、不上传、不进 Git。发布包不含开发者账号、OAuth Token、API Key;API 凭据只从使用者自己的本机读取。
 
-## 画布插件能做什么
+---
 
-### 1. 无限画布与项目管理
-- 拖入、粘贴、缩放、平移、多选、对齐、复制、删除和 PNG 导出。
-- 项目独立保存，切换项目后可以继续编辑；打开项目文件夹后，图片资产会实时刷新。
-- “更多”菜单提供打开项目文件夹、图像引擎设置和操作日志，方便日常使用与排查。
-- 画布删除只影响画布内容；聊天生成的原图按 `DSH聊天生成图片/<会话标题>/<日期>/<时段>` 分层归档（未绑定画布项目时归档到聊天工作目录同名文件夹），不会因为删除画布元素而丢失，文件夹名跟随会话标题自动改名。
+## 文档与支持
 
-### 2. 图片生成与聊天协作
-- 在设计模式开启时，图片生成统一读取画布的图像引擎设置：选择 Codex 就走 Codex，选择 API 就走配置的 API 路由。
-- 设计模式关闭时，聊天继续使用 DSH 自己的图片生成通道。
-- 聊天生成图片会显示“加入画布”和“在文件夹中显示”，加入画布后仍保留独立原图。
-- API 请求包含超时、空响应和 HTML 响应检测，并在操作日志中记录失败步骤。
+- [Windows 完整安装说明](windows-installer/INSTALL-WINDOWS.md) · [Windows 独立插件](docs/DSH-CANVAS-WORKBENCH-WINDOWS.md) · [macOS 独立插件](docs/DSH-CANVAS-WORKBENCH-MACOS.md)
+- [发布、校验和版本策略](docs/RELEASE-DISTRIBUTION.md) · [npm 分发](docs/NPM-DISTRIBUTION.md) · [Windows 验收清单](WINDOWS-TEST-CHECKLIST.md) · [Windows 推荐分支说明](WINDOWS-RECOMMENDED.md)
+- [Adobe 桥接协议](canvas-workbench/adobe-bridge/PROTOCOL.md) · [变更记录](CHANGELOG.md)
 
-### 3. 图片编辑、智能擦除和去除背景
-- 编辑图片：输入自然语言要求，可选框选区域；未框选时按整图编辑。
-- 智能擦除：只处理选区内容，尽量保持主体、比例、尺寸和其他区域不变。
-- 去除背景：按原图比例和尺寸输出，支持透明背景；选区会自动扩展并羽化，减少明显矩形边界。
-- 连续编辑以原图母版合成，避免多次蒙版叠加造成重影、错位或画质下降。
-- 生成结果会落盘到项目目录，并保留原图，不覆盖用户已有文件。
+**常见问题速查**
 
-### 4. 文字识别与 PSD 分层
-- 框选后会把“整张原图 + 蓝色选区框”交给当前视觉模型理解，而不是只裁剪小图。
-- 模型返回结构化 JSON：文字内容、位置、颜色、字号、字体建议、对齐方式和置信度。
-- 同时生成“只移除选中文字、其余区域保持一致”的背景修复提示词。
-- PSD 输出包含背景修复图和可编辑文字层；文字层的位置、字号和颜色按原图坐标换算。
-- 识别结果默认全部勾选，可逐项取消或修改后再生成。
+| 症状 | 处理 |
+|---|---|
+| 安装后仍是旧版本 | 完全退出 DSH(含托盘)重跑安装脚本,再 `-CheckOnly` 检查 |
+| API 连不上/超时 | 「图像引擎设置」核对路由、地址、超时;操作日志里有精确失败阶段 |
+| PDF/AI 无预览 | 文件仍可上画布;装 Poppler 或用 Illustrator 打开(macOS);Windows 已内置 PyMuPDF 预览 |
+| 生成图比例偶尔不符 | 1.9.0 已做网关映射+裁切双保险;若仍遇到请附操作日志反馈 |
 
-### 5. 文件预览与外部编辑
-- 支持 PNG、JPG/JPEG、WebP、SVG、PSD、PDF、AI 等常见资产。
-- PDF/AI 优先尝试本机转换器生成预览；转换器不可用时仍保留文件卡片，并提示可用 Illustrator/系统应用打开。
-- Photoshop 和 Illustrator 可按本机安装位置检测；也可在设置中手动指定可执行文件。
-- 画布缩放支持 Alt + 滚轮，更接近 Photoshop 的操作习惯；编辑图片时使用原始分辨率，放大不会主动压缩预览源。
-
-### 6. 整理与颜色标记（1.7.0 新增）
-- 素材库：按修改时间/文件类型/图片尺寸/文件大小/名称排序；卡片显示宽高、大小、时间。
-- 颜色标记（Mac 式七色，免费可商用工作流友好）：素材库和画布图片均可标记、批量标记、按色筛选；画布标记随项目保存、可撤销。
-- 整理图片：多维排序 + 按颜色/未标记范围筛选；文件类型分块布局；图片尺寸按真实像素排序。
-
-### 7. 免费商用字体（1.7.0 新增）
-- 文字识别/重建默认使用可免费商用的字体家族：阿里巴巴普惠体 3.0（8 档）、思源黑体 SC（7 档）、Inter / Montserrat / Poppins / Source Sans Pro。
-- 不再默认使用苹方等不可商用字体；导出 PSD 的文字层与光栅化预览按所选字体渲染（需本机安装对应字体）。
-
-### 8. 主题与外观（1.7.0 新增）
-- 画布与素材库 UI 对齐 DSH 设计风格，跟随 DSH 深浅主题自动切换。
-- 画布背景可选「跟随系统外观」（从系统读取真实深浅色，不受 DSH 主题影响）。
-
-### 9. 操作日志
-“更多 → 操作日志”会记录最近的项目加载、文件刷新、图片落盘、模型请求、响应解析、预览转换、PSD 生成和失败原因。反馈问题时可以复制日志中的步骤和错误，不需要上传账号或 API Key。
-
-### 10. Photoshop / Illustrator 桥接（1.8 分支，尚未发布）
-PS / AI 里的图层送到画布编辑，编辑完一键回到原位——**日常操作全部在画布里点，不用进 PS/AI 点任何面板**：
-- **取图层**：在 PS 里选中图层（或 AI 里选中对象）→ 画布顶栏点「取 Ps 图层」/「取 Ai 对象」→ 约 3 秒后透明 PNG 出现在画布上（PS 逐层、裁到图层边界并记住坐标；AI 150 dpi）。文件落在项目 `ADOBE桥接/来自Photoshop|Illustrator/`。
-- **返回**：画布选中图片 → 工具栏「→Ps」/「→Ai」→ 直接以智能对象/置入对象放进正在运行的 PS/AI，来自 Adobe 的图**回到出发位置**（缩放+平移，像素级）；图片按图片、分层 PSD/.ai 按分层原样返回。PS/AI 没开时先留在 `ADOBE桥接/发件箱/`，之后打开它再置入。
-- **安装**：远程驱动与常驻面板都不需要手动安装——DSH 启动时自动准备脚本副本和 CEP 扩展（用户目录，免密码）。只有旧版本用的菜单脚本需要一次管理员授权（应用目录属于 root）。
-- **Adobe 里的常驻面板**：DSH 启动时自动把一个 CEP 扩展装进用户目录（不需要密码）。适用 **Illustrator 各版本**（「窗口 → 扩展功能 → DSH 画布桥接」）与 **Photoshop ≤2024**（「窗口 → 扩展（旧版）」）：可停靠、不挡应用、自动检测返回件。**Photoshop 2025 起 Adobe 已移除旧扩展系统**，PS 2025+ 请用上面的画布按钮或菜单里的一键脚本（选中图层 →「文件 → 脚本 → DSH桥接-发送选中图层」，可录成 F 键）。
-- **更旧的版本（无 CEP，如 CS6）**：「文件 → 脚本 → DSH画布桥接-…」模态面板（点完自动关闭），或无界面一键脚本「DSH桥接-发送选中图层 / 置入返回件」（可在动作面板录成 F 键）。这些需要装进应用目录——检测到未安装时画布「更多」菜单会自动出现「🔐 安装 PS / AI 菜单面板」，点它输入一次 Mac 密码即可（装好按钮自动消失）。
-- 真机验收：PS 2025 与 AI 2026 往返均像素级归位，取图层≈2 秒、返回并置入≈2 秒。全程只靠文件夹传输和一个握手文件，没有端口、网络权限或签名要求，CS6 到 2026 通用。协议与排障速查见 [`canvas-workbench/adobe-bridge/PROTOCOL.md`](canvas-workbench/adobe-bridge/PROTOCOL.md)。
-
-## 应该下载哪个？
-
-### A. 完整安装包：给没有 DSH Desktop 的电脑
-
-macOS 从 [`v1.5.9` Release](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9) 下载 `DSH-Canvas-Suite-1.5.9-macOS-Complete.dmg` 或 `.pkg` 及对应 SHA-256。该版本已完成应用彻底卸载、图形安装器重装、用户数据恢复和 DSH 真实 UI 验收。
-
-Windows 使用已验证的 `v1.4.0-windows-preview.4`（custom 20260906）：完整包 `DSH-Setup-Fixed-v1.4.1-20260906.zip`，SHA-256 `a6d5e1a984af4bacfb64ef8aa5628fb97a569b6bb6cf08334130027725c5a683`；独立画布包 `DSH-Canvas-Workbench-1.4.0-windows-custom-20260906.zip`，SHA-256 `332fac1c8359ea470958dc0e26d7fea6b7b0b8cbe6ce663769a693068f0b8a9b`。r5 之前的 Windows 包应删除或标记为不推荐。
-
-### B. 独立画布插件：给已经有 DSH Desktop 的电脑
-这是更新画布能力的轻量包，不带完整 DSH Desktop，不能脱离 DSH 单独启动。**注意：Release 中的 ZIP/tgz 目前是 1.5.9；要安装 1.8.0 请使用顶部「快速安装」的源码方式**（1.8.0 的二进制包将在整机验收后发布）。
-
-macOS 直接下载 [`dsh-canvas-workbench-1.5.9.tgz`](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/download/v1.5.9/dsh-canvas-workbench-1.5.9.tgz)；全新电脑则优先使用同一 Release 的 `macOS-Complete` DMG/PKG。
-
-1. 下载 `DSH-Canvas-Workbench-*.zip` 和同名 `.sha256`。
-2. 完全退出 DSH Desktop（包括系统托盘）。
-3. 解压后 Windows 双击 `install-windows.cmd`；macOS 在仓库目录运行 `bash install-canvas-plugin.sh`。
-4. 重新打开 DSH Desktop，若插件未更新，再运行 `install-windows.cmd -CheckOnly` 检查。
-
-安装脚本只更新 `@local/canvas-workbench` 的运行副本，并把旧副本备份到 `.dsh/canvas-suite/plugin-backups`；不会删除登录、API 凭据、项目文件或画布快照。
-
-## 更新策略：以后不必每次重打 EXE
-
-- 画布功能、预览、擦除、文字重建等迭代：只发布新的独立插件 ZIP，体积小、更新快。
-- DSH Desktop、内置运行时或安装器发生变化：才重新构建完整 EXE。
-- Windows 和 macOS 可分别发布，互不覆盖；已有 DSH 的用户直接安装对应系统插件。
-- GitHub 仅保留通过完整验收的当前 Release；回滚证据保留在本地验证备份中。
-
-## npm 轻量插件
-
-画布插件可生成标准 npm 包，并通过 `dsh.bundle.patch` 自动注入 DSH。
-
-> 状态说明：**npm registry 上的 `dsh-canvas-workbench` 尚未发布**（查询返回 404）；目前只能安装 Release 中的 `.tgz`（1.5.9）或走源码安装（1.8.0）。registry 发布需有权限账号完成离线安装验证后进行。
-
-官方 DSH（dsh-desktop）直接用官方命令安装 tgz：
-
-```bash
-dsh plugin --profile web add https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/download/v1.5.9/dsh-canvas-workbench-1.5.9.tgz
-```
-
-图像生成引擎需要配套的 dsh-codex 插件（没有会显示"Codex 未连接"）：
-
-```bash
-dsh plugin --profile web add dsh-codex
-```
-
-npm 包只适合已经安装 DSH 的电脑。它不捆绑 DSH Desktop、Python 运行时、模型文件、账号或 API Key；完整新电脑部署仍应使用 DMG/PKG/EXE。构建、离线 `.tgz` 安装及发布步骤见 [npm 独立插件分发](docs/NPM-DISTRIBUTION.md)。
-
-## 安装环境和详细说明
-
-- [Windows 完整安装说明](windows-installer/INSTALL-WINDOWS.md)
-- [Windows 独立插件说明](docs/DSH-CANVAS-WORKBENCH-WINDOWS.md)
-- [macOS 独立插件说明](docs/DSH-CANVAS-WORKBENCH-MACOS.md)
-- [发布、校验和版本策略](docs/RELEASE-DISTRIBUTION.md)
-- [npm 独立插件分发](docs/NPM-DISTRIBUTION.md)
-- [Windows 验收清单](WINDOWS-TEST-CHECKLIST.md)
-
-## 常见问题
-
-**启动时黑窗口/蓝窗口一闪而过**
-先确认 DSH Desktop 已完全退出，再重新运行安装器；如果是已有 DSH 的电脑，优先使用独立插件安装脚本。安装日志和环境检查入口见 Windows 安装说明。
-
-**没有 VPN/API 显示连接不上**
-画布核心和项目文件可以本地打开；图片生成、视觉识别等 API 能力需要对应服务可访问。请在“更多 → 图像引擎设置”检查路由、地址、超时和代理配置。
-
-**插件安装后仍显示旧版本**
-退出 DSH（包括托盘）后重新运行安装脚本，再用 `-CheckOnly` 检查四层运行副本。
-
-**PDF/AI 没有预览**
-文件仍可加入画布；安装本机 Poppler 或使用 Illustrator 打开可获得更完整预览。
-
-## 安全与隐私
-
-发布包不包含开发者账号、OAuth Token、API Key、个人项目、聊天记录或画布快照。构建时会移除日志、source map、Python 字节码和开发者路径；API 凭据只从使用者自己的本机读取。
-
-## 已验证项目
-
-- Windows 完整安装包 payload ZIP：27,983 项，完整读取校验通过。
-- Windows 隔离安装模拟：应用、manifest、receipt 和四层插件副本创建成功，重复检查通过。
-- 独立插件安装模拟：Windows 四层运行副本和 Cordis 配置注入通过；Node.js 语法检查通过。
+**报告问题**请附:操作步骤、系统版本、插件版本、操作日志失败步骤、Codex 或 API 路由。请勿粘贴 API Key、OAuth Token 或个人项目文件。
 
 ## 目录结构
 
 ```text
-canvas-workbench/       画布插件源码
-install-canvas-plugin.sh  macOS 独立插件同步入口
-windows-installer/      Windows 完整安装器和环境检查
-docs/                   Windows/macOS 安装与发布说明
-dist/                   本地构建产物（不提交个人配置）
+canvas-workbench/          画布插件源码(客户端分段源码 + 宿主服务 + Provider)
+canvas-workbench/scripts/  构建/检查/打包脚本 + Python 图片工具链
+install-canvas-plugin.sh   macOS 独立插件同步入口
+install-windows.ps1/.cmd   Windows 源码安装器 + 健康检查
+windows-installer/         Windows 完整安装器
+docs/                      安装与发布说明
 ```
 
-## 开发与反馈
+## 开发
 
-源码位于 `canvas-workbench/`。报告问题时请附：操作步骤、系统版本、插件版本、操作日志中的失败步骤，以及是否使用 Codex 或 API 路由。请不要粘贴 API Key、OAuth Token 或个人项目文件。
+```bash
+cd canvas-workbench
+npm install
+npm run build    # 分段源码拼接 lib/client.js
+npm run check    # 语法/构建漂移/vendor 补丁/Windows 兼容守卫
+npm test         # node --test 单元测试
+npm run package:npm  # 生成 dist-npm/canvas-workbench 发布变体
+```
 
+## License
+
+MIT
 
 ---
 
 # DSH Canvas Workbench (English)
 
-DSH Canvas Workbench is a design-focused canvas plugin for DSH Desktop. It brings image generation, project files, an infinite canvas, image editing, and Photoshop/Illustrator handoff into one workspace. You can use it without learning Agent concepts first.
-
-从 GitHub Releases 下载带有 `macOS-Complete` 的 DMG，交给 Agent 按 [Mac 安装说明](mac-installer/交给Agent的安装说明.md) 安装。完整安装包包含：
-
-- 画布插件与画布项目持久化；
-- 与 `assets/` 同级的聊天生成图片归档和明确“加入画布”流程；
-- PSD/PDF/SVG/AI 预览、图片编辑、去背景与转矢量所需的双架构本地运行时；
-- 可选的 dsh-codex 兼容构建和 Dockyard 安装入口。
-
-源码构建：
-
-```bash
-./mac-installer/build-macos-installer.sh
-```
-
-构建脚本会自动准备并校验运行时缓存。缓存约 1GB，故不进入 Git；DMG、PKG 和 SHA-256 文件作为 GitHub Release 资产发布。DSH Desktop.app 保持官方原始签名，不写入应用包内部。
-
-## 安全
-> Current and only published release: [`v1.5.9`, fully reinstall-tested on macOS](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9). Windows sources and test checklists remain in the repository, but no Windows binary is currently published as verified.
-
-## What the canvas plugin does
-
-### Infinite canvas and project management
-- Drag and drop or paste assets, zoom, pan, multi-select, align, duplicate, delete, manage layers, and export PNG.
-- Projects are saved independently. Open the project folder from More and file assets refresh as the folder changes.
-- The More menu provides project-folder access, image-engine settings, and an operation log for troubleshooting.
-- Deleting an item from the canvas does not delete the chat original. Chat-generated originals stay under `TUPIAN/<project-name>/DSH聊天生成图片`.
-
-### Image generation and chat routing
-- With Design Mode enabled, image generation follows the canvas image-engine setting: Codex uses the Codex route; API uses the configured API route.
-- With Design Mode disabled, chat uses DSH’s normal image-generation channel.
-- Chat-generated images expose Add to canvas and Show in folder while keeping an independent original file.
-- API calls detect timeouts, empty responses, and HTML responses and write the failed step to the operation log.
-
-### Image editing, erase, and background removal
-- Edit Image accepts a natural-language request and an optional selection. Without a selection, the whole image is edited.
-- Smart Erase processes the selected region while preserving the subject, dimensions, proportions, and unselected areas as much as possible.
-- Background removal preserves the source dimensions and aspect ratio, supports transparency, expands and feathers selections to reduce rectangular seams.
-- Repeated edits use the original master as the composition source to reduce ghosting, misalignment, and quality loss from stacked masks.
-- Generated results are saved into the project while the original file remains untouched.
-
-### Text recognition and layered PSD output
-- The model receives the full source image together with the blue selection outline, rather than only a small crop.
-- The vision model returns structured JSON with text, position, color, font-size estimate, font suggestion, alignment, and confidence.
-- It also returns a repair prompt that removes only the selected text and keeps every other area consistent.
-- PSD output contains the repaired background and editable text layers with coordinates converted from the source image.
-- Recognized text items are selected by default and can be edited or unchecked before generation.
-
-### Preview and external editing
-- Supports common PNG, JPG/JPEG, WebP, SVG, PSD, PDF, and AI assets.
-- PDF/AI preview first tries a local converter. If unavailable, the file card remains usable and can be opened in Illustrator or the system viewer.
-- Photoshop and Illustrator can be detected from common installation locations or selected manually in settings.
-- Alt + mouse wheel zoom follows a Photoshop-like workflow. Image editing keeps the original-resolution source instead of shrinking it for the editor.
-
-### Operation log
-More → Operation Log records project loading, file refresh, disk writes, model requests, response parsing, preview conversion, PSD generation, and failure reasons. Logs are safe to share after removing any user-specific paths; never include API keys.
-
-## Choose the right download
-
-### Full installer — for a new macOS computer
-
-Download the DMG or PKG and matching checksum from the [`v1.5.9` Release](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9). This build passed a real removal of the existing application, visible Installer.app installation, user-data restoration, bundled-runtime checks, and DSH desktop UI acceptance. The old Windows previews were removed until equivalent Windows hardware validation is completed.
-
-### Standalone canvas plugin — for computers that already have DSH Desktop
-This is the lightweight canvas update package. It does not include DSH Desktop and cannot run by itself.
-
-1. Download `DSH-Canvas-Workbench-*.zip` and its matching `.sha256` file.
-2. Fully quit DSH Desktop, including the system tray process.
-3. Extract the ZIP. On Windows run `install-windows.cmd`; on macOS run `bash install-canvas-plugin.sh`.
-4. Restart DSH Desktop. If needed, run `install-windows.cmd -CheckOnly` to verify the installation.
-
-The installer updates only the `@local/canvas-workbench` runtime copies and backs up the previous copy under `.dsh/canvas-suite/plugin-backups`. It does not remove sign-in data, API credentials, project files, or canvas snapshots.
-
-## Environment and compatibility
-
-**Windows full installer**
-- Windows 10/11 x64.
-- No preinstalled Node.js, Python, Git, or admin account required.
-- Network access is needed only for online sign-in and remote image/vision APIs; the canvas and project files remain local.
-
-**Windows standalone plugin**
-- Existing DSH Desktop installation that has been started at least once.
-- DSH must be closed during installation.
-- Optional local capabilities (OCR, background removal, vector conversion, PDF/AI preview, Adobe automation) are enabled according to the tools available on the computer.
-
-**macOS standalone plugin**
-- macOS with DSH Desktop already installed and started once.
-- `~/.dsh/profiles` must exist; quit DSH before running the installer.
-- The canvas core does not require Python or Node.js. Optional conversion and Adobe capabilities depend on local tools.
-
-## Updating without rebuilding the EXE
-
-- Canvas feature iterations: publish a new standalone plugin ZIP only. This is the fast update path.
-- DSH Desktop, bundled runtime, or installer changes: rebuild and publish a new full EXE.
-- Windows and macOS can be released independently. Only fully accepted releases remain downloadable from GitHub.
-
-## API, proxy, and image-engine notes
-
-The canvas itself opens locally. Image generation and vision recognition require the selected service to be reachable. Check the route, endpoint, timeout, and proxy under More → Image Engine Settings. If a response is slow or empty, the operation log records the exact stage.
-
-## Troubleshooting
-
-**The installer flashes a black or blue window and exits**
-On a computer without DSH, retry the full installer. On a computer with DSH, quit DSH including the tray and use the standalone plugin installer. Use the Windows environment check and installation log when the problem persists.
-
-**The plugin still looks old after installation**
-Quit DSH completely, run the installer again, then run the check-only option and restart DSH.
-
-**PDF or AI preview is unavailable**
-The file can still be placed on the canvas. Install a local PDF converter or open the file with Illustrator for the richest preview.
-
-## Release documentation
-
-- [Windows full-install guide](windows-installer/INSTALL-WINDOWS.md)
-- [Windows standalone-plugin guide](docs/DSH-CANVAS-WORKBENCH-WINDOWS.md)
-- [macOS standalone-plugin guide](docs/DSH-CANVAS-WORKBENCH-MACOS.md)
-- [Release, checksums, and version policy](docs/RELEASE-DISTRIBUTION.md)
-
-## Privacy and security
-
-Release packages do not contain developer accounts, OAuth tokens, API keys, personal projects, chat history, or canvas snapshots. Build outputs remove logs, source maps, Python bytecode, and developer paths. API credentials are read only from the user’s own computer.
-
-## Validation
-
-- Windows installer payload ZIP: 27,983 entries, fully read and verified.
-- Isolated Windows installation simulation: application, manifest, receipt, and four plugin runtime layers created successfully; repeat check passed.
-- Standalone plugin simulation: Windows runtime layers and Cordis configuration injection passed; Node.js syntax checks passed.
-
-## Repository layout
-
-```text
-canvas-workbench/       Canvas plugin source
-install-canvas-plugin.sh  macOS standalone plugin sync entry
-windows-installer/      Windows full installer and health checks
-docs/                   Windows/macOS installation and release notes
-dist/                   Local build outputs (no personal configuration)
-```
-
-## Feedback
-
-When reporting a problem, include the steps, OS version, plugin version, selected Codex/API route, and the relevant operation-log step. Do not paste API keys, OAuth tokens, or personal project files.
-
-
-`1.5.9` 是当前跨平台画布源码版本；Windows 仍是初级分发版，使用前请按验收清单验证本机 DSH、Python/Adobe 等可选能力。
-
-## 更新与回滚
-
-- 普通用户：下载最新 Release 的对应平台安装包，重新安装即可；安装器会先备份插件副本和 Profile patch。
-- 开发/本机同步：在仓库根目录执行 `./sync-local-plugins.sh`，再执行 `./sync-local-plugins.sh --check`。
-- 卸载：macOS 使用 `/Library/Application Support/DSH Canvas Suite/uninstall.sh`；Windows 使用 `windows-installer/uninstall.ps1`。
-- 仓库不提交 API Key、OAuth、聊天记录、画布项目、模型缓存或 DSH 私人配置。
-
-## npm 独立插件
-
-已安装 DSH Desktop 的电脑可使用 Release 中经验证的 `dsh-canvas-workbench-1.5.9.tgz`。该轻量包仅包含画布插件，不会冒充完整 DSH 或捆绑未验证的 Windows 运行时。
+A design-focused canvas plugin for DeepSeek Harness (DSH) Desktop. It brings chat-driven image generation (auto-placed onto the canvas with in-place placeholder replacement), aspect-ratio & batch-count controls (13 presets, ×1–×8), an infinite canvas with project persistence, in-canvas image editing / smart erase / background removal / OCR / vectorize / layered PSD export, and a layer-level Photoshop/Illustrator round-trip bridge — all local-first, bring-your-own-API. Latest: [v1.9.0](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.9.0). Install via `dsh plugin add canvas-workbench` (npmmirror fallback for mainland China) or from source (`./sync-local-plugins.sh` on macOS, `install-windows.cmd` on Windows). MIT licensed.
