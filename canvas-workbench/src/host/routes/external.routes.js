@@ -33,9 +33,9 @@ export function register(router, h) {
             let opened = false;
             let lastError = '';
             if (isWindows) {
-              const result = await openWithSystem(ctx, runProcess, path, dirname(path));
-              opened = result.exitCode === 0;
-              lastError = result.stderr.trim();
+              const result = await openWithSystem(ctx, runProcess, path, dirname(path), { app: 'photoshop' });
+              opened = result.ok === true;
+              lastError = result.error || result.stderr.trim();
             } else {
               const opener = await ctx.subprocess.resolveExecutable('open');
               const attempts = [['-b', 'com.adobe.Photoshop', path], ['-a', 'Adobe Photoshop 2026', path], ['-a', 'Adobe Photoshop 2025', path], ['-a', 'Adobe Photoshop', path]];
@@ -122,9 +122,9 @@ export function register(router, h) {
             let opened = false;
             let lastError = '';
             if (isWindows) {
-              const result = await openWithSystem(ctx, runProcess, path, dirname(path));
-              opened = result.exitCode === 0;
-              lastError = result.stderr.trim();
+              const result = await openWithSystem(ctx, runProcess, path, dirname(path), { app: 'illustrator' });
+              opened = result.ok === true;
+              lastError = result.error || result.stderr.trim();
             } else {
               const opener = await ctx.subprocess.resolveExecutable('open');
               const attempts = [['-b', 'com.adobe.Illustrator', path], ['-a', 'Adobe Illustrator 2026', path], ['-a', 'Adobe Illustrator 2025', path], ['-a', 'Adobe Illustrator 2024', path], ['-a', 'Adobe Illustrator', path]];

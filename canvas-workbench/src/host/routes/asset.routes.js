@@ -10,7 +10,7 @@ import { decodeSourceData, safeImageName } from '../../shared/utils/data-url.js'
 import { name } from '../plugin-meta.js';
 
 export function register(router, h) {
-  const { ctx, documentPreviewPath, flattenRecycleBin, previewUrl, projectDirectory, psdPreviewPath, runProcess, writeManagedImage, writeManagedSource } = h;
+  const { ctx, documentPreviewPath, svgInlinePreviewPath, flattenRecycleBin, previewUrl, projectDirectory, psdPreviewPath, runProcess, writeManagedImage, writeManagedSource } = h;
   router.add({ method: 'GET', path: '/dsh-canvas/image', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
           const path = normalizeLocalPath(parseQuery(query).path || '');
           if (!isImagePath(path)) { respond(res, 400, { ...CORS, 'content-type': 'text/plain' }, 'bad image path'); return; }
@@ -48,6 +48,12 @@ export function register(router, h) {
               contentType = rendered.mime;
             } else if (kind === 'pdf' || kind === 'ai') {
               const rendered = await documentPreviewPath(path, info.mtimeMs, kind);
+              target = rendered.path;
+              contentType = rendered.mime;
+            } else if (kind === 'svg') {
+              // Illustrator 导出的 SVG 把位图写成外链，画布/浏览器解析不了相对路径
+              // → 背景整块丢失。先内联成 data URL 再返回（无外链时直接用原文件）。
+              const rendered = await svgInlinePreviewPath(path, info.mtimeMs);
               target = rendered.path;
               contentType = rendered.mime;
             }

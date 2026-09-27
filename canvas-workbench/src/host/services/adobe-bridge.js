@@ -4,7 +4,7 @@
 import { access, appendFile, copyFile, cp, mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { isWindows as OS_IS_WINDOWS, platformName, userHome } from '../../../lib/platform.js';
 import {
   ADOBE_BRIDGE_APPS, ADOBE_BRIDGE_DIR, ADOBE_BRIDGE_INBOX, ADOBE_BRIDGE_OUTBOX, ADOBE_BRIDGE_PROTOCOL,
@@ -301,6 +301,55 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
   const listDirs = async (directory) => {
     try { return (await readdir(directory, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return []; }
   };
+  /**
+   * Windows：从注册表反推 Adobe 应用的安装目录。
+   * 只扫 %ProgramFiles%\Adobe 会漏掉**自定义安装路径**（实测本机 PS 装在
+   * `C:\ps\Adobe Photoshop 2022`），这类机器上「菜单脚本」永远装不上、
+   * UAC 提权流程也走不到。ProgID → CLSID → LocalServer32 指向真实 exe，与装在哪无关：
+   *   PS: <root>\Photoshop.exe /Automation
+   *   AI: <root>\Support Files\Contents\Windows\Illustrator.exe /Automation
+   */
+  const findAdobeAppExesFromRegistry = async () => {
+    if (!isWindows || typeof runProcess !== 'function') return [];
+    const found = [];
+    for (const [app, progId] of [['photoshop', 'Photoshop.Application'], ['illustrator', 'Illustrator.Application']]) {
+      try {
+        const clsidOut = await runProcess('reg', ['query', 'HKLM\\SOFTWARE\\Classes\\' + progId + '\\CLSID', '/ve'], root, 10000);
+        const clsid = (String((clsidOut && clsidOut.stdout) || '').match(/\{[0-9A-Fa-f-]{36}\}/) || [])[0];
+        if (!clsid) continue;
+        const serverOut = await runProcess('reg', ['query', 'HKLM\\SOFTWARE\\Classes\\CLSID\\' + clsid + '\\LocalServer32', '/ve'], root, 10000);
+        const value = (String((serverOut && serverOut.stdout) || '').match(/REG_SZ\s+(.+)/) || [])[1];
+        if (!value) continue;
+        // 去外层引号与尾部开关（/Automation…）；exe 路径自身可能含空格，不能按空格切
+        const exe = value.trim().replace(/^"([^"]+)".*$/, '$1').replace(/\s+[/-]\w+\s*$/, '').replace(/^"|"$/g, '').trim();
+        if (!exe) continue;
+        try { await access(exe); } catch { continue; }
+        found.push({ app, exe });
+      } catch (err) {}
+    }
+    return found;
+  };
+
+  /** 从 exe 向上找含 Presets 的安装根，再推导 Scripts 目录（PS / AI 布局不同，这样都能找）。 */
+  const adobeScriptDirsFromExe = async (app, exe) => {
+    let dir = dirname(exe);
+    for (let depth = 0; depth < 6 && dir; depth += 1) {
+      for (const presetsName of ['Presets.localized', 'Presets']) {
+        const presets = join(dir, presetsName);
+        const locales = await listDirs(presets);
+        if (!locales.length) continue;
+        const dirs = app === 'photoshop'
+          ? [join(presets, 'Scripts')]
+          : locales.map((locale) => join(presets, locale, 'Scripts'));
+        return [{ app, level: 'app', name: basename(dir) + '（注册表定位）', presets, dirs }];
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return [];
+  };
+
   const findAdobeScriptDirs = async () => {
     const found = [];
     const appsRoot = isWindows ? join(process.env.ProgramFiles || 'C:\\Program Files', 'Adobe') : '/Applications';
@@ -316,6 +365,17 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
           if (!locales.length) continue;
           found.push({ app: 'illustrator', level: 'app', name: entry + '（' + locales.length + ' 个语言目录）', presets, dirs: locales.map((locale) => join(presets, locale, 'Scripts')) });
           break;
+        }
+      }
+    }
+    // Windows 追加：注册表反推出来的自定义安装路径（%ProgramFiles%\Adobe 之外的地方）
+    if (isWindows) {
+      const known = new Set(found.map((item) => item.name));
+      for (const candidate of await findAdobeAppExesFromRegistry()) {
+        for (const item of await adobeScriptDirsFromExe(candidate.app, candidate.exe)) {
+          if (known.has(item.name)) continue;
+          known.add(item.name);
+          found.push(item);
         }
       }
     }

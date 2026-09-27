@@ -3,7 +3,7 @@
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { access, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
-import { isMac, isWindows, openWithSystem, resolvePython } from '../../../lib/platform.js';
+import { closeAdobeDocumentsUnder, isMac, isWindows, openWithSystem, resolvePython, runAdobeJsxViaCom } from '../../../lib/platform.js';
 import { generateImage, readImageEngineSettings } from '../../../lib/image-engine.js';
 import { readBody, respond } from '../server/http.js';
 import { decodeImageData, normalizeTextLayerText, safeImageName } from '../../shared/utils/data-url.js';
@@ -274,10 +274,11 @@ export function register(router, h) {
                   r: Number(item.rotation || 0)
                 }));
               if (body.format === 'ai') {
-                if (isMac) {
-                  try {
-                    const jsxPayload = JSON.stringify({ background: cleanInput || tempInput, output: tempAi, width: Number(svgPayload.width || 1), height: Number(svgPayload.height || 1), blocks: jsxBlocks });
-                    const jsx = '#target illustrator\n(function(){\n'
+                // 原生文字层那段 JSX 与平台无关（纯文本）。macOS 走 osascript 执行，
+                // Windows 走 COM DoJavaScriptFile 执行 —— 两处共用这里构造的同一份脚本。
+                const buildAiJsx = () => {
+                  const jsxPayload = JSON.stringify({ background: cleanInput || tempInput, output: tempAi, width: Number(svgPayload.width || 1), height: Number(svgPayload.height || 1), blocks: jsxBlocks });
+                  return '#target illustrator\n(function(){\n'
                       + 'var cfg=' + jsxPayload + ';\n'
                       + 'function hex(c){var m=String(c||"#111827").replace("#",""); if(m.length!==6){m="111827";} var col=new RGBColor(); col.red=parseInt(m.substr(0,2),16); col.green=parseInt(m.substr(2,2),16); col.blue=parseInt(m.substr(4,2),16); return col;}\n'
                       + 'try{\n'
@@ -310,6 +311,10 @@ export function register(router, h) {
                       + '  "dsh-ai-done";\n'
                       + '}catch(err){ throw new Error("illustrator jsx: "+String(err)); }\n'
                       + '})();\n';
+                };
+                const jsx = buildAiJsx();
+                if (isMac) {
+                  try {
                     await writeFile(jsxPath, jsx, 'utf8');
                     const appleScript = 'tell application id "com.adobe.Illustrator"\nactivate\ndo javascript (read POSIX file ' + JSON.stringify(jsxPath) + ' as «class utf8»)\nend tell\n';
                     await writeFile(appleScriptPath, appleScript, 'utf8');
@@ -328,8 +333,31 @@ export function register(router, h) {
                   } catch (err) {
                     aiWarning = String((err && err.message) || err);
                   }
+                } else if (isWindows) {
+                  // Windows 同样能建**原生文字层**：改用 COM DoJavaScriptFile 驱动 Illustrator
+                  //（与 Adobe 桥接的远程驱动同一机制）。旧版这里直接降级成 SVG 草稿，
+                  // 用户在选择 AI 格式时永远拿不到可编辑文字。
+                  try {
+                    await writeFile(jsxPath, '\uFEFF' + jsx, 'utf8');
+                    const scripted = await runAdobeJsxViaCom(ctx, runProcess, {
+                      app: 'illustrator',
+                      jsxPath,
+                      workDir: outputDir,
+                      timeoutMs: 300000
+                    });
+                    try { const info = await stat(tempAi); aiScripted = scripted.ok === true && info.isFile() && info.size > 1024; } catch (err) { aiScripted = false; }
+                    if (aiScripted) { deliverablePath = tempAi; deliverableKind = 'ai'; }
+                    else aiWarning = scripted.error || '未能调用 Illustrator 原生文字层，已退回 SVG 草稿';
+                    // ExtendScript 关不掉自己建的文档，临时 .ai 会一直挂在 AI 里（而临时文件
+                    // 马上就被删了）。用 COM 精确关闭「临时目录下」的文档，不动用户自己的文件。
+                    try {
+                      await closeAdobeDocumentsUnder(ctx, runProcess, { app: 'illustrator', prefix: outputDir, workDir: outputDir, timeoutMs: 60000 });
+                    } catch (err) {}
+                  } catch (err) {
+                    aiWarning = String((err && err.message) || err);
+                  }
                 } else {
-                  aiWarning = 'Windows 已生成可打开的 SVG；原生 Illustrator 文字层自动化暂仅支持 macOS';
+                  aiWarning = '已生成可打开的 SVG；当前平台不支持原生 Illustrator 文字层自动化';
                 }
               }
               const svgBytes = await readFile(deliverablePath);
@@ -343,8 +371,8 @@ export function register(router, h) {
               if (body.openIllustrator !== false) {
                 try {
                   if (isWindows) {
-                    const openedResult = await openWithSystem(ctx, runProcess, savedSvg.path, dirname(savedSvg.path));
-                    openedInIllustrator = openedResult.exitCode === 0;
+                    const openedResult = await openWithSystem(ctx, runProcess, savedSvg.path, dirname(savedSvg.path), { app: 'illustrator' });
+                    openedInIllustrator = openedResult.ok === true;
                   } else {
                     const opener = await ctx.subprocess.resolveExecutable('open');
                     const attempts = [['-b', 'com.adobe.Illustrator', savedSvg.path], ['-a', 'Adobe Illustrator 2026', savedSvg.path], ['-a', 'Adobe Illustrator 2025', savedSvg.path], ['-a', 'Adobe Illustrator 2024', savedSvg.path], ['-a', 'Adobe Illustrator', savedSvg.path]];
@@ -382,7 +410,10 @@ export function register(router, h) {
               + 'var cfg=' + jsxPayload + ';\n'
               + 'function rgb(value){var m=String(value||"#111827").replace("#",""); if(m.length!==6)m="111827"; var c=new SolidColor(); c.rgb.red=parseInt(m.substr(0,2),16); c.rgb.green=parseInt(m.substr(2,2),16); c.rgb.blue=parseInt(m.substr(4,2),16); return c;}\n'
               + 'try{var doc=app.open(new File(cfg.input)); var list=cfg.blocks||[]; for(var i=0;i<list.length;i++){var b=list[i]||{}; if(b.enabled===false||!String(b.text||"").replace(/^[\\s\\r\\n]+|[\\s\\r\\n]+$/g,""))continue; var layer=doc.artLayers.add(); layer.kind=LayerKind.TEXT; layer.name="OCR text "+(i+1)+" (review before enabling)"; var ti=layer.textItem; ti.contents=String(b.text||""); ti.position=[Number(b.x||0),Number(b.y||0)+Math.max(8,Number(b.fontSize||24))]; ti.size=Math.max(8,Number(b.fontSize||24)); try{ti.font=String(b.fontPostScript||b.fontFamily||"AlibabaPuHuiTi_3_55_Regular");}catch(fontErr){try{ti.font="ArialMT";}catch(fontFallbackErr){}} ti.color=rgb(b.color); try{ti.justification=Justification.LEFT;}catch(justErr){} layer.visible=false;} for(var g=0;g<doc.layerSets.length;g++){try{if(String(doc.layerSets[g].name)==="OCR text preview - replace in Photoshop")doc.layerSets[g].visible=false;}catch(groupErr){}} var opts=new PhotoshopSaveOptions(); opts.layers=true; doc.saveAs(new File(cfg.output),opts,true,Extension.LOWERCASE); doc.close(SaveOptions.DONOTSAVECHANGES); }catch(err){try{if(doc)doc.close(SaveOptions.DONOTSAVECHANGES);}catch(closeErr){} throw err;}\n})();\n';
-            await writeFile(jsxPath, jsx, 'utf8');
+            // Windows 的 ExtendScript 靠 BOM 判定 UTF-8（否则按系统 ANSI 解码，脚本里的
+            // 中文 contents 直接变乱码）；macOS 侧由 AppleScript 显式 `as «class utf8»`
+            // 解码，带 BOM 会被当成脚本文本的首字符，所以只在 Windows 加。
+            await writeFile(jsxPath, (isWindows ? '\uFEFF' : '') + jsx, 'utf8');
             // Explicit UTF-8 decoding prevents Chinese `contents` from being
             // interpreted with the host's legacy Mac encoding.
             const appleScript = 'tell application id "com.adobe.Photoshop"\nactivate\ndo javascript (read POSIX file ' + JSON.stringify(jsxPath) + ' as «class utf8»)\nend tell\n';
@@ -396,10 +427,33 @@ export function register(router, h) {
               } catch (err) {
                 photoshopWarning = String((err && err.message) || err);
               }
+            } else if (body.openPhotoshop !== false && isWindows) {
+              // Windows 同样能建**原生文字层**：改用 COM `DoJavaScriptFile` 驱动
+              // Photoshop（与 Adobe 桥接的远程驱动同一机制）。
+              // 旧版这里直接退回 PSD 草稿，导致「编辑文字」产出的 "OCR text N"
+              // 全是栅格化像素层 —— 用户双击进不了文字编辑。
+              try {
+                const scripted = await runAdobeJsxViaCom(ctx, runProcess, {
+                  app: 'photoshop',
+                  jsxPath,
+                  workDir: outputDir,
+                  timeoutMs: 180000
+                });
+                try { await stat(finalPsd); photoshop = scripted.ok === true; } catch (err) {}
+                if (!photoshop) {
+                  photoshopWarning = scripted.error || '未能调用 Photoshop 原生文字层，已使用 PSD 草稿兜底';
+                } else {
+                  // 文字层默认隐藏是上游设计（先把 OCR 结果交用户核对再启用），但用户
+                  // 打开 PS 看不到文字会误以为没生成 —— 用反馈栏把去哪找说清楚。
+                  photoshopWarning = '已创建 ' + enabledBlocks.length + ' 个可编辑文字图层，默认隐藏（图层名含 review before enabling），在 Photoshop 图层面板点开前面的眼睛即可编辑';
+                }
+              } catch (err) {
+                photoshopWarning = String((err && err.message) || err);
+              }
             } else if (body.openPhotoshop === false) {
               photoshopWarning = '已生成 PSD 草稿（未调用 Photoshop），原图与 OCR 文字预览均已保留';
             } else {
-              photoshopWarning = 'Windows 初级版已生成可打开的 PSD；原生 Photoshop 文字层自动化暂仅支持 macOS';
+              photoshopWarning = '已生成可打开的 PSD；当前平台不支持原生 Photoshop 文字层自动化';
             }
             const sourcePsd = photoshop ? finalPsd : draftPsd;
             const bytes = await readFile(sourcePsd);
@@ -408,11 +462,19 @@ export function register(router, h) {
             const base = dot > 0 ? originalName.slice(0, dot) : originalName;
             const saved = await writeManagedSource(projectDir, base + '-文字编辑.psd', bytes, 'psd');
             let opened = false;
+            let openError = '';
             if (body.openPhotoshop !== false) {
               try {
                 if (isWindows) {
-                  const result = await openWithSystem(ctx, runProcess, saved.path, dirname(saved.path));
-                  opened = result.exitCode === 0;
+                  let result = await openWithSystem(ctx, runProcess, saved.path, dirname(saved.path), { app: 'photoshop' });
+                  if (result.ok !== true) {
+                    // 生成文字层的 JSX 刚在同一个 Photoshop 实例里跑完，PS 可能还在收尾
+                    // （写盘 / 重绘 / 模态提示），此刻立刻发 COM 打开会失败 —— 等一会儿重试一次。
+                    await new Promise((resolve) => setTimeout(resolve, 2500));
+                    result = await openWithSystem(ctx, runProcess, saved.path, dirname(saved.path), { app: 'photoshop' });
+                  }
+                  opened = result.ok === true;
+                  if (!opened) openError = '未能自动在 Photoshop 中打开（' + (result.error || '未知原因') + '），文件已生成，可手动打开';
                 } else {
                   const opener = await ctx.subprocess.resolveExecutable('open');
                   const attempts = [['-b', 'com.adobe.Photoshop', saved.path], ['-a', 'Adobe Photoshop 2024', saved.path], ['-a', 'Adobe Photoshop 2025', saved.path], ['-a', 'Adobe Photoshop', saved.path]];
@@ -421,11 +483,13 @@ export function register(router, h) {
                     if (result.exitCode === 0) { opened = true; break; }
                   }
                 }
-              } catch (err) {}
+              } catch (err) {
+                openError = '未能自动在 Photoshop 中打开（' + String((err && err.message) || err) + '），文件已生成，可手动打开';
+              }
             }
             const info = await stat(saved.path);
-            const warnings = [cleanupWarning, photoshopWarning].filter(Boolean).join('；');
-            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, image: { path: saved.path, name: saved.name, mtime: info.mtimeMs, kind: 'psd', managed: true, url: previewUrl(saved.path, info.mtimeMs) }, photoshop, opened, cleanedBackground: Boolean(cleanInput), cleanupEngine: cleanupEngine || 'none', styleEngine: 'local-font-heuristic', warning: warnings, blockCount: enabledBlocks.length, selectionCount: selections.length }));
+            const warnings = [cleanupWarning, photoshopWarning, openError].filter(Boolean).join('；');
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, image: { path: saved.path, name: saved.name, mtime: info.mtimeMs, kind: 'psd', managed: true, url: previewUrl(saved.path, info.mtimeMs) }, photoshop, opened, openError, cleanedBackground: Boolean(cleanInput), cleanupEngine: cleanupEngine || 'none', styleEngine: 'local-font-heuristic', warning: warnings, blockCount: enabledBlocks.length, selectionCount: selections.length }));
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
           } finally {

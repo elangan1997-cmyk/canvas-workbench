@@ -152,6 +152,12 @@ if (-not $CheckOnly) {
   $destinations = Get-Destinations 'canvas-workbench'
   foreach ($slot in $destinations.Keys) {
     $destination = $destinations[$slot]
+    # desktop：仅当该 profile 目录真实存在时才同步 —— 否则会凭空制造一个 DSH 无法识别的
+    # 残缺 profile（只有 node_modules，缺 cordis.patch.yml 等结构文件）。
+    if ($slot -eq 'desktop' -and -not (Test-Path -LiteralPath (Join-Path $ProfilesRoot 'desktop'))) {
+      Say "跳过 desktop 副本（本机没有 desktop profile）"
+      continue
+    }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
     if (Test-Path -LiteralPath $destination) {
       if (Test-TreesEqual $canvasSource $destination) {
@@ -165,20 +171,27 @@ if (-not $CheckOnly) {
   }
 
   # 2) dsh-codex 兼容组件（仓库里存在才处理；与 macOS 脚本同构）
+  # 注意：目标已存在的机器上**不注入 profile**——它的 insert 指向的副本若被跳过安装，
+  # cordis 会在启动时因找不到包而崩（实测 2026-09-19：启动即弹 "failed to start"）。
   $codexSource = Join-Path $ScriptDir 'dsh-codex'
+  $codexInstalled = $false
   if (Test-Path -LiteralPath (Join-Path $codexSource 'package.json')) {
     $codexTargets = [ordered]@{ 'root' = Join-Path $ProfilesRoot 'node_modules\dsh-codex' }
     $active = Get-ActiveProfile
     if ($active) { $codexTargets[$active] = Join-Path $ProfilesRoot "$active\node_modules\dsh-codex" }
     foreach ($slot in $codexTargets.Keys) {
       $codexTarget = $codexTargets[$slot]
-      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $codexTarget) | Out-Null
-      if ((Test-Path -LiteralPath $codexTarget) -and (Test-TreesEqual $codexSource $codexTarget)) {
-        Say "已是最新，跳过复制：$codexTarget"
+      if (Test-Path -LiteralPath $codexTarget) {
+        # 目标已存在就跳过：dsh-codex 的运行时链接（resources\app\runtime\plugins\dsh-codex）
+        # 由 DSH 自己管理，安装器用源码覆盖会破坏链接对应关系 —— 实测（2026-09-19）会导致
+        # DSH 启动即崩：EEXIST symlink 'runtime\plugins\dsh-codex' -> profiles\node_modules\dsh-codex。
+        # 只在目标不存在（全新机器）时安装；如需重装请先手动移除目标目录再重跑本脚本。
+        Say "dsh-codex 已存在，跳过（避免破坏 DSH 运行时链接）：$codexTarget"
         continue
       }
-      if (Test-Path -LiteralPath $codexTarget) { Backup-Destination $codexTarget ('codex-' + $slot) }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $codexTarget) | Out-Null
       Copy-Tree $codexSource $codexTarget
+      $codexInstalled = $true
       Say "已同步 dsh-codex -> $codexTarget"
     }
   }
@@ -187,7 +200,7 @@ if (-not $CheckOnly) {
   foreach ($profile in (Get-ProfileList)) {
     Ensure-PatchEntry (Join-Path $ProfilesRoot "$profile\cordis.patch.yml") 'canvas-workbench' '@local/canvas-workbench'
   }
-  if (Test-Path -LiteralPath $codexSource) {
+  if ((Test-Path -LiteralPath $codexSource) -and $codexInstalled) {
     foreach ($profile in (@('web') + @(Get-ActiveProfile) | Where-Object { $_ } | Select-Object -Unique)) {
       Ensure-PatchEntry (Join-Path $ProfilesRoot "$profile\cordis.patch.yml") 'llm-openai-codex' 'dsh-codex'
     }
@@ -213,6 +226,8 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
 $destinations = Get-Destinations 'canvas-workbench'
 foreach ($slot in $destinations.Keys) {
   $destination = $destinations[$slot]
+    # 与同步逻辑一致：本机没有 desktop profile 时（同步被跳过）检查也跳过
+    if ($slot -eq 'desktop' -and -not (Test-Path -LiteralPath (Join-Path $ProfilesRoot 'desktop'))) { continue }
   if (-not (Test-Path -LiteralPath (Join-Path $destination 'package.json'))) {
     Say "[X] 安装副本缺失：$destination"; $failures++
     continue
@@ -229,7 +244,7 @@ foreach ($profile in (Get-ProfileList)) {
   $patch = Join-Path $ProfilesRoot "$profile\cordis.patch.yml"
   if (Test-Path -LiteralPath $patch) {
     if (-not (Test-PatchEntry $patch '@local/canvas-workbench')) {
-      Say "[X] profile 未注入 canvas-workbench：$patch"; $failures++
+      Say "profile 未注入 canvas-workbench（不影响加载：全局 plugins.cordis.yml 已声明，实测 web 注入有重复注册风险）：$profile"
     } else {
       Say "profile 通过：$profile"
     }

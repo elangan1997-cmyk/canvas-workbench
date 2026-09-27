@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { access, mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isMac, resolvePython } from '../../lib/platform.js';
+import { isMac, isWindows, resolvePython } from '../../lib/platform.js';
 import { PLUGIN_ROOT } from './vendor-assets.js';
 import { createPythonToolRegistry } from './adapters/python.adapter.js';
 import { register as registerContracts } from './routes/contracts.routes.js';
@@ -104,7 +104,25 @@ function apply(ctx) {
     const key = createHash('sha1').update(path + ':' + String(Math.round(mtimeMs || 0))).digest('hex');
     const target = join(previewCache, key + '.jpg');
     try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
-    if (!isMac) return { path: await documentFallbackPreviewPath(path, mtimeMs, 'psd'), mime: 'image/svg+xml' };
+    if (!isMac) {
+      // Windows / Linux：sips 不存在，此前这里直接落占位 SVG。
+      // 改用插件自带 Python 渲染 PSD 合成图（Pillow 直读，psd_tools 缩略图兜底）；
+      // Python 缺失或转换失败时仍然回退占位图，不阻断画布。
+      try {
+        const python = await resolvePython(ctx);
+        const renderer = join(PLUGIN_ROOT, 'scripts', 'psd_preview.py');
+        const rendered = await runProcessWithTimeout(
+          python.executable,
+          [...python.prefixArgs, renderer, '--input', path, '--output', target, '--max', '2400'],
+          dirname(path),
+          60000
+        );
+        if (rendered.exitCode === 0) {
+          try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
+        }
+      } catch (err) {}
+      return { path: await documentFallbackPreviewPath(path, mtimeMs, 'psd'), mime: 'image/svg+xml' };
+    }
     const sips = await ctx.subprocess.resolveExecutable('sips');
     const result = await runProcess(sips, ['-s', 'format', 'jpeg', '-s', 'formatOptions', '88', '-Z', '2400', path, '--out', target], dirname(path));
     if (result.exitCode !== 0) throw new Error(result.stderr.trim() || 'PSD 预览生成失败');
@@ -141,6 +159,25 @@ function apply(ctx) {
         try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
       }
     }
+    // 跨平台兜底：用插件自带 Python 的 PyMuPDF 渲染首页。
+    // Windows 既没有 pdftoppm(Poppler) 也没有 macOS 的 qlmanage，此前 .ai/.pdf
+    // 只能落占位图 —— 画布上永远是"预览转换器不可用"，改了源文件也看不出变化。
+    // AI 文件在 PDF 兼容模式下（Illustrator 默认）文件头就是 %PDF-x.y，可直接解析。
+    // ⚠️ 仅非 macOS：macOS 保持 1.8.0 的原路径（pdftoppm -> qlmanage -> 占位图）不变，
+    // 避免 mac 上多出一条未验证的渲染分支 —— 本仓库的跨平台兼容承诺是"mac 行为零变化"。
+    if (!isMac) try {
+      const python = await resolvePython(ctx);
+      const renderer = join(PLUGIN_ROOT, 'scripts', 'document_preview.py');
+      const rendered = await runProcessWithTimeout(
+        python.executable,
+        [...python.prefixArgs, renderer, '--input', path, '--output', target, '--max', '2400'],
+        dirname(path),
+        60000
+      );
+      if (rendered.exitCode === 0) {
+        try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
+      }
+    } catch (err) {}
     // 旧版 AI 是 PostScript，不一定能被 Poppler 直接读取；尝试 Quick Look，
     // 但严格限时，避免外置盘/损坏文件让项目扫描长期卡住。
     if (kind === 'ai' && isMac) {
@@ -162,6 +199,37 @@ function apply(ctx) {
     }
     const fallback = await documentFallbackPreviewPath(path, mtimeMs, kind);
     return { path: fallback, mime: 'image/svg+xml' };
+  };
+  /**
+   * SVG 预览：先把**外链图片内联**再返回。
+   * Illustrator「导出为 SVG」默认把位图写成外链（`xlink:href="xxx.png"`）——同目录下 AI
+   * 自己能显示，但画布拿到的是一份独立 SVG（HTTP 响应或 data URL），相对路径无从解析，
+   * 表现就是「只看到文字、背景整块丢失」。插件自己生成的 SVG 本来是内嵌的
+   * （scripts/export_text_svg.py），用户一旦在 AI 里重新导出就会退化成外链。
+   * 没有可内联项（或处理失败）时直接用原文件，不做无谓缓存。
+   */
+  const svgInlinePreviewPath = async (path, mtimeMs) => {
+    await mkdir(previewCache, { recursive: true });
+    const key = createHash('sha1').update('svg:' + path + ':' + String(Math.round(mtimeMs || 0))).digest('hex');
+    const target = join(previewCache, key + '.svg');
+    try { await access(target); return { path: target, mime: 'image/svg+xml' }; } catch (err) {}
+    try {
+      const python = await resolvePython(ctx);
+      const renderer = join(PLUGIN_ROOT, 'scripts', 'svg_inline.py');
+      const result = await runProcessWithTimeout(
+        python.executable,
+        [...python.prefixArgs, renderer, '--input', path, '--output', target],
+        dirname(path),
+        60000
+      );
+      const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+      let payload = null;
+      try { payload = lines.length ? JSON.parse(lines[lines.length - 1]) : null; } catch (err) { payload = null; }
+      if (result.exitCode === 0 && payload && payload.success === true && payload.changed === true) {
+        try { await access(target); return { path: target, mime: 'image/svg+xml' }; } catch (err) {}
+      }
+    } catch (err) {}
+    return { path, mime: 'image/svg+xml' };
   };
   const scanProjectImages = async (root) => {
     const found = [];
@@ -308,7 +376,7 @@ function apply(ctx) {
   });
   // 启动时静默确保 Adobe 脚本已安装（幂等：版本一致且文件在位就跳过；不会弹窗、不提权）。
   adobeBridge.ensureInstalled().catch(() => {});
-  const h = { adobeBridge, jobs, pythonTools, chatContexts, ctx, documentPreviewPath, flattenRecycleBin, previewUrl, progressPathFor, projectDirectory, projectStatePath, psdPreviewPath, runProcess, runProcessWithTimeout, scanProjectImagesShared, stateWriteChains, writeManagedImage, writeManagedSource, writeManagedSvg, writeProgressFile };
+  const h = { adobeBridge, jobs, pythonTools, chatContexts, ctx, documentPreviewPath, svgInlinePreviewPath, flattenRecycleBin, previewUrl, progressPathFor, projectDirectory, projectStatePath, psdPreviewPath, runProcess, runProcessWithTimeout, scanProjectImagesShared, stateWriteChains, writeManagedImage, writeManagedSource, writeManagedSvg, writeProgressFile };
   const router = createRouter();
   router.use(jobTrackingMiddleware(jobs));
   register0(router, h);
