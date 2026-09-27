@@ -1,0 +1,5 @@
+# 自注册入口（link: 安装本目录 / 注册表 CI 校验均读取此文件）。
+# @local 开发流（同步脚本复制 + profile 补丁注入）不经过本文件，互不影响。
+- insert:
+    - id: canvas-workbench
+      name: '@local/canvas-workbench'

@@ -1,8 +1,8 @@
 {
   "name": "@local/canvas-workbench",
-  "version": "1.8.0",
+  "version": "1.8.2",
   "private": true,
-  "description": "可插拔设计模式：独立 Excalidraw 画布、渐进增强的会话图片工具与本地项目资产",
+  "description": "设计师工作台:DSH 聊天旁的无限画布——生成图自动归档一键上画布,画布内修图/智能擦除/去背景/OCR/转矢量/导出 PSD,文字重建为可编辑 PSD/AI/SVG,素材库与 Photoshop/Illustrator 双向桥接",
   "scripts": {
     "check": "node ../tests/check-portability.mjs && node scripts/check-syntax.mjs && node scripts/check-generated-jsx.mjs && node scripts/check-adobe-bridge-jsx.mjs && node scripts/check-windows-compat.mjs && node scripts/build-client.mjs --check",
     "test": "node --test \"tests/unit/**/*.test.mjs\" \"tests/migration/**/*.test.mjs\"",
@@ -10,7 +10,8 @@
     "test:integration": "node tests/integration/api-parity.mjs",
     "test:smoke": "node tests/smoke/ui-snapshot.mjs",
     "build": "node scripts/build-client.mjs",
-    "install:adobe-bridge": "node scripts/install-adobe-bridge.mjs"
+    "install:adobe-bridge": "node scripts/install-adobe-bridge.mjs",
+    "package:npm": "node scripts/prepare-npm-package.mjs"
   },
   "type": "module",
   "os": [
@@ -38,12 +39,33 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "dsh": {
     "client": {
       "platform": "web",
       "inject": []
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
-  }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "canvas",
+    "excalidraw",
+    "design",
+    "designer",
+    "image-editing",
+    "psd",
+    "ocr",
+    "background-removal",
+    "vectorize",
+    "photoshop",
+    "illustrator",
+    "adobe"
+  ]
 }

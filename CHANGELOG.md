@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.2
+
+- npm 门面重写(面向设计师):简介与 README 改为设计师工作流视角——画布内修图/擦除/去背景/OCR/转矢量/PSD 导出、文字重建为可编辑 PSD/AI/SVG、素材库、Photoshop/Illustrator 双向桥接、生成图自动归档;补装引擎说明、系统要求与数据隐私说明。补 keywords(designer/psd/ocr/photoshop 等)。
+
+## 1.8.1
+
+- 图像引擎（dsh-codex 路由）诊断加固：模块加载失败时不再只显示笼统的"验证失败"，健康检查会透出**具体缺失的依赖包名**与补救命令（`npm install --prefix ~/.dsh/profiles <包名>`）。背景：dsh-codex 入口静态依赖一组由宿主提供的 peer 包（pi-ai、cordis 等），画布走 Node 原生导入时依赖 `~/.dsh` 层级解析链；新装环境或清理过全局层的机器可能缺包，此前无从得知缺哪个。
+
 ## 1.8.0（2026-09-18）
 
 > 架构重构 + **Adobe 桥接**（Photoshop / Illustrator ⇄ 画布，macOS 真机验收通过）。核心画布行为与 1.7.0 一致（真实 DSH 回归：DOM 结构 0 差异、30 条 API 样例仅 1 处预期修复差异、Codex 端到端生成通过）。Windows：代码层适配 + 自动检查 + 源码安装器已就绪，实机验收清单见 `WINDOWS-TEST-CHECKLIST.md`（经用户确认按此门槛发布）。
