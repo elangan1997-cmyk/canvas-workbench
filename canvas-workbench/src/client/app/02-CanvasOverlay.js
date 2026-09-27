@@ -764,7 +764,6 @@
         });
       };
       const openProjectList = () => {
-        openProjectListRefHolder.current = openProjectList;
         if (!projectInfo.cwd) { setFeedback('⚠ 当前聊天没有工作目录'); return; }
         setMoreMenuOpen(false);
         setProjectDialog({ mode: 'list' });
@@ -773,6 +772,7 @@
           setProjectList({ loading: false, items: Array.isArray(result.projects) ? result.projects : [], error: result.error || '' });
         }).catch((err) => setProjectList({ loading: false, items: [], error: String((err && err.message) || err) }));
       };
+      openProjectListRefHolder.current = openProjectList;
       const browseDir = (path) => {
         setProjectDialog({ mode: 'browse', path, loading: true, entries: [], error: '' });
         fetch('/dsh-canvas/list-directories?path=' + encodeURIComponent(path)).then((r) => r.json()).then((result) => {
