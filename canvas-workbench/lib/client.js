@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
     const PANEL_WIDTH_KEY = 'dsh-canvas-panel-width';
     const MATERIAL_LIBRARY_KEY = 'dsh-canvas-material-library-v1';
     const MATERIAL_SORT_KEY = 'dsh-canvas-material-sort-v1';
+    const AUTO_ADD_KEY = 'dsh-canvas-auto-add-chat-image';
     // ---- 内联自 src/shared/registry/feature-registry.js（构建期去 import/export；请改源文件） ----
     // Feature Registry（执行文档 §4）+ Capability 判定（§5）。共享模块：无 DOM / Node 依赖，Host 与 Client 都可用。
     // Feature 定义：{ id, name, capabilities: string[], commands?, toolbarItems?, panels?, initialize?(ctx), dispose?() }
@@ -1108,6 +1109,25 @@ window.__ModuleLoader__.load({
       window.dispatchEvent(new CustomEvent('dsh-canvas:add-image', {
         detail: { path, url: url || displaySourceUrl(path), explicit: true, token: CANVAS_ADD_TOKEN }
       }));
+    }
+    // ---- 聊天生图自动上画布(1.9)----
+    // 开关默认开启;批量生图或大量抽卡重跑时建议关闭,改回卡片上的手动「加入画布」。
+    // 自动上画布只认宿主 /dsh-canvas/generation-status 登记的本轮产出路径,
+    // 复用与手动按钮完全相同的令牌通道,不新增任何旁路。
+    const autoAddDispatched = new Set();
+    function canvasAutoAddEnabled() {
+      try { return window.localStorage.getItem(AUTO_ADD_KEY) !== 'off'; } catch (err) { return true; }
+    }
+    function setCanvasAutoAddEnabled(value) {
+      try { window.localStorage.setItem(AUTO_ADD_KEY, value ? 'on' : 'off'); } catch (err) {}
+    }
+    function dispatchGeneratedToCanvas(path) {
+      if (!path || autoAddDispatched.has(path)) return false;
+      autoAddDispatched.add(path);
+      // 宿主登记的产出路径本身就是绝对归档路径,与手动按钮点击时
+      // dispatchResolvedImage 拿到的 actionPath 同构,直接派发即可。
+      dispatchResolvedImage(path);
+      return true;
     }
     function revealImageInFinder(path) {
       if (attachmentFromPath(path)) {
@@ -2739,6 +2759,30 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           detail: { cwd: activeChatCwd, sessionId: activeChatSessionId, project: activeCanvasProjectPath }
         }));
       }, [projectInfo.project]);
+      // 聊天生图状态轮询:宿主是生成起止与产出路径的唯一权威来源。
+      // active>0 → 画布显示「生成中」占位徽标;新完成的产出路径且
+      // 自动上画布开启 → 走与手动按钮相同的令牌通道派发进画布。
+      React.useEffect(() => {
+        if (!on) { setChatGenerating(0); return; }
+        let stopped = false;
+        const tick = async () => {
+          try {
+            const res = await fetch('/dsh-canvas/generation-status', { headers: { accept: 'application/json' } });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (stopped) return;
+            setChatGenerating(Number(data.active) || 0);
+            if (Array.isArray(data.completed) && canvasAutoAddEnabled()) {
+              for (const item of data.completed) {
+                if (item && item.path) dispatchGeneratedToCanvas(String(item.path));
+              }
+            }
+          } catch (err) {}
+        };
+        tick();
+        const timer = window.setInterval(tick, 2000);
+        return () => { stopped = true; window.clearInterval(timer); };
+      }, [on]);
       const [projectDialog, setProjectDialog] = React.useState(null);
       const [projectList, setProjectList] = React.useState({ loading: false, items: [], error: '' });
       const [moreMenuOpen, setMoreMenuOpen] = React.useState(false);
@@ -2747,6 +2791,8 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       const [adobeInstall, setAdobeInstall] = React.useState({ scriptsInstalled: true, cepInstalled: true });
       const [imageSettings, setImageSettings] = React.useState(null);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
+      const [chatGenerating, setChatGenerating] = React.useState(0);
+      const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
@@ -4543,6 +4589,10 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           onPointerDown: startResize,
           title: '拖动调整宽度'
         }),
+        chatGenerating > 0 && autoAddOn ? React.createElement('div', { className: 'dsh-canvas-gen-badge' },
+          React.createElement('span', { className: 'dsh-canvas-gen-badge-dot' }),
+          React.createElement('span', null, '聊天生图中 ×' + chatGenerating + (chatGenerating > 1 ? ',完成自动上画布' : '…完成后自动上画布'))
+        ) : null,
         React.createElement('div', { className: 'dsh-canvas-toolbar' },
           React.createElement('span', { className: 'dsh-canvas-title' }, '无限画布'),
           React.createElement('button', { className: 'dsh-canvas-project', title: '打开项目管理', onClick: openProjectList },
@@ -4642,6 +4692,22 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                   React.createElement('span', null,
                     React.createElement('strong', null, 'API ', React.createElement('em', { className: 'dsh-canvas-engine-badge ' + (imageSettings.health && imageSettings.health.api && imageSettings.health.api.ready ? 'is-ready' : '') }, imageSettings.health && imageSettings.health.api && imageSettings.health.api.ready ? '已配置' : '待配置')),
                     React.createElement('small', null, '连接 OpenAI 兼容图片接口，适合企业网关或独立 image2 服务。')
+                  )
+                )
+              ),
+              React.createElement('div', { className: 'dsh-canvas-engine-autoadd' },
+                React.createElement('label', { className: 'dsh-canvas-engine-autoadd-row' },
+                  React.createElement('input', {
+                    type: 'checkbox',
+                    checked: autoAddOn,
+                    onChange: (e) => {
+                      const next = Boolean(e.target.checked);
+                      setCanvasAutoAddEnabled(next);
+                      setAutoAddOnState(next);
+                    }
+                  }),
+                  React.createElement('span', null, '聊天生图完成后自动上画布',
+                    React.createElement('small', null, '默认开启:生成中在画布显示占位提示,完成后自动加入,无需逐张点「加入画布」。批量生图或大量抽卡重跑时建议关闭,改回卡片手动加入,避免画布被占满。')
                   )
                 )
               ),
@@ -5072,8 +5138,16 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'@media (prefers-color-scheme:light){.dsh-text-rebuild-overlay{background:rgba(241,245,249,.58)}.dsh-text-rebuild-panel{background:#fff;color:#111827;border-color:rgba(15,23,42,.14);box-shadow:0 22px 60px rgba(15,23,42,.2)}.dsh-text-rebuild-head,.dsh-text-rebuild-foot{border-color:rgba(15,23,42,.1)}.dsh-text-rebuild-subtitle,.dsh-text-rebuild-note,.dsh-text-rebuild-empty,.dsh-text-rebuild-row-top,.dsh-text-rebuild-row-controls label{color:#64748b}.dsh-text-rebuild-close{background:#f8fafc;border-color:#e5e7eb;color:#334155}.dsh-text-rebuild-preview{background:#f1f5f9;border-color:#e2e8f0}.dsh-text-rebuild-row{background:#f8fafc;border-color:#e2e8f0}.dsh-text-rebuild-row textarea,.dsh-text-rebuild-row-controls input[type=number],.dsh-text-rebuild-row-controls input[type=color],.dsh-text-rebuild-row-controls select{background:#fff;border-color:#cbd5e1;color:#111827}.dsh-text-rebuild-row-controls button,.dsh-text-rebuild-add{background:#f1f5f9;border-color:#cbd5e1;color:#334155}.dsh-text-rebuild-cancel{background:#fff;border-color:#cbd5e1;color:#334155}}'
       ,'@container (max-width:920px){.dsh-canvas-toolbar{flex-wrap:wrap}.dsh-canvas-hint,.dsh-canvas-feedback{order:20;flex:1 0 calc(100% - 24px);min-height:16px}.dsh-canvas-project{max-width:110px}.dsh-canvas-tb{padding:5px 9px;font-size:12px}}'
       ,'@container (max-width:680px){.dsh-canvas-status{display:none}.dsh-canvas-title{font-size:13px}.dsh-canvas-project{max-width:92px}.dsh-canvas-toolbar{gap:6px;padding:7px 9px}.dsh-canvas-tb{padding:5px 7px;font-size:11px}}'
+      ,'/* 聊天生图:生成中占位徽标与自动上画布开关(v1.9) */'
+      ,'.dsh-canvas-gen-badge{position:absolute;top:52px;left:50%;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:8px;padding:6px 14px;border-radius:999px;background:rgba(127,127,127,.08);border:1px solid var(--dsw-alias-border-l2,#e2e2e6);color:var(--dsw-alias-label-primary,#1f2328);font-size:12px;line-height:18px;box-shadow:0 4px 14px rgba(0,0,0,.12);pointer-events:none;white-space:nowrap;backdrop-filter:blur(6px)}'
+      ,'.dsh-canvas-gen-badge-dot{width:8px;height:8px;border-radius:50%;background:var(--dsw-alias-accent,#0a84ff);animation:dsh-canvas-gen-pulse 1.2s ease-in-out infinite}'
+      ,'@keyframes dsh-canvas-gen-pulse{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}'
+      ,'.dsh-canvas-engine-autoadd{margin:10px 14px 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#e2e2e6);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fafafa)}'
+      ,'.dsh-canvas-engine-autoadd-row{display:flex;align-items:flex-start;gap:9px;cursor:pointer}'
+      ,'.dsh-canvas-engine-autoadd-row input{margin-top:3px;flex:0 0 auto}'
+      ,'.dsh-canvas-engine-autoadd-row span{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,#1f2328)}'
+      ,'.dsh-canvas-engine-autoadd-row small{display:block;margin-top:3px;font-size:11px;line-height:16px;font-weight:400;color:var(--dsw-alias-label-secondary,#6b7280)}'
     ].join('\n');
-
     // ---- plugin ----
     function compatibilityLogger(ctx, level, message, error) {
       try {

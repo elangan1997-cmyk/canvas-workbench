@@ -84,6 +84,25 @@
         detail: { path, url: url || displaySourceUrl(path), explicit: true, token: CANVAS_ADD_TOKEN }
       }));
     }
+    // ---- 聊天生图自动上画布(1.9)----
+    // 开关默认开启;批量生图或大量抽卡重跑时建议关闭,改回卡片上的手动「加入画布」。
+    // 自动上画布只认宿主 /dsh-canvas/generation-status 登记的本轮产出路径,
+    // 复用与手动按钮完全相同的令牌通道,不新增任何旁路。
+    const autoAddDispatched = new Set();
+    function canvasAutoAddEnabled() {
+      try { return window.localStorage.getItem(AUTO_ADD_KEY) !== 'off'; } catch (err) { return true; }
+    }
+    function setCanvasAutoAddEnabled(value) {
+      try { window.localStorage.setItem(AUTO_ADD_KEY, value ? 'on' : 'off'); } catch (err) {}
+    }
+    function dispatchGeneratedToCanvas(path) {
+      if (!path || autoAddDispatched.has(path)) return false;
+      autoAddDispatched.add(path);
+      // 宿主登记的产出路径本身就是绝对归档路径,与手动按钮点击时
+      // dispatchResolvedImage 拿到的 actionPath 同构,直接派发即可。
+      dispatchResolvedImage(path);
+      return true;
+    }
     function revealImageInFinder(path) {
       if (attachmentFromPath(path)) {
         window.alert('这张图片是聊天历史附件，无法直接在系统文件管理器中定位');

@@ -6,3 +6,4 @@
     const PANEL_WIDTH_KEY = 'dsh-canvas-panel-width';
     const MATERIAL_LIBRARY_KEY = 'dsh-canvas-material-library-v1';
     const MATERIAL_SORT_KEY = 'dsh-canvas-material-sort-v1';
+    const AUTO_ADD_KEY = 'dsh-canvas-auto-add-chat-image';
