@@ -2,6 +2,7 @@
 
 ## 1.8.4
 
+- **定位聚焦「本地生图工作台 / Lovart 平价平替」**:标题与简介改为生图优先(开自己的 API、零订阅、本地数据),PS/AI 图层级桥接与可编辑 PSD/AI 交付作为独有溢价点;新增「是 Lovart 的平价平替吗?」FAQ(诚实划定边界:协作/视频/模板生态不在范围,可并用);keywords 增 lovart-alternative、ai-image-generator(共 28);GitHub 仓库描述同步。
 - 引擎中立定位强化:README 引擎章节改为「带什么 API 都行」——API 直连(任意 OpenAI 兼容接口/国内大模型/企业网关,无需 ChatGPT 订阅)列为推荐起点,并明确本地工具链零 API 依赖;新增「和云端 AI 设计平台(如 Lovart)怎么选?」FAQ(不贬竞品,按场景分工,含并用组合)。
 - AI 检索优化(GEO):README 新增「你可能在找它」问句式检索段(覆盖画布/修图/去背景/归档/PSD/桥接/素材库等用户问法,中英双语);npm keywords 扩充至 24 个用户词(deepseek-harness、remove-background、psd-export、text-recognition、infinite-canvas 等);GitHub 仓库描述改为设计师定位中文、topics 增至 11 个(excalidraw/photoshop/illustrator/adobe/ocr/psd 等)。
 
