@@ -147,6 +147,7 @@
       ,'@container (max-width:920px){.dsh-canvas-toolbar{flex-wrap:wrap}.dsh-canvas-hint,.dsh-canvas-feedback{order:20;flex:1 0 calc(100% - 24px);min-height:16px}.dsh-canvas-project{max-width:110px}.dsh-canvas-tb{padding:5px 9px;font-size:12px}}'
       ,'@container (max-width:680px){.dsh-canvas-status{display:none}.dsh-canvas-title{font-size:13px}.dsh-canvas-project{max-width:92px}.dsh-canvas-toolbar{gap:6px;padding:7px 9px}.dsh-canvas-tb{padding:5px 7px;font-size:11px}}'
       ,'/* 聊天生图:生成中占位徽标与自动上画布开关(v1.9) */'
+      ,'.dsh-canvas-project-reason{margin:0 0 10px;padding:9px 12px;border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-accent,#0a84ff) 10%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-accent,#0a84ff) 35%,transparent);color:var(--dsw-alias-label-primary,#1f2328);font-size:12px;line-height:18px}'
       ,'.dsh-canvas-engine-autoadd{margin:10px 14px 0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2,#e2e2e6);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fafafa)}'
       ,'.dsh-canvas-engine-autoadd-row{display:flex;align-items:flex-start;gap:9px;cursor:pointer}'
       ,'.dsh-canvas-engine-autoadd-row input{margin-top:3px;flex:0 0 auto}'
