@@ -17,7 +17,9 @@ export async function generateImage({ ctx, image, mask, prompt, engine, signal }
   const bytes = Buffer.from(image || []);
   if (!bytes.length) throw new Error('图片输入为空');
   const provider = imageProviders.require(selected);
-  return { engine: selected, bytes: await provider.generate({ ctx, images: [bytes], mask, prompt, settings, signal }) };
+  // api Provider 现在返回 Buffer[](生成数量可能 >1);画布编辑路径恒取第一张。
+  const buffers = await provider.generate({ ctx, images: [bytes], mask, prompt, settings, signal });
+  return { engine: selected, bytes: Array.isArray(buffers) ? buffers[0] : buffers };
 }
 
 /** Generate or edit an image for the chat imagegen tool using the same route selected by the canvas. */
@@ -28,8 +30,13 @@ export async function generateChatImage({ ctx, images = [], prompt, engine, sign
   if (!String(prompt || '').trim()) throw new Error('图片生成提示词不能为空');
   const provider = imageProviders.require(selected);
   const trimmed = String(prompt).trim();
-  if (selected === 'dsh-codex') return { engine: selected, bytes: await provider.generate({ ctx, images: inputs, prompt: trimmed, settings, signal }) };
-  return { engine: selected, bytes: await provider.generate({ images: inputs, prompt: trimmed, settings, signal }) };
+  if (selected === 'dsh-codex') {
+    const bytes = await provider.generate({ ctx, images: inputs, prompt: trimmed, settings, signal });
+    return { engine: selected, bytes: Array.isArray(bytes) ? bytes[0] : bytes, images: [Array.isArray(bytes) ? bytes[0] : bytes] };
+  }
+  const buffers = await provider.generate({ images: inputs, prompt: trimmed, settings, signal });
+  const list = Array.isArray(buffers) && buffers.length ? buffers : [buffers];
+  return { engine: selected, bytes: list[0], images: list };
 }
 
 export async function imageEngineHealth(ctx) {

@@ -23,6 +23,23 @@ export function parseImagePayload(payload) {
   throw new Error('API 未返回可读取的图片数据');
 }
 
+/** 生成数量(n>1)时网关会在 data[] 里回多张图;逐张解码/下载,任一失败即整轮失败。 */
+export async function parseImagePayloadAll(payload) {
+  const items = payload && Array.isArray(payload.data) ? payload.data.filter((item) => item && typeof item === 'object') : [];
+  if (!items.length) throw new Error('API 未返回图片数据');
+  const buffers = await Promise.all(items.map(async (item) => {
+    if (typeof item.b64_json === 'string' && item.b64_json.trim()) return Buffer.from(item.b64_json.trim(), 'base64');
+    if (typeof item.url === 'string' && item.url.trim()) {
+      const response = await fetch(item.url);
+      if (!response.ok) throw new Error(`图片下载失败（HTTP ${response.status}）`);
+      return Buffer.from(await response.arrayBuffer());
+    }
+    throw new Error('API 未返回可读取的图片数据');
+  }));
+  if (!buffers.length || buffers.some((buffer) => !buffer || !buffer.length)) throw new Error('API 未返回可读取的图片数据');
+  return buffers;
+}
+
 export const RETRYABLE_IMAGE_API_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]);
 
 export function imageApiRetryDelay(response, attempt) {
@@ -84,6 +101,9 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal }
       // 编辑/擦除路径(带输入图)不传 size,输出跟随输入比例。
       const request = { model: String(settings.apiModel || DEFAULT_API_MODEL), prompt, quality: 'high' };
       if (settings.imageSize && settings.imageSize !== 'auto') request.size = String(settings.imageSize);
+      // 生成数量:聊天抽卡场景一张请求出多张图,减少整轮等待。
+      const count = Number(settings.imageCount) || 1;
+      if (count > 1) request.n = count;
       body = JSON.stringify(request);
     }
     let response;
@@ -107,7 +127,7 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal }
     try { payload = await response.json(); } catch {}
     if (response.ok) {
       if (!payload) throw new Error(`image2 API 返回无效响应（HTTP ${response.status}）`);
-      return await parseImagePayload(payload);
+      return await parseImagePayloadAll(payload);
     }
     const detail = payload && payload.error && typeof payload.error.message === 'string' ? payload.error.message : '';
     lastFailure = `HTTP ${response.status}${detail ? `：${detail}` : ''}`;

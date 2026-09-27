@@ -21,6 +21,7 @@ export function register(router, h) {
             apiBaseUrl: settings.apiBaseUrl,
             apiModel: settings.apiModel,
             imageSize: settings.imageSize,
+            imageCount: settings.imageCount,
             health
           }));
           return;
@@ -37,7 +38,8 @@ export function register(router, h) {
               engine: body.engine,
               apiBaseUrl: body.apiBaseUrl,
               apiModel: body.apiModel,
-              imageSize: body.imageSize
+              imageSize: body.imageSize,
+              imageCount: body.imageCount
             });
             if (body.apiKey || body.clearApiKey === true) {
               await writeLegacyApiAuth({ apiKey: body.apiKey, baseUrl: settings.apiBaseUrl, clear: body.clearApiKey === true });
@@ -48,6 +50,7 @@ export function register(router, h) {
               engine: settings.engine,
               apiBaseUrl: settings.apiBaseUrl,
               apiModel: settings.apiModel,
+              imageCount: settings.imageCount,
               health
             }));
           } catch (err) {

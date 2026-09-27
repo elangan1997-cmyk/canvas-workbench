@@ -17,9 +17,16 @@ export function imageEngineSettingsPath() {
 }
 
 /** image2 网关支持的生图尺寸(gpt-image 系);auto = 不传 size,由服务端决定。 */
-export const IMAGE_SIZE_VALUES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '1280x960', '960x1280', '1920x1080', '1080x1920', '2048x2048', '2048x1152', '1152x2048', '3840x2160', '2160x3840']);
+export const IMAGE_SIZE_VALUES = new Set(['auto', '1024x1024', '1536x1024', '1024x1536', '1280x960', '960x1280', '1920x1080', '1080x1920', '2560x1080', '1080x2560', '2048x1024', '1024x2048', '1280x1024', '1024x1280']);
 export function normalizeImageSize(value) {
   return IMAGE_SIZE_VALUES.has(String(value || '').trim()) ? String(value || '').trim() : 'auto';
+}
+
+/** 聊天生图单次数量:仅 API 引擎生效(dsh-codex 原生工具恒为单张)。 */
+export const IMAGE_COUNT_VALUES = new Set([1, 2, 4, 8]);
+export function normalizeImageCount(value) {
+  const num = Number(value);
+  return IMAGE_COUNT_VALUES.has(num) ? num : 1;
 }
 
 export function normalizeImageEngine(value) {
@@ -32,7 +39,7 @@ export function normalizeApiBaseUrl(value, fallback = DEFAULT_API_BASE_URL) {
 }
 
 export async function readImageEngineSettings() {
-  const defaults = { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL, imageSize: 'auto' };
+  const defaults = { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL, imageSize: 'auto', imageCount: 1 };
   try {
     const parsed = JSON.parse(await readFile(imageEngineSettingsPath(), 'utf8'));
     if (!parsed || typeof parsed !== 'object') return defaults;
@@ -43,6 +50,7 @@ export async function readImageEngineSettings() {
       apiBaseUrl: normalizeApiBaseUrl(parsed.apiBaseUrl, defaults.apiBaseUrl),
       apiModel: String(parsed.apiModel || defaults.apiModel).trim() || defaults.apiModel,
       imageSize: normalizeImageSize(parsed.imageSize),
+      imageCount: normalizeImageCount(parsed.imageCount),
     };
   } catch {
     return defaults;
@@ -58,6 +66,7 @@ export async function writeImageEngineSettings(patch = {}) {
     apiBaseUrl: normalizeApiBaseUrl(patch.apiBaseUrl ?? current.apiBaseUrl),
     apiModel: String(patch.apiModel ?? current.apiModel).trim() || DEFAULT_API_MODEL,
     imageSize: normalizeImageSize(patch.imageSize ?? current.imageSize),
+    imageCount: normalizeImageCount(patch.imageCount ?? current.imageCount),
   };
   const filename = imageEngineSettingsPath();
   await mkdir(dirname(filename), { recursive: true, mode: 0o700 });

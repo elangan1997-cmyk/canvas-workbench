@@ -62,13 +62,16 @@ test('settings 读写：缺文件给默认值；写入 0600 并可读回', async
   process.env.DSH_HOME = home;
   try {
     assert.equal(imageEngineSettingsPath(), join(home, 'canvas-workbench', 'image-engine.json'));
-    assert.deepEqual(await readImageEngineSettings(), { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL, imageSize: 'auto' });
+    assert.deepEqual(await readImageEngineSettings(), { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL, imageSize: 'auto', imageCount: 1 });
     const next = await writeImageEngineSettings({ engine: 'api', apiBaseUrl: 'https://x.test/v1', apiModel: ' m1 ' });
-    assert.deepEqual(next, { engine: 'api', apiBaseUrl: 'https://x.test', apiModel: 'm1', imageSize: 'auto' });
+    assert.deepEqual(next, { engine: 'api', apiBaseUrl: 'https://x.test', apiModel: 'm1', imageSize: 'auto', imageCount: 1 });
     const sized = await writeImageEngineSettings({ imageSize: '1536x1024' });
     assert.equal(sized.imageSize, '1536x1024');
     assert.equal((await writeImageEngineSettings({ imageSize: '1920x1080' })).imageSize, '1920x1080');
-    assert.equal((await writeImageEngineSettings({ imageSize: '3840x2160' })).imageSize, '3840x2160');
+    assert.equal((await writeImageEngineSettings({ imageSize: '2560x1080' })).imageSize, '2560x1080');
+    assert.equal((await writeImageEngineSettings({ imageSize: '3840x2160' })).imageSize, 'auto');
+    assert.equal((await writeImageEngineSettings({ imageCount: 4 })).imageCount, 4);
+    assert.equal((await writeImageEngineSettings({ imageCount: 99 })).imageCount, 1);
     assert.equal((await writeImageEngineSettings({ imageSize: 'bogus' })).imageSize, 'auto');
     const mode = (await stat(imageEngineSettingsPath())).mode & 0o777;
     assert.equal(mode, 0o600);

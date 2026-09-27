@@ -4,6 +4,7 @@ import { basename, dirname, extname, join } from 'node:path';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { generateChatImage } from './image-engine.js';
+import { readImageEngineSettings, normalizeImageCount } from '../src/host/services/image-engine-settings.js';
 import { beginChatGeneration, endChatGeneration, noteChatGenerationCompleted } from '../src/host/services/chat-generation.js';
 
 /** 会话 v4 的生产者归属标识(dsh-codex 同款 Object.freeze 模式)。 */
@@ -244,18 +245,17 @@ function routedTool(ctx, original, getChatContext) {
       // 现在生成与聊天推送照常，仅跳过归档并在结果里提示绑定。
       const args = parseArgs(rawArgs);
       const images = args.paths.length ? await workspaceImages(ctx, exec, args.paths) : args.count ? await recentImages(ctx, exec, args.count) : [];
-      beginChatGeneration();
+      // 生成数量(仅 API 引擎):begin/end 计数与产出张数一致,画布端占位与补位逻辑无需感知差异。
+      const engineSettings = await readImageEngineSettings();
+      const requestedCount = engineSettings.engine === 'api' ? normalizeImageCount(engineSettings.imageCount) : 1;
+      for (let i = 0; i < requestedCount; i += 1) beginChatGeneration();
       let generated;
       try {
         generated = await generateChatImage({ ctx, images, prompt: args.prompt, signal: exec.signal });
       } finally {
-        endChatGeneration();
+        for (let i = 0; i < requestedCount; i += 1) endChatGeneration();
       }
-      const ref = await ctx.attachments.saveImage({ data: generated.bytes, mediaType: 'image/png', name: 'generated.png' });
-      const value = {
-        prompt: args.prompt,
-        image: { attachmentId: ref.attachmentId, mediaType: 'image/png', bytes: ref.bytes, width: ref.width, height: ref.height, name: 'generated.png' },
-      };
+      const outputs = Array.isArray(generated.images) && generated.images.length ? generated.images : [generated.bytes];
       // 归档基础目录三级回退：绑定画布项目 → 项目内 DSH聊天生成图片；未绑定但有
       // 聊天工作目录 → 工作目录下的 DSH聊天生成图片；两者都没有 → 插件数据目录。
       // 生成图必须始终有落盘路径：没有它，聊天图片卡片拿不到 sourcePath，
@@ -275,34 +275,47 @@ function routedTool(ctx, original, getChatContext) {
       const blockStart = Math.floor(now.getHours() / 5) * 5;
       const block = String(blockStart).padStart(2, '0') + '-' + String(Math.min(blockStart + 5, 24)).padStart(2, '0');
       const archiveDirectory = join(sessionFolder, day, block);
-      try {
-        await mkdir(archiveDirectory, { recursive: true });
-        const requested = args.outputPath ? basename(args.outputPath) : generatedName();
-        const outputPath = await uniqueOutputPath(archiveDirectory, requested);
-        await writeFile(outputPath, generated.bytes, { flag: 'wx' });
-        value.image.name = basename(outputPath);
-        value.file = { path: outputPath, operation: 'create' };
-        noteChatGenerationCompleted(outputPath);
-        if (archiveNotice) value.notice = archiveNotice;
-      } catch (err) {
-        value.writeError = String((err && err.message) || err);
-        if (archiveNotice) value.notice = archiveNotice;
+      let value = null;
+      for (let index = 0; index < outputs.length; index += 1) {
+        const bytes = outputs[index];
+        const ref = await ctx.attachments.saveImage({ data: bytes, mediaType: 'image/png', name: 'generated.png' });
+        const item = {
+          prompt: args.prompt,
+          image: { attachmentId: ref.attachmentId, mediaType: 'image/png', bytes: ref.bytes, width: ref.width, height: ref.height, name: 'generated.png' },
+        };
+        try {
+          await mkdir(archiveDirectory, { recursive: true });
+          const requested = args.outputPath ? basename(args.outputPath) : generatedName();
+          const outputPath = await uniqueOutputPath(archiveDirectory, requested);
+          await writeFile(outputPath, bytes, { flag: 'wx' });
+          item.image.name = basename(outputPath);
+          item.file = { path: outputPath, operation: 'create' };
+          noteChatGenerationCompleted(outputPath);
+          if (archiveNotice) item.notice = archiveNotice;
+        } catch (err) {
+          item.writeError = String((err && err.message) || err);
+          if (archiveNotice) item.notice = archiveNotice;
+        }
+        // exec.parent 只在嵌套子调用（code-dispatch）时存在；聊天顶层 imagegen
+        // 必须走 deferContext 把生成图作为上下文消息推入对话，否则工具结果被
+        // compaction 清理后聊天里就看不到图了。deferContext 在 exec 上恒存在。
+        // 多张时逐张推送,聊天里每张一张卡,与单张行为一致。
+        if (typeof exec.deferContext === 'function') {
+          // 会话格式 v4 要求 producer-owned source kind:{kind:'plugin',plugin:…} 旧包装会被
+          // v3→v4 校验整轮拒收(format v4 message requires a producer-owned source kind)。
+          // plugin:canvas-workbench 与迁移器对旧会话的改写结果一致,新旧会话形态统一。
+          exec.deferContext(createUserMessage({ content: contentOf(item), source: CANVAS_MESSAGE_SOURCE }));
+        }
+        value = item;
       }
-      // exec.parent 只在嵌套子调用（code-dispatch）时存在；聊天顶层 imagegen
-      // 必须走 deferContext 把生成图作为上下文消息推入对话，否则工具结果被
-      // compaction 清理后聊天里就看不到图了。deferContext 在 exec 上恒存在。
-      if (typeof exec.deferContext === 'function') {
-        // 会话格式 v4 要求 producer-owned source kind:{kind:'plugin',plugin:…} 旧包装会被
-        // v3→v4 校验整轮拒收(format v4 message requires a producer-owned source kind)。
-        // plugin:canvas-workbench 与迁移器对旧会话的改写结果一致,新旧会话形态统一。
-        exec.deferContext(createUserMessage({ content: contentOf(value), source: CANVAS_MESSAGE_SOURCE }));
-      }
+      if (outputs.length > 1 && value) value.imageCount = outputs.length;
       return value;
     },
     presentCall: () => ({ card: 'generic', title: '使用画布引擎生成图片', kind: 'execute' }),
     presentResult: (_args, result) => ({
       card: 'generic',
-      title: result.file && !result.notice ? '图片已生成并归档到画布项目'
+      title: result.imageCount > 1 ? `已生成 ${result.imageCount} 张图片`
+        : result.file && !result.notice ? '图片已生成并归档到画布项目'
         : result.file ? '图片已生成（归档到聊天工作目录）'
         : result.writeError ? '图片已生成，但归档失败'
         : '图片已生成',
