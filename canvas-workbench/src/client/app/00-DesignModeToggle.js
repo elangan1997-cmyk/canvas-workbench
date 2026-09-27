@@ -149,12 +149,6 @@
         setRatioOpen((v) => !v);
       };
       const currentRatioOption = IMAGE_RATIO_OPTIONS.find((option) => option.value === imageRatio);
-      const ratioChipIcon = currentRatioOption
-        ? React.createElement('span', {
-            className: 'dsh-canvas-ratio-card-icon',
-            style: { width: currentRatioOption.icon[0] + 'px', height: currentRatioOption.icon[1] + 'px' }
-          })
-        : React.createElement('span', { className: 'dsh-canvas-ratio-card-icon dsh-canvas-ratio-icon-auto' });
       const countSuffix = imageCount > 1 ? ' ×' + imageCount : '';
       const ratioPopover = ratioOpen && ratioAnchor ? React.createElement('div', {
         className: 'dsh-canvas-ratio-pop',
@@ -210,7 +204,6 @@
             title: '生图比例与数量：选择后聊天生图优先使用（仅 API 引擎生效）',
             onClick: toggleRatioPopover
           },
-            ratioChipIcon,
             React.createElement('span', null, (currentRatioOption ? ratioOptionLabel(currentRatioOption) : '自动比例') + countSuffix),
             React.createElement('span', { className: 'dsh-canvas-ratio-chip-caret' }, '⌄')
           ),

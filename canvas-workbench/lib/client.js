@@ -1953,12 +1953,6 @@ window.__ModuleLoader__.load({
         setRatioOpen((v) => !v);
       };
       const currentRatioOption = IMAGE_RATIO_OPTIONS.find((option) => option.value === imageRatio);
-      const ratioChipIcon = currentRatioOption
-        ? React.createElement('span', {
-            className: 'dsh-canvas-ratio-card-icon',
-            style: { width: currentRatioOption.icon[0] + 'px', height: currentRatioOption.icon[1] + 'px' }
-          })
-        : React.createElement('span', { className: 'dsh-canvas-ratio-card-icon dsh-canvas-ratio-icon-auto' });
       const countSuffix = imageCount > 1 ? ' ×' + imageCount : '';
       const ratioPopover = ratioOpen && ratioAnchor ? React.createElement('div', {
         className: 'dsh-canvas-ratio-pop',
@@ -2014,7 +2008,6 @@ window.__ModuleLoader__.load({
             title: '生图比例与数量：选择后聊天生图优先使用（仅 API 引擎生效）',
             onClick: toggleRatioPopover
           },
-            ratioChipIcon,
             React.createElement('span', null, (currentRatioOption ? ratioOptionLabel(currentRatioOption) : '自动比例') + countSuffix),
             React.createElement('span', { className: 'dsh-canvas-ratio-chip-caret' }, '⌄')
           ),
@@ -5475,7 +5468,6 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       ,'.dsh-canvas-ratio-chip{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;line-height:1;padding:5px 12px;border-radius:999px;border:1px solid rgba(128,128,128,.4);background:transparent;color:var(--dsw-alias-label-primary,#333);cursor:pointer;white-space:nowrap}'
       ,'.dsh-canvas-ratio-chip:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.12))}'
       ,'.dsh-canvas-ratio-chip-set{border-color:rgba(59,130,246,.55);background:rgba(59,130,246,.1);color:#1d4ed8}'
-      ,'.dsh-canvas-ratio-chip-set .dsh-canvas-ratio-card-icon{border-color:#1d4ed8}'
       ,'.dsh-canvas-ratio-chip-caret{font-size:10px;opacity:.6;transform:translateY(1px)}'
       ,'.dsh-canvas-ratio-pop{position:fixed;z-index:9999;width:328px;box-sizing:border-box;padding:12px;border-radius:12px;background:var(--dsw-alias-bg-layer-1,#fff);border:1px solid var(--dsw-alias-border-l2,#e2e2e6);box-shadow:0 10px 30px rgba(0,0,0,.16);transform:translateY(calc(-100% - 10px));display:flex;flex-direction:column;gap:8px}'
       ,'.dsh-canvas-ratio-pop-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary,#6b7280)}'
