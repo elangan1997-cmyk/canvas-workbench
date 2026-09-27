@@ -3,7 +3,8 @@
 import { dshCodexProvider } from './image/dsh-codex.provider.js';
 import { openAICompatibleProvider, testImageApiConnection } from './image/openai-compatible.provider.js';
 import { createProviderRegistry } from './registry.js';
-import { imageEngineSettingsPath, normalizeImageEngine, readImageEngineSettings } from '../host/services/image-engine-settings.js';
+import { imageEngineSettingsPath, normalizeImageCount, normalizeImageEngine, readImageEngineSettings } from '../host/services/image-engine-settings.js';
+import { cropToRatio } from '../host/services/image-crop.js';
 
 const imageProviders = createProviderRegistry();
 imageProviders.register(dshCodexProvider);
@@ -30,12 +31,23 @@ export async function generateChatImage({ ctx, images = [], prompt, engine, sign
   if (!String(prompt || '').trim()) throw new Error('图片生成提示词不能为空');
   const provider = imageProviders.require(selected);
   const trimmed = String(prompt).trim();
-  // 聊天路径显式选了比例时,编辑请求也带 size(尊重用户意图);
-  // 画布编辑/智能擦除走 generateImage,不传 sizeOnEdit,输出跟随原图。
-  // 两个 Provider 的 generate 现在都返回 Buffer[](dsh-codex 并行多张 / API n 参数)。
-  const buffers = await provider.generate({ ctx, images: inputs, prompt: trimmed, settings, signal, sizeOnEdit: true });
-  const list = Array.isArray(buffers) && buffers.length ? buffers : [buffers];
-  return { engine: selected, bytes: list[0], images: list };
+  // 数量统一在这里串行逐张:API 的 n 参数与并行请求实测都会被网关忽略/限流
+  // (429 / n>1 只回一张),串行+间隔最稳,且占位数与产出张数严格一致。
+  const count = normalizeImageCount(settings.imageCount);
+  const outputs = [];
+  for (let index = 0; index < count; index += 1) {
+    if (index > 0) await new Promise((resolve) => setTimeout(resolve, 1200));
+    const produced = await provider.generate({ ctx, images: inputs, prompt: trimmed, settings, signal, sizeOnEdit: true });
+    outputs.push(...(Array.isArray(produced) && produced.length ? produced : [produced]));
+  }
+  // 比例兜底:网关对非标 size 静默忽略、codex 上游恒 auto——显式选了比例时
+  // 生成后统一裁到精确比例(给对比例时为无操作)。画布编辑/智能擦除走
+  // generateImage,不经过这里,输出跟随原图。
+  if (settings.imageSize && settings.imageSize !== 'auto') {
+    const cropped = await Promise.all(outputs.map((buffer) => cropToRatio(ctx, buffer, settings.imageSize)));
+    return { engine: selected, bytes: cropped[0], images: cropped };
+  }
+  return { engine: selected, bytes: outputs[0], images: outputs };
 }
 
 export async function imageEngineHealth(ctx) {

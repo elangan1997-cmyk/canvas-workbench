@@ -65,6 +65,26 @@ export function waitForImageApiRetry(ms, signal) {
   });
 }
 
+/**
+ * 网关实测(gpt-image 系)只认 1:1 / 3:2 / 2:3 三档标准尺寸,其它值会被**静默忽略**
+ * 并落回默认(选 9:16 出来 2:3)。非标比例映射到对数距离最近的标准档发起请求,
+ * 精确比例由生成后的裁切兜底(generateChatImage 统一处理)。
+ */
+const GATEWAY_IMAGE_SIZE_CANDIDATES = [['1024x1024', 1], ['1536x1024', 1.5], ['1024x1536', 2 / 3]];
+export function gatewaySizeFor(imageSize) {
+  const value = String(imageSize || '').trim();
+  if (!value || value === 'auto') return '';
+  const match = /^(\d+)x(\d+)$/.exec(value);
+  if (!match) return '';
+  const ratio = Number(match[1]) / Number(match[2]);
+  if (!Number.isFinite(ratio) || ratio <= 0) return '';
+  let best = GATEWAY_IMAGE_SIZE_CANDIDATES[0];
+  for (const candidate of GATEWAY_IMAGE_SIZE_CANDIDATES) {
+    if (Math.abs(Math.log(ratio / candidate[1])) < Math.abs(Math.log(ratio / best[1]))) best = candidate;
+  }
+  return best[0];
+}
+
 async function generateWithApi({ image, images, mask, prompt, settings, signal, sizeOnEdit }) {
   const auth = await readLegacyApiAuth();
   if (!auth.configured) throw new Error(`未配置 image2 API 密钥：${auth.filename}`);
@@ -96,17 +116,18 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal, 
       if (mask) form.append('mask', new Blob([mask], { type: 'image/png' }), 'mask.png');
       // 聊天生图的编辑路径:用户在输入区显式选了比例时尊重其意图传 size;
       // 画布编辑/智能擦除(sizeOnEdit 未传)保持跟随原图,避免裁切意外。
-      if (sizeOnEdit && settings.imageSize && settings.imageSize !== 'auto') form.append('size', String(settings.imageSize));
+      const editSize = sizeOnEdit ? gatewaySizeFor(settings.imageSize) : '';
+      if (editSize) form.append('size', editSize);
       body = form;
     } else {
       headers['content-type'] = 'application/json';
       // 尺寸比例:选了具体比例才传 size(默认 auto 不传,由服务端决定);
       // 编辑/擦除路径(带输入图)不传 size,输出跟随输入比例。
       const request = { model: String(settings.apiModel || DEFAULT_API_MODEL), prompt, quality: 'high' };
-      if (settings.imageSize && settings.imageSize !== 'auto') request.size = String(settings.imageSize);
-      // 生成数量:聊天抽卡场景一张请求出多张图,减少整轮等待。
-      const count = Number(settings.imageCount) || 1;
-      if (count > 1) request.n = count;
+      const requestSize = gatewaySizeFor(settings.imageSize);
+      if (requestSize) request.size = requestSize;
+      // 数量不传 n:网关对非标参数会静默忽略(n>1 实测只回一张),
+      // 串行逐张由 generateChatImage 统一处理,占位与产出严格一致。
       body = JSON.stringify(request);
     }
     let response;

@@ -88,59 +88,18 @@ function ratioHintFor(imageSize) {
   return '【画面比例】请以' + orient + ' ' + ratio + '（' + w + '×' + h + '）构图，主体与关键细节避开四边，最终画面会按该比例输出。';
 }
 
-/**
- * dsh-codex 上游把 size 写死为 "auto",比例只能生成后裁:
- * 用自带 Python 运行时按目标比例居中裁切(cover,只裁不放大)。
- * Python/Pillow 缺失或裁切失败时返回原图——比例是增强,不阻断生成。
- */
-async function cropToRatio(ctx, buffer, imageSize) {
-  const { mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
-  const { resolvePython } = await import('../../lib/platform.js');
-  const scriptPath = join(fileURLToPath(new URL('.', import.meta.url)), '../../..', 'scripts', 'crop_to_ratio.py');
-  const work = await mkdtemp(join(tmpdir(), 'dsh-crop-'));
-  try {
-    const input = join(work, 'in.png');
-    const output = join(work, 'out.png');
-    await writeFile(input, buffer);
-    const python = await resolvePython(ctx);
-    const { execFile } = await import('node:child_process');
-    const result = await new Promise((resolve) => {
-      execFile(python.executable, [...python.prefixArgs, scriptPath, '--input', input, '--output', output, '--size', String(imageSize)], { timeout: 60000 }, (err, stdout) => {
-        resolve({ err, stdout: String(stdout || '') });
-      });
-    });
-    if (result.err || !String(result.stdout).startsWith('ok')) return buffer;
-    return Buffer.from(await readFile(output));
-  } catch {
-    return buffer;
-  } finally {
-    rm(work, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
 export const dshCodexProvider = {
   id: 'dsh-codex',
   capabilities: ['image.generate', 'image.edit'],
   loadCodexModule,
   async generate({ ctx, images, prompt, signal, settings = {}, sizeOnEdit }) {
-    // 数量:dsh-codex 上游没有 n 参数,并行发多次请求,每次一张。
-    const count = Math.max(1, Math.min(8, Number(settings.imageCount) || 1));
-    // 比例:上游 size 恒 auto——先在提示词里要求模型按比例构图(不丢画面),
-    // 生成后再居中裁切兜底(模型给对比例时为无操作)。与 API 引擎同规则:
-    // 纯生成始终生效;编辑仅 sizeOnEdit(聊天路径)才生效。
+    // 比例:上游 size 恒 auto——在提示词里要求模型按比例构图(不丢画面);
+    // 数量与裁切兜底统一由 generateChatImage 处理(串行逐张 + 生成后裁切)。
     const wantsRatio = Boolean(settings.imageSize && settings.imageSize !== 'auto')
       && ((Array.isArray(images) && images.length === 0) || sizeOnEdit === true);
     const hint = wantsRatio ? ratioHintFor(settings.imageSize) : '';
     const finalPrompt = hint ? String(prompt) + '\n' + hint : prompt;
-    const jobs = [];
-    for (let index = 0; index < count; index += 1) {
-      jobs.push(generateWithDshCodex({ ctx, image: images, prompt: finalPrompt, signal }));
-    }
-    const buffers = await Promise.all(jobs);
-    if (!wantsRatio) return buffers;
-    return Promise.all(buffers.map((buffer) => cropToRatio(ctx, buffer, settings.imageSize)));
+    return generateWithDshCodex({ ctx, image: images, prompt: finalPrompt, signal });
   },
   async health(ctx) {
     let installed = false;

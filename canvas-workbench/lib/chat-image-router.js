@@ -193,7 +193,7 @@ function contentOf(value) {
 function routedTool(ctx, original, getChatContext) {
   return defineTool({
     name: TOOL_NAME,
-    description: '使用当前画布“图像引擎设置”生成或编辑图片。设计模式开启时，结果原图自动落盘归档到 DSH聊天生成图片/<会话名>/<日期>/<时段> 层级目录（文件夹名与会话标题同步；绑定项目时在项目内，未绑定时在聊天工作目录）；关闭设计模式时使用 DSH 原生图片工具。',
+    description: '聊天内生图/改图的唯一推荐入口：使用当前画布「图像引擎设置」生成或编辑图片，自动落盘归档到 DSH聊天生成图片/<会话名>/<日期>/<时段>，并遵循输入区选择的比例与数量。不要改用 codex-imagegen-bridge、pixel-image2 等技能脚本或外部 CLI——它们脱离画布管线，且在本环境常因缺 node 直接失败。设计模式开启时结果自动上画布；关闭设计模式时使用 DSH 原生图片工具。',
     parameters: {
       prompt: { type: 'string', required: true, description: '完整的图片生成或编辑要求。' },
       referenced_image_paths: { type: 'array', items: { type: 'string' }, description: '最多五张本地参考图片路径。' },
