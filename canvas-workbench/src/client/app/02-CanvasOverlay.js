@@ -30,6 +30,7 @@
       // 没有占位可替换时(占位被用户删掉)回退到普通自动加入。
       const chatPendingRef = React.useRef([]);
       const chatHandledRef = React.useRef(new Set());
+      const chatProjectAskedRef = React.useRef({ sessionId: '', asked: false });
       React.useEffect(() => {
         if (!on) { chatPendingRef.current = []; return; }
         let stopped = false;
@@ -42,6 +43,23 @@
             if (stopped) return;
             const active = Number(data.active) || 0;
             const pending = chatPendingRef.current;
+            const chatCtx = projectRef.current || {};
+            // 新聊天未绑定画布项目时,自动上画布没有明确去处:弹出项目选择器
+            // (选择已有 / 新建),选定前不建占位、不消费完成;关闭不选则本次
+            // 回手动模式(图仍在聊天卡片里可手动加入)。每个会话只问一次。
+            if (canvasAutoAddEnabled() && !chatCtx.project && active > 0) {
+              if (chatProjectAskedRef.current.sessionId !== chatCtx.sessionId) {
+                chatProjectAskedRef.current = { sessionId: chatCtx.sessionId, asked: true };
+                if (chatCtx.cwd) {
+                  setProjectDialog({ mode: 'list', reason: 'auto-add' });
+                  setProjectList({ loading: true, items: [], error: '' });
+                  listProjects(chatCtx.cwd).then((result) => {
+                    setProjectList({ loading: false, items: Array.isArray(result.projects) ? result.projects : [], error: result.error || '' });
+                  }).catch((err) => setProjectList({ loading: false, items: [], error: String((err && err.message) || err) }));
+                }
+              }
+              return;
+            }
             if (canvasAutoAddEnabled()) {
               // 占位数量对齐进行中数量(用户删掉的占位不重建,完成时走回退)
               while (pending.length < active) {
@@ -2076,9 +2094,10 @@
               React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-project-confirm', onClick: () => renameProject(projectDialog.item, projectDialog.value) }, '保存名称')
             )
           ) : projectDialog.mode === 'list' ? React.createElement(React.Fragment, null,
+            projectDialog.reason === 'auto-add' ? React.createElement('div', { className: 'dsh-canvas-project-reason' }, '🎨 本聊天还没绑定画布项目——选择已有项目或新建一个,生成的图片会自动上画布;直接关闭则本次改回手动加入。') : null,
             React.createElement('div', { className: 'dsh-canvas-project-dialog-heading' },
               React.createElement('div', null,
-                React.createElement('div', { className: 'dsh-canvas-project-dialog-title' }, '管理项目'),
+                React.createElement('div', { className: 'dsh-canvas-project-dialog-title' }, projectDialog.reason === 'auto-add' ? '选择画布项目' : '管理项目'),
                 React.createElement('div', { className: 'dsh-canvas-project-subtitle' }, '项目独立保存，切换聊天后仍可重新打开。')
               ),
               React.createElement('button', { className: 'dsh-canvas-project-dialog-close', title: '关闭', onClick: () => setProjectDialog(null) }, '×')
