@@ -222,7 +222,11 @@ export function register(router, h) {
               tempMask = join(outputDir, '.canvas-edit-mask-prepared-' + maskToken + '.png');
               await writeFile(tempRawMask, mask.bytes);
               await access(maskScript);
-              const prepared = await runProcess(python.executable, [...python.prefixArgs, maskScript, '--source', expandHome(modelSourcePath), '--mask', tempRawMask, '--output', tempMask], pluginRoot);
+              const prepared = await runPythonSpec(
+              (executable, args, cwd) => runProcess(executable, args, cwd),
+              python, maskScript,
+              { source: expandHome(modelSourcePath), mask: tempRawMask, output: tempMask },
+              { cwd: pluginRoot });
               if (prepared.exitCode !== 0) throw new Error(prepared.stderr.trim() || '擦除遮罩预处理失败');
             }
 

@@ -35,8 +35,8 @@ def emit(payload):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input")
+    parser.add_argument("--output")
     parser.add_argument("--max", type=int, default=2400, help="最长边像素上限")
     parser.add_argument("--quality", type=int, default=88, help="JPEG 质量")
     parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)

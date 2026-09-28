@@ -12,6 +12,16 @@ import json
 import pathlib
 from PIL import Image
 
+import sys
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
+
 
 def mask_bbox(mask: Image.Image):
     # Transparent pixels mark the editable region.
@@ -64,14 +74,29 @@ def crop_window(bbox, width, height, max_side):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", required=True, type=pathlib.Path)
-    parser.add_argument("--output-image", required=True, type=pathlib.Path)
+    parser.add_argument("--source", type=pathlib.Path)
+    parser.add_argument("--output-image", type=pathlib.Path)
     parser.add_argument("--mask", type=pathlib.Path)
     parser.add_argument("--output-mask", type=pathlib.Path)
     parser.add_argument("--max-side", type=int, default=1024)
     parser.add_argument("--crop-to-mask", action="store_true")
     parser.add_argument("--crop-info", type=pathlib.Path)
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try: value = action.type(value)
+                    except Exception: pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
 
     source = Image.open(args.source).convert("RGB")
     width, height = source.size

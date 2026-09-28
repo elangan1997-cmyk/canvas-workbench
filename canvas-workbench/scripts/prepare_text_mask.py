@@ -12,6 +12,14 @@ import argparse
 import json
 from pathlib import Path
 
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    pass
+
 
 def _number(value: object, fallback: float = 0.0) -> float:
     try:
@@ -22,12 +30,27 @@ def _number(value: object, fallback: float = 0.0) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument("--blocks", required=True, help="OCR block JSON array")
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--blocks", help="OCR block JSON array")
     parser.add_argument("--regions", default="[]", help="authoritative user-selected region JSON array")
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--padding", type=float, default=0.0, help="extra pixels around each OCR box")
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try: value = action.type(value)
+                    except Exception: pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
     try:
         from PIL import Image, ImageDraw, ImageFilter
 

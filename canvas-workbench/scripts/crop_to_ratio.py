@@ -25,7 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
-    parser.add_argument("--size", required=True, help="目标比例的参考尺寸 WxH,如 1080x1920")
+    parser.add_argument("--size", help="目标比例的参考尺寸 WxH,如 1080x1920")
     parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if getattr(args, 'spec', None):

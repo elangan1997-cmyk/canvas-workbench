@@ -61,8 +61,8 @@ def render_with_psd_tools(path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input")
+    parser.add_argument("--output")
     parser.add_argument("--max", type=int, default=2400)
     parser.add_argument("--quality", type=int, default=88)
     parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
