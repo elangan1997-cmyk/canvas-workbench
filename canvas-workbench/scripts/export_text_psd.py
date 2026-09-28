@@ -15,6 +15,60 @@ import sys
 from pathlib import Path
 
 
+
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    pass
+
+PSD_RUNTIME = Path.home() / ".dsh" / "canvas-workbench" / "psd-runtime"
+PSD_TOOLS_VERSION = "1.9.30"
+PSD_MARKER = PSD_RUNTIME / ("psd-tools-" + PSD_TOOLS_VERSION + ".ready")
+PIP_INDEX_URL = os.environ.get("DSH_PIP_INDEX", "").strip()
+
+
+def _pip_args():
+    args = ["-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary", "--timeout", "120"]
+    if PIP_INDEX_URL:
+        args += ["-i", PIP_INDEX_URL]
+    return args
+
+
+def _runtime_python():
+    return PSD_RUNTIME / ("Scripts" / "python.exe" if os.name == "nt" else "bin" / "python")
+
+
+def _install(py):
+    import subprocess as sp
+    sp.run([str(py), *_pip_args(), "psd-tools==" + PSD_TOOLS_VERSION, "pillow"],
+           check=True, timeout=600)
+    PSD_MARKER.write_text(PSD_TOOLS_VERSION + "\n", encoding="utf-8")
+
+
+def ensure_psd_runtime():
+    import importlib.util
+    import subprocess as sp
+    if importlib.util.find_spec("psd_tools") is not None:
+        return
+    py = _runtime_python()
+    ready = False
+    if PSD_MARKER.exists() and py.exists():
+        probe = sp.run(
+            [str(py), "-c", "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('psd_tools') else 1)"],
+            stdout=sp.DEVNULL, stderr=sp.DEVNULL, timeout=30)
+        ready = probe.returncode == 0
+    if not ready:
+        PSD_RUNTIME.mkdir(parents=True, exist_ok=True)
+        if not py.exists():
+            sp.run([sys.executable, "-m", "venv", str(PSD_RUNTIME)], check=True, timeout=300)
+        _install(py)
+    result = sp.run([str(py), *sys.argv], check=False)
+    raise SystemExit(result.returncode)
+
+
 def parse_color(value: object) -> tuple[int, int, int]:
     match = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(value or ""))
     if not match:
@@ -84,11 +138,27 @@ def find_font(postscript: str | None = None) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--input")
+    parser.add_argument("--output")
     parser.add_argument("--blocks", required=True, help="JSON array of OCR blocks")
     parser.add_argument("--clean-input", default="", help="optional image2 clean-plate with OCR text removed")
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try: value = action.type(value)
+                    except Exception: pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
+    ensure_psd_runtime()
     try:
         from PIL import Image, ImageDraw, ImageFont
         from psd_tools import PSDImage

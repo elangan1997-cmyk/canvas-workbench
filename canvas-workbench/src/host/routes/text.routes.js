@@ -98,7 +98,11 @@ export function register(router, h) {
             try {
               const styleScript = join(pluginRoot, 'scripts', 'infer_text_style.py');
               await access(styleScript);
-              const styled = await runProcessWithTimeout(python.executable, [...python.prefixArgs, styleScript, '--input', tempInput, '--blocks', JSON.stringify(blocks)], pluginRoot, 120000);
+              const styled = await runPythonSpec(
+                (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+                python, styleScript,
+                { input: tempInput, blocks: JSON.stringify(blocks) },
+                { cwd: pluginRoot, timeoutMs: 120000 });
               const styleLines = String(styled.stdout || '').trim().split(/\r?\n/).filter(Boolean);
               let stylePayload = null;
               try { stylePayload = styleLines.length ? JSON.parse(styleLines[styleLines.length - 1]) : null; } catch (err) { stylePayload = null; }
@@ -196,7 +200,11 @@ export function register(router, h) {
                 await access(maskScript);
                 await access(compositeScript);
                 tempMask = join(outputDir, 'text-psd-mask-' + token + '.png');
-                const preparedMask = await runProcessWithTimeout(python.executable, [...python.prefixArgs, maskScript, '--source', tempInput, '--blocks', JSON.stringify(exportBlocks), '--regions', JSON.stringify(selections), '--output', tempMask], pluginRoot, 120000);
+                const preparedMask = await runPythonSpec(
+                (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+                python, maskScript,
+                { source: tempInput, blocks: JSON.stringify(exportBlocks), regions: JSON.stringify(selections), output: tempMask },
+                { cwd: pluginRoot, timeoutMs: 120000 });
                 const maskLines = String(preparedMask.stdout || '').trim().split(/\r?\n/).filter(Boolean);
                 let maskPayload = null;
                 try { maskPayload = maskLines.length ? JSON.parse(maskLines[maskLines.length - 1]) : null; } catch (err) { maskPayload = null; }
@@ -225,7 +233,11 @@ export function register(router, h) {
                 tempGenerated = join(outputDir, 'text-psd-generated-' + token + '.png');
                 await writeFile(tempGenerated, generated.bytes);
                 tempClean = join(outputDir, 'text-psd-clean-' + token + '.png');
-                const composite = await runProcessWithTimeout(python.executable, [...python.prefixArgs, compositeScript, '--source', tempInput, '--generated', tempGenerated, '--mask', tempMask, '--output', tempClean], pluginRoot, 180000);
+                const composite = await runPythonSpec(
+                (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+                python, compositeScript,
+                { source: tempInput, generated: tempGenerated, mask: tempMask, output: tempClean },
+                { cwd: pluginRoot, timeoutMs: 120000 });
                 if (composite.exitCode === 0) {
                   try { const cleanInfo = await stat(tempClean); if (cleanInfo.isFile() && cleanInfo.size > 0) cleanInput = tempClean; } catch (err) {}
                 }
@@ -249,7 +261,11 @@ export function register(router, h) {
               tempAi = join(outputDir, 'text-ai-' + token + '.ai');
               const svgArgs = [svgScript, '--input', tempInput, '--output', tempSvg, '--blocks', JSON.stringify(exportBlocks)];
               if (cleanInput) svgArgs.push('--clean-input', cleanInput);
-              const svgRun = await runProcessWithTimeout(python.executable, [...python.prefixArgs, ...svgArgs], pluginRoot, 120000);
+              const svgRun = await runPythonSpec(
+                (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+                python, svgScript,
+                { input: tempInput, output: tempSvg, blocks: JSON.stringify(exportBlocks) },
+                { cwd: pluginRoot, timeoutMs: 120000 });
               const svgLines = String(svgRun.stdout || '').trim().split(/\r?\n/).filter(Boolean);
               let svgPayload = null;
               try { svgPayload = svgLines.length ? JSON.parse(svgLines[svgLines.length - 1]) : null; } catch (err) { svgPayload = null; }
