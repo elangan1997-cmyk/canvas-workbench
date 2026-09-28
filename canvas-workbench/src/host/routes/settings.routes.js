@@ -136,7 +136,27 @@ export function register(router, h) {
             if (action === 'install-dsh-codex') {
               const health = await imageEngineHealth(ctx);
               if (!health.dshCodex.installed) {
-                throw new Error('当前 DSH 2.x 需要随画布套件提供的 dsh-codex 兼容版。请运行画布套件的“安装/修复”，不要安装公开仓库中的旧版。');
+                // npm 版没有独立的"安装/修复"工具(老文案指向完整包时代的东西);
+                // 直接触发后台预置下载 dsh-codex(含镜像兜底+gzip 校验)。
+                const { runToolchainProvisioning } = await import('../services/local-toolchain.js');
+                const result = await runToolchainProvisioning(ctx);
+                const after = await imageEngineHealth(ctx);
+                if (after.dshCodex.installed) {
+                  respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({
+                    ok: true,
+                    message: '✓ dsh-codex 已下载安装完成。请完全退出并重启 DSH,然后在引擎设置中切换到 dsh-codex 并登录。',
+                    restartRequired: true,
+                    health: after
+                  }));
+                } else {
+                  respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({
+                    ok: true,
+                    message: 'dsh-codex 正在后台下载,请稍后查看「更多 → 本地工具链状态」;完成后需重启 DSH。',
+                    restartRequired: true,
+                    health: after
+                  }));
+                }
+                return;
               }
               respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({
                 ok: true,
