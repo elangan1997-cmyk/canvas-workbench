@@ -257,13 +257,18 @@ export function register(router, h) {
             const modelToken = Date.now() + '-' + Math.random().toString(16).slice(2);
             tempModelInput = join(outputDir, '.canvas-model-input-' + modelToken + '.webp');
             tempModelMask = tempMask ? join(outputDir, '.canvas-model-mask-' + modelToken + '.png') : '';
-            const modelArgs = [modelInputScript, '--source', expandHome(modelSourcePath), '--output-image', tempModelInput, '--max-side', '1024'];
+            const modelSpec = { source: expandHome(modelSourcePath), 'output-image': tempModelInput, 'max-side': '1024' };
             if (tempMask) {
               // 有蒙版时只把蒙版周围的原生分辨率窗口交给模型（带上下文边距），避免整图缩放再放大造成擦除区发虚。
               tempCropInfo = join(outputDir, '.canvas-crop-' + modelToken + '.json');
-              modelArgs.push('--mask', tempMask, '--output-mask', tempModelMask, '--crop-to-mask', '--crop-info', tempCropInfo);
+              modelSpec.mask = tempMask;
+              modelSpec['output-mask'] = tempModelMask;
+              modelSpec['crop-to-mask'] = true;
+              modelSpec['crop-info'] = tempCropInfo;
             }
-            const modelPrepared = await runProcess(python.executable, [...python.prefixArgs, ...modelArgs], pluginRoot);
+            const modelPrepared = await runPythonSpec(
+              (executable, args, cwd) => runProcess(executable, args, cwd),
+              python, modelInputScript, modelSpec, { cwd: pluginRoot });
             if (modelPrepared.exitCode !== 0) throw new Error(modelPrepared.stderr.trim() || '模型输入预处理失败');
             const sourceBytes = await readFile(tempModelInput);
             const maskBytes = tempModelMask ? await readFile(tempModelMask) : null;
@@ -287,7 +292,14 @@ export function register(router, h) {
                 if (cropInfo && Number(cropInfo.w) > 0 && Number(cropInfo.h) > 0) compositeArgs.push('--crop', [cropInfo.x, cropInfo.y, cropInfo.w, cropInfo.h].join(','));
               } catch (err) {}
             }
-            const composited = await runProcess(python.executable, [...python.prefixArgs, ...compositeArgs], pluginRoot);
+            const compositeSpec = { source: compositeSourcePath, generated: tempGenerated, output: tempComposite };
+            if (tempMask) compositeSpec.mask = tempMask;
+            if (compositeArgs.includes('--tone-match')) compositeSpec['tone-match'] = true;
+            const cropIdx = compositeArgs.indexOf('--crop');
+            if (cropIdx >= 0 && cropIdx + 1 < compositeArgs.length) compositeSpec.crop = compositeArgs[cropIdx + 1];
+            const composited = await runPythonSpec(
+              (executable, args, cwd) => runProcess(executable, args, cwd),
+              python, compositeScript, compositeSpec, { cwd: pluginRoot });
             if (composited.exitCode !== 0) throw new Error(composited.stderr.trim() || '图片无损合成失败');
 
             const finalBytes = await readFile(tempComposite);

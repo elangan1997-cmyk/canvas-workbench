@@ -415,9 +415,11 @@ export function register(router, h) {
               }));
               return;
             }
-            const generatedArgs = [script, '--input', tempInput, '--output', draftPsd, '--blocks', JSON.stringify(exportBlocks)];
-            if (cleanInput) generatedArgs.push('--clean-input', cleanInput);
-            const generated = await runProcessWithTimeout(python.executable, [...python.prefixArgs, ...generatedArgs], pluginRoot, 180000);
+            const psdSpec = { input: tempInput, output: draftPsd, blocks: JSON.stringify(exportBlocks) };
+            if (cleanInput) psdSpec['clean-input'] = cleanInput;
+            const generated = await runPythonSpec(
+              (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+              python, script, psdSpec, { cwd: pluginRoot, timeoutMs: 180000 });
             const generatedLines = String(generated.stdout || '').trim().split(/\r?\n/).filter(Boolean);
             let generatedPayload = null;
             try { generatedPayload = generatedLines.length ? JSON.parse(generatedLines[generatedLines.length - 1]) : null; } catch (err) { generatedPayload = null; }
