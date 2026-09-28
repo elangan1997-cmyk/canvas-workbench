@@ -12,6 +12,18 @@
 输出：stdout 打印 ``OK:<方法>:<宽>x<高>`` 或 ``ERR:<原因>``。
 """
 import argparse
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        _sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(_sys.stderr, 'reconfigure'):
+        _sys.stderr.reconfigure(encoding='utf-8')
+
 import os
 import sys
 
@@ -53,7 +65,27 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--max", type=int, default=2400)
     parser.add_argument("--quality", type=int, default=88)
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        # 值经 argparse 声明的 type 转换器处理(如 Path),与命令行语义一致。
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try:
+                        value = action.type(value)
+                    except Exception:
+                        pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
+        if getattr(args, 'input', None) is None and not getattr(args, 'prepare', False):
+            parser.error('--input is required')
 
     errors = []
     image = None

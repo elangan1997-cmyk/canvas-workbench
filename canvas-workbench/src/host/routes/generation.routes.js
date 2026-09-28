@@ -1,6 +1,7 @@
 // 自 lib/index.js apply() 机械迁移（v1.8 Phase 2）：每个 handler 体逐字未改，
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
 import { dirname, join } from 'node:path';
+import { runPythonSpec } from '../services/python-launch.js';
 import { access, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { resolvePython } from '../../../lib/platform.js';
 import { createHash } from 'node:crypto';
@@ -52,7 +53,11 @@ export function register(router, h) {
             await access(script);
             tempOutput = join(outputDir, '.vectorized-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.svg');
             const python = await resolvePython(ctx);
-            const result = await runProcessWithTimeout(python.executable, [...python.prefixArgs, script, '--input', expandHome(sourcePath), '--output', tempOutput, '--backend', requestedBackend, '--vector-mode', vectorMode], pluginRoot, 360000);
+            const result = await runPythonSpec(
+              (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+              python, script,
+              { input: expandHome(sourcePath), output: tempOutput, backend: requestedBackend, vector_mode: vectorMode },
+              { cwd: pluginRoot, timeoutMs: 360000 });
             const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
             let payload = null;
             try { payload = lines.length ? JSON.parse(lines[lines.length - 1]) : null; } catch (err) { payload = null; }
@@ -122,7 +127,11 @@ export function register(router, h) {
             if (!isRasterImagePath(sourcePath)) throw new Error('当前图片无法进行本地去背景（仅支持 PNG/JPG/WebP/GIF/AVIF/BMP）');
             tempOutput = join(outputDir, '.rembg-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.png');
             const python = await resolvePython(ctx);
-            const result = await runProcess(python.executable, [...python.prefixArgs, script, '--input', expandHome(sourcePath), '--output', tempOutput, '--model', 'isnet-general-use', '--progress-file', progressPath], pluginRoot);
+            const result = await runPythonSpec(
+              (executable, args, cwd) => runProcess(executable, args, cwd),
+              python, script,
+              { input: expandHome(sourcePath), output: tempOutput, model: 'isnet-general-use', progress_file: progressPath },
+              { cwd: pluginRoot });
             const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
             let payload = null;
             try { payload = lines.length ? JSON.parse(lines[lines.length - 1]) : null; } catch (err) { payload = null; }

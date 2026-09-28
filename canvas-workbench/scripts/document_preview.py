@@ -12,6 +12,18 @@ AI 文件在"创建 PDF 兼容文件"（Illustrator 默认勾选）时文件头�
 输出：成功时打印一行 JSON（success/width/height/pages），退出码 0。
 """
 import argparse
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        _sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(_sys.stderr, 'reconfigure'):
+        _sys.stderr.reconfigure(encoding='utf-8')
+
 import json
 import os
 import sys
@@ -27,7 +39,27 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--max", type=int, default=2400, help="最长边像素上限")
     parser.add_argument("--quality", type=int, default=88, help="JPEG 质量")
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        # 值经 argparse 声明的 type 转换器处理(如 Path),与命令行语义一致。
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try:
+                        value = action.type(value)
+                    except Exception:
+                        pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
+        if getattr(args, 'input', None) is None and not getattr(args, 'prepare', False):
+            parser.error('--input is required')
 
     try:
         import pymupdf as fitz

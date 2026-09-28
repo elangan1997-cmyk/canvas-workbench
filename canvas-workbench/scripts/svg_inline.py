@@ -14,6 +14,18 @@ HTTP 响应），相对路径无从解析 —— 结果就是**只看到文字�
 输出：成功时打印一行 JSON（success/changed/inlined/skipped），退出码 0。
 """
 import argparse
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        _sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(_sys.stderr, 'reconfigure'):
+        _sys.stderr.reconfigure(encoding='utf-8')
+
 import base64
 import json
 import mimetypes
@@ -48,9 +60,29 @@ def resolve_local(href, base_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input', required=True)
-    parser.add_argument('--output', required=True)
+    parser.add_argument('--input')
+    parser.add_argument('--output')
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        # 值经 argparse 声明的 type 转换器处理(如 Path),与命令行语义一致。
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try:
+                        value = action.type(value)
+                    except Exception:
+                        pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
+        if getattr(args, 'input', None) is None and not getattr(args, 'prepare', False):
+            parser.error('--input is required')
 
     try:
         with open(args.input, 'r', encoding='utf-8', errors='replace') as handle:

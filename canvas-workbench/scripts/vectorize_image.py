@@ -18,6 +18,19 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        _sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(_sys.stderr, 'reconfigure'):
+        _sys.stderr.reconfigure(encoding='utf-8')
+
 import shutil
 import subprocess
 import sys
@@ -561,7 +574,27 @@ def main() -> int:
     parser.add_argument("--backend", choices=["auto", "imagetracer", "vtracer", "vecto"], default="auto")
     parser.add_argument("--vector-mode", choices=sorted(VECTOR_MODES), default="auto")
     parser.add_argument("--prepare", action="store_true", help="只准备 vtracer 运行环境(后台预置)")
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        # 沙箱 runner 对含空格参数的传递不可靠(Windows 实测):参数走临时 JSON,argv 只留一个 ASCII 路径。
+        spec_path = Path(args.spec)
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        # 值经 argparse 声明的 type 转换器处理(如 Path),与命令行语义一致。
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try:
+                        value = action.type(value)
+                    except Exception:
+                        pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
     if args.prepare:
         prepare_runtime()
         print(json.dumps({"ok": True, "prepared": True}, ensure_ascii=False), flush=True)

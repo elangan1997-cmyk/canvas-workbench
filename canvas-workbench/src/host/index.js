@@ -8,6 +8,7 @@ import { isMac, isWindows, resolvePython } from '../../lib/platform.js';
 import { PLUGIN_ROOT } from './vendor-assets.js';
 import { createPythonToolRegistry } from './adapters/python.adapter.js';
 import { startToolchainProvisioning } from './services/local-toolchain.js';
+import { runPythonSpec } from './services/python-launch.js';
 import { register as registerContracts } from './routes/contracts.routes.js';
 import { installChatImageRouter } from '../../lib/chat-image-router.js';
 import { expandHome, isPathWithin } from '../shared/utils/paths.js';
@@ -112,12 +113,11 @@ function apply(ctx) {
       try {
         const python = await resolvePython(ctx);
         const renderer = join(PLUGIN_ROOT, 'scripts', 'psd_preview.py');
-        const rendered = await runProcessWithTimeout(
-          python.executable,
-          [...python.prefixArgs, renderer, '--input', path, '--output', target, '--max', '2400'],
-          dirname(path),
-          60000
-        );
+        const rendered = await runPythonSpec(
+          (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+          python, renderer,
+          { input: path, output: target, max: 2400 },
+          { cwd: dirname(path), timeoutMs: 60000 });
         if (rendered.exitCode === 0) {
           try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
         }
@@ -169,12 +169,11 @@ function apply(ctx) {
     if (!isMac) try {
       const python = await resolvePython(ctx);
       const renderer = join(PLUGIN_ROOT, 'scripts', 'document_preview.py');
-      const rendered = await runProcessWithTimeout(
-        python.executable,
-        [...python.prefixArgs, renderer, '--input', path, '--output', target, '--max', '2400'],
-        dirname(path),
-        60000
-      );
+      const rendered = await runPythonSpec(
+        (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+        python, renderer,
+        { input: path, output: target, max: 2400 },
+        { cwd: dirname(path), timeoutMs: 60000 });
       if (rendered.exitCode === 0) {
         try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
       }
@@ -217,12 +216,11 @@ function apply(ctx) {
     try {
       const python = await resolvePython(ctx);
       const renderer = join(PLUGIN_ROOT, 'scripts', 'svg_inline.py');
-      const result = await runProcessWithTimeout(
-        python.executable,
-        [...python.prefixArgs, renderer, '--input', path, '--output', target],
-        dirname(path),
-        60000
-      );
+      const result = await runPythonSpec(
+        (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+        python, renderer,
+        { input: path, output: target },
+        { cwd: dirname(path), timeoutMs: 60000 });
       const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
       let payload = null;
       try { payload = lines.length ? JSON.parse(lines[lines.length - 1]) : null; } catch (err) { payload = null; }

@@ -274,17 +274,32 @@ async function ensureDshCodex() {
     const target = join(profileDir, 'node_modules', 'dsh-codex');
     // tarball 下载:npmmirror 优先(大陆对官方源 tarball CDN 常被干扰成乱码,实测 HTTP 200 但内容损坏),
     // 下载后校验 gzip 魔数(1F 8B),不是 gzip 就换下一个源重试。
-    const mirrorTarball = `${NPM_MIRROR}/dsh-codex/-/dsh-codex-${DSH_CODEX_VERSION}.tgz`;
+    // npmmirror 的 tarball 会 302 到 cdn.npmmirror.com:把 CDN 直链也列为候选;
+    // 逐候选下载并做 gzip 魔数校验,某源被网络干扰成乱码(HTTP 200 但非 gzip)时自动换下一个。
+    const candidates = [
+      `${NPM_MIRROR}/dsh-codex/-/dsh-codex-${DSH_CODEX_VERSION}.tgz`,
+      `https://cdn.npmmirror.com/packages/dsh-codex/${DSH_CODEX_VERSION}/dsh-codex-${DSH_CODEX_VERSION}.tgz`,
+      tarball,
+    ];
     const archivePath = join(work, 'pkg.tgz');
-    await download([mirrorTarball, tarball], archivePath);
-    const { open: openHandle } = await import('node:fs/promises');
-    const handle = await openHandle(archivePath, 'r');
-    const head = Buffer.alloc(2);
-    await handle.read(head, 0, 2, 0);
-    await handle.close();
-    if (head[0] !== 0x1f || head[1] !== 0x8b) {
-      await rm(archivePath, { force: true }).catch(() => {});
-      throw new Error('下载内容校验失败(非 gzip,源被干扰),可稍后在状态卡点「立即准备」重试');
+    let archiveOk = false;
+    let lastDownloadError = '';
+    for (const candidate of candidates) {
+      try {
+        await download([candidate], archivePath);
+        const { open: openHandle } = await import('node:fs/promises');
+        const handle = await openHandle(archivePath, 'r');
+        const head = Buffer.alloc(2);
+        await handle.read(head, 0, 2, 0);
+        await handle.close();
+        if (head[0] === 0x1f && head[1] === 0x8b) { archiveOk = true; break; }
+        await rm(archivePath, { force: true }).catch(() => {});
+      } catch (err) {
+        lastDownloadError = String((err && err.message) || err);
+      }
+    }
+    if (!archiveOk) {
+      throw new Error('下载内容校验失败(全部源均非 gzip,网络干扰),可稍后在状态卡点「立即准备」重试 ' + lastDownloadError.slice(0, 80));
     }
     const extracted = await runCommand('tar', ['-xzf', archivePath, '-C', work]);
     if (!extracted.ok) throw new Error('解压失败: ' + extracted.stderr);

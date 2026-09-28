@@ -1,0 +1,31 @@
+// Python 脚本统一启动器(v1.9.21):官方桌面的沙箱 runner 在 Windows 上传递含空格
+// 参数不可靠(实测项目路径带空格时 argparse 直接 usage 报错;PowerShell 单参数通道正常)。
+// 因此所有脚本调用改为「单参数规格文件」:真实参数写入临时 JSON(argv 只剩一个 ASCII
+// tmpdir 路径),脚本端 --spec 读取。顺带对齐 macOS 行为(该模式下完全一致)。
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/**
+ * 以规格文件模式运行 python 脚本。
+ * @param runOne (executable, argsArray, cwd, timeoutMs) => Promise<{exitCode, stdout, stderr, timedOut?}>
+ * @param python { executable, prefixArgs }
+ * @param scriptPath 脚本绝对路径
+ * @param argsObject 各参数(值仅限字符串/数字,路径可为任意含空格/中文)
+ */
+export async function runPythonSpec(runOne, python, scriptPath, argsObject, { cwd, timeoutMs } = {}) {
+  const work = await mkdtemp(join(tmpdir(), 'dsh-pyspec-'));
+  try {
+    const specPath = join(work, 'spec.json');
+    await writeFile(specPath, JSON.stringify(argsObject), 'utf8');
+    const result = await runOne(
+      python.executable,
+      [...(python.prefixArgs || []), scriptPath, '--spec', specPath],
+      cwd || tmpdir(),
+      timeoutMs,
+    );
+    return result;
+  } finally {
+    rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}

@@ -5,16 +5,48 @@ dsh-codex 的 imagegen 上游把 size 写死为 auto,无法在请求里指定比
 已在目标比例内(±0.5%)则原样通过,不重编码。"""
 
 import argparse
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except NameError:
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        _sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(_sys.stderr, 'reconfigure'):
+        _sys.stderr.reconfigure(encoding='utf-8')
+
 import pathlib
 from PIL import Image, ImageOps
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, type=pathlib.Path)
-    parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--input", type=pathlib.Path)
+    parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--size", required=True, help="目标比例的参考尺寸 WxH,如 1080x1920")
+    parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if getattr(args, 'spec', None):
+        import json as _json
+        from pathlib import Path as _P
+        spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
+        # 值经 argparse 声明的 type 转换器处理(如 Path),与命令行语义一致。
+        for action in parser._actions:
+            if action.dest in spec:
+                value = spec[action.dest]
+                if action.type is not None:
+                    try:
+                        value = action.type(value)
+                    except Exception:
+                        pass
+                setattr(args, action.dest, value)
+        for key, value in spec.items():
+            if not hasattr(args, key):
+                setattr(args, key, value)
+        if getattr(args, 'input', None) is None and not getattr(args, 'prepare', False):
+            parser.error('--input is required')
     try:
         target_w, target_h = (int(v) for v in str(args.size).lower().split("x"))
         if target_w <= 0 or target_h <= 0:

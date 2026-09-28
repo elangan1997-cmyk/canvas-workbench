@@ -109,13 +109,15 @@ export async function pickFolder(ctx, runProcess, prompt = '选择画布项目�
 
 export async function openFolder(ctx, runProcess, path) {
   if (isWindows) {
-    const explorer = await resolveFirst(ctx, ['explorer.exe', 'explorer']);
-    if (!explorer) throw new Error('未找到 Windows 资源管理器');
-    const result = await runProcess(explorer, [path], path);
-    // explorer.exe 的退出码不可靠：目标目录已在资源管理器中打开过时也会返回 1（实测），
-    // 上游按 exitCode !== 0 判失败 → "无法打开项目目录"误报。只有真正的启动失败才当错误。
-    if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('资源管理器打开失败（exit ' + result.exitCode + '）');
-    return result.exitCode === 1 ? { ...result, exitCode: 0 } : result;
+    // 直接 spawn explorer 经沙箱 runner 会被静默吞掉(实机:画布有反馈但窗口不弹),
+    // 改走实测可用的 PowerShell -EncodedCommand 通道,Start-Process 脱离 runner 上下文。
+    const powershell = await resolveFirst(ctx, ['powershell.exe', 'powershell']);
+    if (!powershell) throw new Error('未找到 Windows PowerShell');
+    const script = '$p = ' + psSingleQuote(String(path)) + '; Start-Process explorer.exe -ArgumentList $p';
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const result = await runProcess(powershell, ['-NoLogo', '-NoProfile', '-EncodedCommand', encoded], userHome());
+    if (result.exitCode !== 0) throw new Error('资源管理器打开失败（exit ' + result.exitCode + '）：' + String(result.stderr || '').slice(0, 120));
+    return result;
   }
   if (isMac) {
     const opener = await resolveFirst(ctx, ['open']);
@@ -128,12 +130,14 @@ export async function openFolder(ctx, runProcess, path) {
 
 export async function revealFile(ctx, runProcess, path, cwd) {
   if (isWindows) {
-    const explorer = await resolveFirst(ctx, ['explorer.exe', 'explorer']);
-    if (!explorer) throw new Error('未找到 Windows 资源管理器');
-    const result = await runProcess(explorer, ['/select,', path], cwd);
-    // 同 openFolder：explorer 对 /select 也常返回 1，归一为成功。
-    if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error('资源管理器定位失败（exit ' + result.exitCode + '）');
-    return result.exitCode === 1 ? { ...result, exitCode: 0 } : result;
+    // 同 openFolder:explorer 直启经 runner 静默失败,走 PowerShell 通道(/select 定位)。
+    const powershell = await resolveFirst(ctx, ['powershell.exe', 'powershell']);
+    if (!powershell) throw new Error('未找到 Windows PowerShell');
+    const script = '$p = ' + psSingleQuote(String(path)) + '; Start-Process explorer.exe -ArgumentList ("/select,`"$p`"")';
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const result = await runProcess(powershell, ['-NoLogo', '-NoProfile', '-EncodedCommand', encoded], userHome());
+    if (result.exitCode !== 0) throw new Error('资源管理器定位失败（exit ' + result.exitCode + '）：' + String(result.stderr || '').slice(0, 120));
+    return result;
   }
   if (isMac) {
     const opener = await resolveFirst(ctx, ['open']);

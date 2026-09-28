@@ -6,6 +6,7 @@ import { access, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/
 import { closeAdobeDocumentsUnder, isMac, isWindows, openWithSystem, resolvePython, runAdobeJsxViaCom } from '../../../lib/platform.js';
 import { generateImage, readImageEngineSettings } from '../../../lib/image-engine.js';
 import { readBody, respond } from '../server/http.js';
+import { runPythonSpec } from '../services/python-launch.js';
 import { decodeImageData, normalizeTextLayerText, safeImageName } from '../../shared/utils/data-url.js';
 import { analyzeTextWithCurrentModel, visionBlocks } from '../services/text-analysis.js';
 import { PLUGIN_ROOT } from '../vendor-assets.js';
@@ -68,9 +69,12 @@ export function register(router, h) {
               // turn a Chinese line into Latin-looking noise (for example
               // “STL”).  Keep an explicit caller override, but default both
               // full-image and crop OCR to the sparse layout detector.
-              const ocrArgs = [script, '--input', tempInput, '--lang', String(body.lang || 'chi_sim+eng'), '--psm', String(body.psm || '11')];
-              if (crop) ocrArgs.push('--crop', JSON.stringify(crop));
-              const result = await runProcessWithTimeout(python.executable, [...python.prefixArgs, ...ocrArgs], pluginRoot, 120000);
+              // 参数走规格文件:沙箱 runner 对含空格参数(项目路径)在 Windows 上不可靠。
+              const ocrSpec = { input: tempInput, lang: String(body.lang || 'chi_sim+eng'), psm: String(body.psm || '11') };
+              if (crop) ocrSpec.crop = JSON.stringify(crop);
+              const result = await runPythonSpec(
+                (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+                python, script, ocrSpec, { cwd: pluginRoot, timeoutMs: 120000 });
               const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
               let payload = null;
               try { payload = lines.length ? JSON.parse(lines[lines.length - 1]) : null; } catch (err) { payload = null; }
