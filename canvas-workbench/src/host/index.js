@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { access, mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { isMac, isWindows, resolvePython } from '../../lib/platform.js';
+import { isMac, isWindows, resolvePython, resolvePythonWithDeps } from '../../lib/platform.js';
 import { PLUGIN_ROOT } from './vendor-assets.js';
 import { createPythonToolRegistry } from './adapters/python.adapter.js';
 import { startToolchainProvisioning } from './services/local-toolchain.js';
@@ -111,7 +111,7 @@ function apply(ctx) {
       // 改用插件自带 Python 渲染 PSD 合成图（Pillow 直读，psd_tools 缩略图兜底）；
       // Python 缺失或转换失败时仍然回退占位图，不阻断画布。
       try {
-        const python = await resolvePython(ctx);
+        const python = await resolvePythonWithDeps(ctx);
         const renderer = join(PLUGIN_ROOT, 'scripts', 'psd_preview.py');
         const rendered = await runPythonSpec(
           (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
@@ -167,7 +167,7 @@ function apply(ctx) {
     // ⚠️ 仅非 macOS：macOS 保持 1.8.0 的原路径（pdftoppm -> qlmanage -> 占位图）不变，
     // 避免 mac 上多出一条未验证的渲染分支 —— 本仓库的跨平台兼容承诺是"mac 行为零变化"。
     if (!isMac) try {
-      const python = await resolvePython(ctx);
+      const python = await resolvePythonWithDeps(ctx);
       const renderer = join(PLUGIN_ROOT, 'scripts', 'document_preview.py');
       const rendered = await runPythonSpec(
         (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
@@ -214,7 +214,7 @@ function apply(ctx) {
     const target = join(previewCache, key + '.svg');
     try { await access(target); return { path: target, mime: 'image/svg+xml' }; } catch (err) {}
     try {
-      const python = await resolvePython(ctx);
+      const python = await resolvePythonWithDeps(ctx);
       const renderer = join(PLUGIN_ROOT, 'scripts', 'svg_inline.py');
       const result = await runPythonSpec(
         (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
@@ -364,7 +364,7 @@ function apply(ctx) {
   };
 
   const jobs = createJobManager();
-  const pythonTools = createPythonToolRegistry({ pluginRoot: PLUGIN_ROOT, resolvePython: (c) => resolvePython(c || ctx), run: runProcessWithTimeout });
+  const pythonTools = createPythonToolRegistry({ pluginRoot: PLUGIN_ROOT, resolvePython: (c) => resolvePythonWithDeps(c || ctx), run: runProcessWithTimeout });
   // Adobe 桥接（Photoshop/Illustrator 脚本面板 ⇄ 画布）：纯文件夹传输，协议见 adobe-bridge/PROTOCOL.md。
   // runProcess/resolveExecutable 用于"远程驱动"（画布直接取 PS 图层 / 直接置入返回件），见服务内注释。
   const adobeBridge = createAdobeBridge({

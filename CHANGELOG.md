@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.36（2026-09-29）
+
+- **文字重建 PSD 修复**：修正 `--spec` 中连字号键与 argparse 下划线 `dest` 的取值错配，解决“编辑文字→PSD”的 `KeyError: clean_input`；同时扫描并修正全部 16 个 spec-aware Python 工具。新增 `ag-psd` 原生 Type layer 写入路径，Mac/Windows 共用，Adobe 脚本作为失败回退。
+- **Photoshop / Illustrator 双向桥接修复**：macOS ExtendScript 用 `~/.dsh/` 与 ASCII 驱动脚本避免路径被错误映射到 `/Volumes/Users`；Windows 保留绝对路径、COM `DoJavaScriptFile`、PowerShell `-EncodedCommand` 和 UAC 安装分支。
+- **生图比例与聊天语义**：把已选 21:9/2560×1080 等尺寸约束在 Provider 分派前统一注入，API 与 dsh-codex 共用；Agent 不再误判“未选比例”或擅自改为 16:9。
+- **“图片输出”准确化**：只展示本轮 `imagegen` 最终生成图，参考图、模型检查/裁剪中间图、旧文件引用及其他工具附件不再误收；开启自动上画布且已绑定项目时不再重复显示卡片。
+- **深色画布色彩保真**：仅将 Excalidraw 深色主题的还原滤镜从 `invert(.93)` 校正为 `invert(1)`，解决同一张图在聊天正常、画布发白低饱和的问题；浅色主题和原图字节不变。
+- **本地工具链与运行可观测性**：完善 Python 运行时/依赖自愈、BiRefNet CPU 推理、PSD/SVG/OCR/矢量化链路，并新增宿主操作日志与工具链日志入口。工具链卡片将 BiRefNet 从容易误解的“识别模型”更正为“去背景模型”。
+- **发布和 Windows 兼容加固**：修复 npm 包的注册 id、`cordis.patch.yml` 和 `adobe-bridge/` 遗漏；修正 Windows 安装器未声明参数，补充 PS5.1/BOM/UAC/COM/路径的自动门禁。
+
 ## 1.9.2
 
 - **修复自动上画布出现两张重复图**:宿主的完成记录是环形列表、每轮轮询都会重放,占位替换路径此前未登记去重,第二轮轮询走了兜底"普通加入"导致同图两次入画。现在同一路径无论占位替换还是兜底加入都只处理一次(上限 500 条防无界)。

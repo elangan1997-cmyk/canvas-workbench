@@ -126,7 +126,16 @@ sync_package() {
       && { [ ! -f "$source/README.md" ] || cmp -s "$source/README.md" "$destination/README.md"; } \
       && { [ ! -d "$source/scripts" ] \
         || { [ -d "$destination/scripts" ] \
-          && diff -qr "$source/scripts" "$destination/scripts" >/dev/null; }; }; then
+          && diff -qr "$source/scripts" "$destination/scripts" >/dev/null; }; } \
+      && { [ ! -d "$source/src" ] \
+        || { [ -d "$destination/src" ] \
+          && diff -qr "$source/src" "$destination/src" >/dev/null; }; } \
+      && { [ ! -d "$source/adobe-bridge" ] \
+        || { [ -d "$destination/adobe-bridge" ] \
+          && diff -qr "$source/adobe-bridge" "$destination/adobe-bridge" >/dev/null; }; } \
+      && { [ ! -d "$source/vendor" ] \
+        || { [ -d "$destination/vendor" ] \
+          && diff -qr "$source/vendor" "$destination/vendor" >/dev/null; }; }; then
       say "已是最新，跳过复制：$destination"
       continue
     fi

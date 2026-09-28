@@ -11,7 +11,7 @@ import {
 } from '../../src/host/services/image-engine-settings.js';
 import { parseImagePayload, imageApiRetryDelay, modelIdsFromPayload, RETRYABLE_IMAGE_API_STATUSES, gatewaySizeFor } from '../../src/providers/image/openai-compatible.provider.js';
 import { imageMediaType, dataUrl } from '../../src/shared/utils/image-bytes.js';
-import { imageProviders, generateImage } from '../../src/providers/image-engine.js';
+import { imageProviders, generateImage, ratioHintFor } from '../../src/providers/image-engine.js';
 import * as libShim from '../../lib/image-engine.js';
 
 test('registry: register / get / require / findByCapability', () => {
@@ -135,4 +135,12 @@ test('gatewaySizeFor:非标比例映射到网关标准三档(对数距离最近)
   for (const [input, expected] of Object.entries(cases)) assert.equal(gatewaySizeFor(input), expected, input);
   assert.equal(gatewaySizeFor('auto'), '');
   assert.equal(gatewaySizeFor('bogus'), '');
+});
+
+test('ratioHintFor:把画布选择明确注入模型提示词', () => {
+  const hint = ratioHintFor('2560x1080');
+  assert.match(hint, /21:9/);
+  assert.match(hint, /2560×1080/);
+  assert.match(hint, /必须遵守/);
+  assert.equal(ratioHintFor('auto'), '');
 });

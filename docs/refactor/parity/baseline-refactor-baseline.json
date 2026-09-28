@@ -25,10 +25,10 @@
       "imageEngine": {
         "engine": "dsh-codex",
         "api": {
-          "configured": false,
-          "baseUrl": "https://ai-pixel.online",
+          "configured": true,
+          "baseUrl": "https://ai.t8star.org",
           "model": "gpt-image-2",
-          "ready": false
+          "ready": true
         },
         "dshCodex": {
           "installed": true,
@@ -54,15 +54,15 @@
     "body": {
       "ok": true,
       "engine": "dsh-codex",
-      "apiBaseUrl": "https://ai-pixel.online",
+      "apiBaseUrl": "https://ai.t8star.org",
       "apiModel": "gpt-image-2",
       "health": {
         "engine": "dsh-codex",
         "api": {
-          "configured": false,
-          "baseUrl": "https://ai-pixel.online",
+          "configured": true,
+          "baseUrl": "https://ai.t8star.org",
           "model": "gpt-image-2",
-          "ready": false
+          "ready": true
         },
         "dshCodex": {
           "installed": true,

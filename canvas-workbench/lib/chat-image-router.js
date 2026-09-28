@@ -185,7 +185,7 @@ function contentOf(value) {
     : value.writeError ? `\n<write_error>${value.writeError}</write_error>` : '';
   const noticeLine = value.notice ? `\n<notice>${value.notice}</notice>` : '';
   return [
-    { type: 'text', text: `<image>image/png, ${value.image.width}x${value.image.height} px, ${value.image.bytes} bytes</image>${fileLine}${noticeLine}` },
+    { type: 'text', text: `<canvas_image_output producer="imagegen">final</canvas_image_output>\n<image>image/png, ${value.image.width}x${value.image.height} px, ${value.image.bytes} bytes</image>${fileLine}${noticeLine}` },
     { type: 'image', attachment: value.image },
   ];
 }
@@ -193,9 +193,9 @@ function contentOf(value) {
 function routedTool(ctx, original, getChatContext) {
   return defineTool({
     name: TOOL_NAME,
-    description: '聊天内生图/改图的唯一推荐入口：使用当前画布「图像引擎设置」生成或编辑图片，自动落盘归档到 DSH聊天生成图片/<会话名>/<日期>/<时段>，并遵循输入区选择的比例与数量。不要改用 codex-imagegen-bridge、pixel-image2 等技能脚本或外部 CLI——它们脱离画布管线，且在本环境常因缺 node 直接失败。设计模式开启时结果自动上画布；关闭设计模式时使用 DSH 原生图片工具。',
+    description: '聊天内生图/改图的唯一推荐入口：使用当前画布「图像引擎设置」生成或编辑图片，自动落盘归档到 DSH聊天生成图片/<会话名>/<日期>/<时段>。重要：输入框旁的比例与数量由工具执行时自动读取并强制注入，虽然它们不出现在工具参数中，也绝不能声称用户未选择、擅自改成推荐比例或再次询问比例。不要改用 codex-imagegen-bridge、pixel-image2 等技能脚本或外部 CLI——它们脱离画布管线。设计模式开启时结果自动上画布；关闭设计模式时使用 DSH 原生图片工具。',
     parameters: {
-      prompt: { type: 'string', required: true, description: '完整的图片生成或编辑要求。' },
+      prompt: { type: 'string', required: true, description: '完整的图片生成或编辑要求；不要自行补写或更改比例，当前画布比例会由工具自动注入。' },
       referenced_image_paths: { type: 'array', items: { type: 'string' }, description: '最多五张本地参考图片路径。' },
       num_last_images_to_include: { type: 'integer', description: '使用最近 1-5 张聊天图片。' },
       output_path: { type: 'string', description: '可选文件名；设计模式下始终归档到当前画布项目目录。' },

@@ -21,7 +21,30 @@ const SCRIPT_FILES_BY_APP = {
   illustrator: ['dsh-bridge-core.jsx', 'DSH画布桥接-Illustrator.jsx', 'DSH桥接-发送选中对象-Illustrator.jsx', 'DSH桥接-置入返回件-Illustrator.jsx']
 };
 const SCRIPT_FILES = [...new Set([...SCRIPT_FILES_BY_APP.photoshop, ...SCRIPT_FILES_BY_APP.illustrator])];
+// Photoshop 2025 ExtendScript 在部分 macOS 机器上会把真实存在的中文文件名
+// File("…/DSH画布桥接-Photoshop.jsx") 判为不存在（错误 48）。菜单脚本继续保留
+// 中文名称，远程驱动另用 ASCII 副本，Windows 也复用同一稳定路径。
+const REMOTE_SCRIPT_FILES = {
+  photoshop: { source: 'DSH画布桥接-Photoshop.jsx', target: 'dsh-bridge-photoshop.jsx' },
+  illustrator: { source: 'DSH画布桥接-Illustrator.jsx', target: 'dsh-bridge-illustrator.jsx' }
+};
 const filesForApp = (app) => SCRIPT_FILES_BY_APP[app] || SCRIPT_FILES;
+const copyUserScripts = async (sourceDir, userCopyDir) => {
+  for (const file of SCRIPT_FILES) await copyFile(join(sourceDir, file), join(userCopyDir, file));
+  for (const item of Object.values(REMOTE_SCRIPT_FILES)) {
+    await copyFile(join(sourceDir, item.source), join(userCopyDir, item.target));
+  }
+};
+// Photoshop 2025 on macOS can mis-resolve an absolute /Users/... ExtendScript
+// File path as /Volumes/Users/... (error 48). Its native "~/..." resolver is
+// stable, so paths inside the current home are handed to ExtendScript that way.
+// Windows keeps its absolute path for COM DoJavaScriptFile compatibility.
+const extendScriptPath = (path, home, isWindows) => {
+  const value = String(path || '');
+  const base = String(home || '').replace(/[\\/]+$/, '');
+  if (!isWindows && base && (value === base || value.startsWith(base + '/'))) return '~' + value.slice(base.length);
+  return value;
+};
 // 心跳：客户端 3s 一次 activate；握手文件最多 20s 重写一次（项目变化时立即写）。
 const HANDSHAKE_REWRITE_MS = 20000;
 // 收件文件写完 ≥ 1s 才算稳定（脚本用 .part+rename，这里再兜一层）。
@@ -392,7 +415,7 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
     for (const file of SCRIPT_FILES) if (!(await exists(join(sourceDir, file)))) throw new Error('插件缺少脚本文件：' + file);
     const userCopyDir = join(root, 'scripts');
     await mkdir(userCopyDir, { recursive: true });
-    for (const file of SCRIPT_FILES) await copyFile(join(sourceDir, file), join(userCopyDir, file));
+    await copyUserScripts(sourceDir, userCopyDir);
     const targets = await findAdobeScriptDirs();
     const installed = [];
     const errors = [];
@@ -492,7 +515,7 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
      依赖 createAdobeBridge({ runProcess, resolveExecutable })；测试环境不传则报「当前环境不支持」。 */
   const APP_BUNDLE = { photoshop: 'com.adobe.Photoshop', illustrator: 'com.adobe.Illustrator' };
   const APP_COM = { photoshop: 'Photoshop.Application', illustrator: 'Illustrator.Application' };
-  const APP_SCRIPT = { photoshop: 'DSH画布桥接-Photoshop.jsx', illustrator: 'DSH画布桥接-Illustrator.jsx' };
+  const APP_SCRIPT = { photoshop: REMOTE_SCRIPT_FILES.photoshop.target, illustrator: REMOTE_SCRIPT_FILES.illustrator.target };
   const APP_LABEL = { photoshop: 'Photoshop', illustrator: 'Illustrator' };
   const remoteWorkDir = () => join(tmpdir(), 'dsh-canvas-bridge');
   /* PowerShell 命令一律经 -EncodedCommand 传输（Base64 of UTF-16LE）：
@@ -507,7 +530,7 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
     const userCopyDir = join(root, 'scripts');
     await mkdir(userCopyDir, { recursive: true });
     /* 无条件覆盖：7 个小文件，别用 size/mtime 判断——曾出现“判定已同步、实际是旧版”导致排查绕大弯 */
-    for (const file of SCRIPT_FILES) await copyFile(join(sourceDir, file), join(userCopyDir, file));
+    await copyUserScripts(sourceDir, userCopyDir);
     return userCopyDir;
   };
 
@@ -538,7 +561,7 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
     requireRemote();
     if (!APP_SCRIPT[app]) throw new Error('未知应用：' + app);
     const limit = Math.max(15000, Number(timeoutMs) || 120000);
-    const scriptPath = join(await ensureUserCopy(), APP_SCRIPT[app]);
+    const scriptPath = extendScriptPath(join(await ensureUserCopy(), APP_SCRIPT[app]), home || userHome(), isWindows);
     const workDir = remoteWorkDir();
     await mkdir(workDir, { recursive: true });
     const stamp = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
@@ -701,4 +724,4 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
   return { root, bridgeDirsFor, activate, writeHandshake, listInbound, ackInbound, resolveOrigin, createReturn, status, installScripts, installScriptsElevated, installCep, cepInstalled, cepTargetDir, ensureInstalled, ensureUserCopy, findAdobeScriptDirs, appRunning, remoteEval, pullSelection, placePending, log };
 }
 
-export { bridgeRootDir, bridgeDirsFor, SCRIPT_FILES as ADOBE_BRIDGE_SCRIPT_FILES, SCRIPT_FILES_BY_APP as ADOBE_BRIDGE_SCRIPT_FILES_BY_APP };
+export { bridgeRootDir, bridgeDirsFor, extendScriptPath, SCRIPT_FILES as ADOBE_BRIDGE_SCRIPT_FILES, SCRIPT_FILES_BY_APP as ADOBE_BRIDGE_SCRIPT_FILES_BY_APP };

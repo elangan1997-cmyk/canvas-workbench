@@ -11,9 +11,9 @@
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, symlink, cp, stat, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, cp, stat, readFile, realpath, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export function defaultDshNodeModules() {
@@ -112,6 +112,31 @@ export async function startHost({ pluginDir, port = 0, workspaceRoot = null, nod
   });
   try { await realpath(nodeModules); await symlink(nodeModules, join(stageRoot, 'node_modules'), 'dir'); }
   catch (err) { throw new Error('DSH node_modules 不可用（用于解析 @deepseek-ai/*）：' + nodeModules + ' — ' + err.message); }
+
+  // cp 到隔离 stage 时会刻意排除 node_modules，但候选版 Host 仍必须能解析
+  // package.json 正式声明的运行时依赖（如 ag-psd）。逐项链接工作树已安装副本，
+  // 既不把整棵 node_modules 复制进临时目录，也不用假 stub 掩盖真实包装缺失。
+  const stagedPackage = JSON.parse(await readFile(join(stage, 'package.json'), 'utf8'));
+  for (const dependency of Object.keys(stagedPackage.dependencies || {})) {
+    const installed = join(pluginDir, 'node_modules', ...dependency.split('/'));
+    try { await realpath(installed); }
+    catch (err) { throw new Error(`候选插件运行时依赖未安装：${dependency} — ${err.message}`); }
+    const target = join(stage, 'node_modules', ...dependency.split('/'));
+    await mkdir(dirname(target), { recursive: true });
+    await symlink(installed, target, 'dir');
+  }
+
+  // Electron 内置的 @deepseek-ai/dsh-tools 由宿主模块加载器提供，不一定作为
+  // 实体包出现在 profile/node_modules。独立 Host 只需 defineTool 的最小形状，
+  // 因此在实体包缺席时为测试 stage 放一个局部 stub；生产插件仍由 DSH 提供真包。
+  try {
+    await realpath(join(nodeModules, '@deepseek-ai', 'dsh-tools'));
+  } catch {
+    const stub = join(stage, 'node_modules', '@deepseek-ai', 'dsh-tools');
+    await mkdir(stub, { recursive: true });
+    await writeFile(join(stub, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', type: 'module', exports: './index.js' }), 'utf8');
+    await writeFile(join(stub, 'index.js'), 'export const defineTool = (spec) => spec;\n', 'utf8');
+  }
 
   let handlerSpec = null;
   const ctx = makeFakeCtx({ workspaceRoot, onRegister: (spec) => { handlerSpec = spec; } });

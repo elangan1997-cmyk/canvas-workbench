@@ -67,6 +67,16 @@ export function register(router, h) {
           return;
   });
 
+  // 宿主操作日志尾部(Python 调用/工具链迁移/桥接事件),诊断"失败但没报错"的场景。
+  router.add({ method: 'GET', path: '/dsh-canvas/toolchain-log', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          const { readOpTail } = await import('../services/op-log.js');
+          const { parseQuery } = await import('../server/http.js');
+          const lines = Math.max(10, Math.min(300, Number(parseQuery(query).lines) || 80));
+          const text = await readOpTail(lines);
+          respond(res, 200, { ...CORS, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }, text || '(暂无日志)');
+          return;
+  });
+
   router.add({ method: 'GET', path: '/dsh-canvas/update-check', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
           respond(res, 200, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: true, ...(await checkUpdate()) }));
           return;

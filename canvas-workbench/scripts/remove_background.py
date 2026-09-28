@@ -34,7 +34,17 @@ import time
 REMBG_VERSION = "2.0.61"
 RUNTIME_ROOT = Path.home() / ".dsh" / "canvas-workbench" / "rembg-runtime"
 MODEL_ROOT = Path.home() / ".dsh" / "canvas-workbench" / "rembg-models"
-MODEL_URL = os.environ.get("DSH_REMBG_MODEL_URL", "https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx")
+# 2026-09-28 起默认 BiRefNet-lite:抠图质量显著优于 isnet,体积 214MB 与 isnet 的 170MB 同量级;
+# rembg 2.0.61 原生支持 birefnet-general-lite 会话。onnx 文件名必须等于 rembg 会话名,
+# pooch 按文件名命中缓存,预置与按需下载只落一份。
+DEFAULT_SESSION = "birefnet-general-lite"
+GH_REL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0"
+SESSION_MODELS = {
+    "birefnet-general-lite": GH_REL + "/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx",
+    "birefnet-general": GH_REL + "/BiRefNet-general-epoch_244.onnx",
+    "isnet-general-use": GH_REL + "/isnet-general-use.onnx",
+}
+MODEL_URL = os.environ.get("DSH_REMBG_MODEL_URL", SESSION_MODELS[DEFAULT_SESSION])
 MARKER = RUNTIME_ROOT / ("rembg-" + REMBG_VERSION + ".ready")
 PROGRESS_PATH: Path | None = None
 
@@ -120,19 +130,20 @@ def ensure_runtime_no_exec() -> None:
     install_runtime()
 
 
-def prepare_model() -> None:
-    """预下载 isnet 模型到 REMBG_HOME(pooch 之后按文件命中缓存,不再联网)。"""
+def prepare_model(session: str = DEFAULT_SESSION) -> None:
+    """预下载模型到 REMBG_HOME(pooch 之后按文件命中缓存,不再联网)。"""
     MODEL_ROOT.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("REMBG_HOME", str(MODEL_ROOT))
     os.environ.setdefault("U2NET_HOME", str(MODEL_ROOT))
     os.environ.setdefault("OMP_NUM_THREADS", "2")
-    emit_progress("model", "正在预下载 isnet-general-use 模型", 55)
+    url = SESSION_MODELS.get(session, MODEL_URL)
+    emit_progress("model", "正在预下载 " + session + " 模型", 55)
     try:
         import pooch  # type: ignore
         pooch.retrieve(
-            url=MODEL_URL,
+            url=url,
             known_hash=None,
-            fname="isnet-general-use.onnx",
+            fname=session + ".onnx",
             path=str(MODEL_ROOT),
             progressbar=False,
         )
@@ -178,7 +189,8 @@ def ensure_runtime() -> None:
 class ModelDownloadProgress:
     """把 pooch 下载器的字节回调转成前端可显示的模型下载进度。"""
 
-    def __init__(self) -> None:
+    def __init__(self, label: str = "模型") -> None:
+        self.label = label
         self.total = 0
         self.downloaded = 0
         self.last_reported = -1
@@ -196,14 +208,14 @@ class ModelDownloadProgress:
             return
         self.last_reported = percent
         self.last_report_at = now
-        emit_progress("model", "正在下载 isnet-general-use 模型（" + str(percent) + "%）", percent)
+        emit_progress("model", "正在下载 " + self.label + " 模型（" + str(percent) + "%）", percent)
 
     def reset(self) -> None:
         # pooch 下载完成后会调用 reset，再 update(total)；不要让进度回退。
         return
 
     def close(self) -> None:
-        emit_progress("model", "模型下载完成，正在加载 isnet-general-use", 85)
+        emit_progress("model", "模型下载完成，正在加载 " + self.label, 85)
 
 
 def new_session_with_progress(new_session, model: str):
@@ -214,12 +226,15 @@ def new_session_with_progress(new_session, model: str):
 
     def retrieve(*args, **kwargs):
         if kwargs.get("progressbar") is True:
-            kwargs["progressbar"] = ModelDownloadProgress()
+            kwargs["progressbar"] = ModelDownloadProgress(str(model))
         return original_retrieve(*args, **kwargs)
 
     pooch.retrieve = retrieve
     try:
-        return new_session(model)
+        # 强制 CPU:macOS 的 onnxruntime 会把 CoreML EP 排在可用列表首位,rembg 默认
+        # 照单全收,CoreML 编译 214MB 的 BiRefNet 会无限挂死(2026-09-28 实测);
+        # CPU EP 建模仅 2s,推理结果确定,Windows 的 rembg[cpu] 本就只有 CPU。
+        return new_session(model, providers=["CPUExecutionProvider"])
     finally:
         pooch.retrieve = original_retrieve
 
@@ -228,7 +243,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--model", default="isnet-general-use")
+    parser.add_argument("--model", default=DEFAULT_SESSION)
     parser.add_argument("--progress-file", type=Path, default=None)
     parser.add_argument("--prepare", action="store_true", help="只准备运行环境与模型(后台预置),不做推理")
     parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
@@ -245,7 +260,7 @@ def main() -> int:
             if key not in spec and key.replace('_', '-') in spec:
                 key = key.replace('_', '-')
             if key in spec:
-                value = spec[action.dest]
+                value = spec[key]
                 if action.type is not None:
                     try:
                         value = action.type(value)
@@ -257,7 +272,7 @@ def main() -> int:
                 setattr(args, key, value)
     if args.prepare:
         ensure_runtime_no_exec()
-        prepare_model()
+        prepare_model(args.model)
         print(json.dumps({"ok": True, "prepared": True}, ensure_ascii=False), flush=True)
         return 0
     if not args.input or not args.output:
@@ -265,8 +280,8 @@ def main() -> int:
     global PROGRESS_PATH
     PROGRESS_PATH = args.progress_file
     emit_progress("environment", "正在准备本地 rembg 环境", 3)
-    if args.model != "isnet-general-use":
-        raise RuntimeError("仅支持 isnet-general-use 模型")
+    if args.model not in SESSION_MODELS:
+        raise RuntimeError("不支持的模型:" + str(args.model) + "(可选:" + ", ".join(SESSION_MODELS) + ")")
     if not args.input.exists():
         raise RuntimeError("输入图片不存在：" + str(args.input))
 

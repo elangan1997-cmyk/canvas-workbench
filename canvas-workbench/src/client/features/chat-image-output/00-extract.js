@@ -205,6 +205,19 @@
         });
     }
 
+    // “图片输出”不是通用的图片扫描器。新版 DSH 会把模型读过的参考图、
+    // 裁剪检查图和工具中间附件都放进同一个 turn；只有 canvas imagegen
+    // 路由明确标为 final 的产物才属于这里。
+    function extractGeneratedImagePaths(event) {
+      const data = event && event.data;
+      if (!data) return [];
+      let serialized = '';
+      try { serialized = JSON.stringify(data); } catch (error) { return []; }
+      if (serialized.indexOf('<canvas_image_output producer=\\"imagegen\\">final</canvas_image_output>') < 0
+        && serialized.indexOf('<canvas_image_output producer="imagegen">final</canvas_image_output>') < 0) return [];
+      return extractImagePaths(event).map((item) => ({ ...item, producer: 'imagegen' }));
+    }
+
     // 最终助手回复里的图片名用来做“名字校准”（裸名映射回工具结果里的稳定
     // 附件引用），不再用来整体取舍。中间 tool/result 里的扫描/预览参考图
     // 由图片输出卡片的文件修改时间过滤负责隐藏。
@@ -261,4 +274,3 @@
         return stable || { path, seq, startTime: startTime || 0, sourcePath: '' };
       });
     }
-

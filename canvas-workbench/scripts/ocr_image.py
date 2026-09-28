@@ -249,7 +249,7 @@ def main() -> int:
             if key not in spec and key.replace('_', '-') in spec:
                 key = key.replace('_', '-')
             if key in spec:
-                value = spec[action.dest]
+                value = spec[key]
                 if action.type is not None:
                     try:
                         value = action.type(value)
@@ -266,12 +266,14 @@ def main() -> int:
             prepare_runtime()
             print(json.dumps({"ok": True, "prepared": True}, ensure_ascii=False), flush=True)
             return 0
+        # 先切引擎再 import PIL:宿主解释器(macOS Homebrew / CLT)通常没有 Pillow,
+        # ensure_engine 会透传重进 ocr-runtime venv(带 PIL 与 RapidOCR)。
+        ensure_engine()
         from PIL import Image
 
         image_path = Path(args.input)
         if not image_path.is_file() or image_path.stat().st_size <= 0:
             raise RuntimeError("OCR 输入图片不存在或为空")
-        ensure_engine()
         image = Image.open(image_path).convert("RGB")
         original_width, original_height = image.size
         offset_x = 0

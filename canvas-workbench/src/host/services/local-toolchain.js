@@ -9,19 +9,23 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dshHome } from './image-engine-settings.js';
 import { resolvePython } from '../../../lib/platform.js';
+import { logOp } from './op-log.js';
 
 const PLUGIN_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 const DATA_ROOT = () => join(dshHome(), 'canvas-workbench');
 const STATUS_PATH = () => join(DATA_ROOT(), 'toolchain-status.json');
 
-const PIP_MIRROR = 'https://pypi.tuna.tsinghua.edu.cn/simple';
+const PIP_MIRRORS = ['https://pypi.tuna.tsinghua.edu.cn/simple', 'https://mirrors.aliyun.com/pypi/simple'];
 const NPM_MIRROR = 'https://registry.npmmirror.com';
-const GH_MIRRORS = ['https://gh-proxy.com/', 'https://mirror.ghproxy.com/'];
+const GH_MIRRORS = ['https://gh-proxy.com/', 'https://ghfast.top/', 'https://mirror.ghproxy.com/'];
 
 const PYTHON_BUILD_TAG = '20241016';
 const PYTHON_VERSION = '3.11.10';
 const DSH_CODEX_VERSION = '0.3.1';
-const REMBG_MODEL_URL = 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx';
+// 2026-09-28 默认模型切 BiRefNet-lite(214MB,质量显著优于 isnet 的 170MB);
+// 文件名必须与 rembg 会话名一致,pooch 按文件名命中缓存。
+const REMBG_MODEL_URL = 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx';
+const REMBG_MODEL_FILE = 'birefnet-general-lite.onnx';
 
 let running = false;
 
@@ -172,32 +176,68 @@ async function ensurePython(ctx) {
   }
 }
 
+/** 单次 prepare 的硬超时:脚本内部对 pip 有 900s 超时,但 pooch 模型下载等环节没有,
+ *  经系统代理的死连接会无限挂住整个预置队列(实测 2026-09-28),到点整组杀掉走重试。 */
+const PREPARE_TIMEOUT_MS = 14 * 60 * 1000;
+
 async function runPrepareOnce(python, scriptName, pipIndex, extraEnv) {
   return new Promise((resolve) => {
     const child = spawn(python, [join(PLUGIN_ROOT, 'scripts', scriptName), '--prepare'], {
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
       env: { ...process.env, DSH_PIP_INDEX: pipIndex, ...extraEnv },
     });
     let out = '';
     let err = '';
+    let settled = false;
+    let timer = null;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+    timer = setTimeout(() => {
+      if (!child.pid) return finish({ ok: false, error: '准备超时:进程未启动' });
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F']).on('close', () => {});
+      } else {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+      }
+      finish({ ok: false, error: '准备超时(' + Math.round(PREPARE_TIMEOUT_MS / 60000) + ' 分钟),已终止并自动重试' });
+    }, PREPARE_TIMEOUT_MS);
     child.stdout && child.stdout.on('data', (c) => { out += c; });
     child.stderr && child.stderr.on('data', (c) => { err += c; });
-    child.on('error', (e) => resolve({ ok: false, error: String(e) }));
-    child.on('close', (code) => resolve({ ok: code === 0, out: out.slice(-300), err: err.slice(-300) }));
+    child.on('error', (e) => finish({ ok: false, error: String(e) }));
+    child.on('close', (code) => finish({ ok: code === 0, out: out.slice(-300), err: err.slice(-300) }));
   });
 }
 
 async function preparePythonTool(python, scriptName, statusKey, extraEnv = {}) {
   try {
     await patchStatus({ [statusKey]: { state: 'preparing' } });
-    // PyPI 直连不可达时走清华镜像(镜像全球可用,只是境外稍慢)。
-    let pipIndex = '';
-    if (!(await reachable('https://pypi.org/simple/'))) pipIndex = PIP_MIRROR;
+    await logOp('toolchain', { key: statusKey, phase: 'start' });
+    // pip 源三级递进(2026-09-28 实测教训):
+    //  1) 官方源 + NO_PROXY(绕开系统代理——Clash 类系统代理会把 files.pythonhosted.org
+    //     的 CDN 拖到近 0 速,直连反而快);2) 可达镜像 + NO_PROXY(清华在本机实测 403,
+    //     逐个探测取第一个可达的,阿里云兜底);3) 可达镜像 + 继承环境(应对直连被墙的网络)。
     // Windows 上杀软实时扫描会短暂锁住新落盘的依赖文件(WinError 32,实测 onnxruntime),
     // 属瞬时占用:失败等 20 秒重试,最多 3 次。
+    let mirrorIndex = '';
+    for (const mirror of PIP_MIRRORS) {
+      if (await reachable(mirror)) { mirrorIndex = mirror; break; }
+    }
+    const bypassProxy = { ...extraEnv, NO_PROXY: '*', no_proxy: '*' };
+    const strategies = [
+      { pipIndex: '', env: bypassProxy },
+      { pipIndex: mirrorIndex, env: bypassProxy },
+      { pipIndex: mirrorIndex, env: { ...extraEnv } },
+    ];
     let lastError = '';
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const result = await runPrepareOnce(python, scriptName, pipIndex, extraEnv);
+      const strategy = strategies[attempt - 1];
+      const result = await runPrepareOnce(python, scriptName, strategy.pipIndex, strategy.env);
+      await logOp('toolchain', { key: statusKey, phase: 'attempt-' + attempt, pipIndex: strategy.pipIndex || 'official', ok: result.ok, error: result.ok ? undefined : String(result.error || result.err || '').slice(0, 200) });
       if (result.ok) {
         await patchStatus({ [statusKey]: { state: 'ready' } });
         return true;
@@ -211,28 +251,32 @@ async function preparePythonTool(python, scriptName, statusKey, extraEnv = {}) {
     throw new Error(lastError);
   } catch (error) {
     await patchStatus({ [statusKey]: { state: 'error', error: String((error && error.message) || error).slice(0, 200) } });
+    await logOp('toolchain', { key: statusKey, phase: 'error', error: String((error && error.message) || error).slice(0, 300) });
     return false;
   }
 }
 
-/** 预下 isnet 模型(约 170MB):宿主走镜像链下好后,rembg 的 pooch 按文件名命中缓存不再联网。 */
+/** 预下 BiRefNet-lite 模型(约 214MB):宿主走镜像链下好后,rembg 的 pooch 按文件名命中缓存不再联网。 */
 async function ensureRembgModel() {
-  const target = join(DATA_ROOT(), 'rembg-models', 'isnet-general-use.onnx');
+  const target = join(DATA_ROOT(), 'rembg-models', REMBG_MODEL_FILE);
   try {
     const info = await stat(target).catch(() => null);
-    if (info && info.size > 100 * 1024 * 1024) {
+    if (info && info.size > 150 * 1024 * 1024) {
       await patchStatus({ rembgModel: { state: 'ready' } });
       return;
     }
     await patchStatus({ rembgModel: { state: 'downloading' } });
+    await logOp('toolchain', { key: 'rembgModel', phase: 'download-start', bytes: info && info.size });
     await download(mirrorChain(REMBG_MODEL_URL), target + '.part', (done, total) => {
       patchStatus({ rembgModel: { state: 'downloading', percent: total ? Math.round((done / total) * 100) : 0 } }).catch(() => {});
     });
     await rename(target + '.part', target);
     await patchStatus({ rembgModel: { state: 'ready' } });
+    await logOp('toolchain', { key: 'rembgModel', phase: 'ready' });
   } catch (error) {
     await rm(target + '.part', { force: true }).catch(() => {});
-    await patchStatus({ rembgModel: { state: 'error', error: String((error && error.message) || error).slice(0, 200) } });
+    await patchStatus({ rembgModel: { state: 'error', error: String((error && error.message) || error).slice(0, 200) } }).catch(() => {});
+    await logOp('toolchain', { key: 'rembgModel', phase: 'error', error: String((error && error.message) || error).slice(0, 300) });
   }
 }
 
@@ -343,10 +387,12 @@ export function startToolchainProvisioning(ctx) {
         await preparePythonTool(python, 'remove_background.py', 'rembg');
         await preparePythonTool(python, 'vectorize_image.py', 'vectorize');
         await preparePythonTool(python, 'ocr_image.py', 'ocr');
+        await preparePythonTool(python, 'export_text_psd.py', 'psdTools');
       }
       await ensureRembgModel();
       await ensureDshCodex();
       await patchStatus({ finishedAt: nowStamp() });
+      await logOp('toolchain', { phase: 'finished' });
     } catch (error) {
       await patchStatus({ error: String((error && error.message) || error).slice(0, 200) }).catch(() => {});
     } finally {
@@ -366,10 +412,12 @@ export async function runToolchainProvisioning(ctx) {
       await preparePythonTool(python, 'remove_background.py', 'rembg');
       await preparePythonTool(python, 'vectorize_image.py', 'vectorize');
       await preparePythonTool(python, 'ocr_image.py', 'ocr');
+      await preparePythonTool(python, 'export_text_psd.py', 'psdTools');
     }
     await ensureRembgModel();
     await ensureDshCodex();
     await patchStatus({ finishedAt: nowStamp() });
+    await logOp('toolchain', { phase: 'finished' });
     return { ok: true, status: await readToolchainStatus() };
   } catch (error) {
     return { ok: false, error: String((error && error.message) || error) };

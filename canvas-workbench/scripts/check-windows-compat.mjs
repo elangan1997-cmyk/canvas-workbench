@@ -61,6 +61,8 @@ function stripJsLines(text) {
 /* ---------- 1+2. Windows 安装器 ---------- */
 const ps1Path = join(repoRoot, 'install-windows.ps1');
 const cmdPath = join(repoRoot, 'install-windows.cmd');
+const legacyPs1Path = join(repoRoot, 'windows-installer', 'install.ps1');
+const legacyCmdPath = join(repoRoot, 'windows-installer', 'install.cmd');
 if (!existsSync(ps1Path)) fail('installer', '缺少 install-windows.ps1（README 引用了它）');
 if (!existsSync(cmdPath)) fail('installer', '缺少 install-windows.cmd（README 引用了它）');
 if (existsSync(ps1Path)) {
@@ -92,6 +94,17 @@ if (existsSync(ps1Path)) {
 if (existsSync(cmdPath)) {
   const buf = readFileSync(cmdPath);
   if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) fail('installer-bom', 'install-windows.cmd 不能带 BOM');
+}
+if (!existsSync(legacyPs1Path) || !existsSync(legacyCmdPath)) {
+  fail('installer-legacy', 'windows-installer/install.ps1 或 install.cmd 缺失');
+} else {
+  const cmd = readFileSync(legacyCmdPath, 'utf8');
+  const ps1 = readFileSync(legacyPs1Path, 'utf8');
+  // cmd 传给 PowerShell 的命名参数必须在 install.ps1 的 param(...) 中存在。
+  // 2026-09 曾出现 install.cmd 传 -SourceRoot、脚本却未声明，双击必然立即失败。
+  const declared = new Set((ps1.match(/param\s*\(([\s\S]*?)\)/i)?.[1] || '').match(/\$[A-Za-z][A-Za-z0-9_]*/g)?.map((x) => x.slice(1).toLowerCase()) || []);
+  const passed = [...cmd.matchAll(/(?:^|\s)-([A-Za-z][A-Za-z0-9_]*)\b/g)].map((m) => m[1]).filter((name) => !['nologo', 'noprofile', 'executionpolicy', 'file'].includes(name.toLowerCase()));
+  for (const name of passed) if (!declared.has(name.toLowerCase())) fail('installer-legacy-param', `windows-installer/install.cmd 传入未声明参数 -${name}`);
 }
 
 /* ---------- 3+4+5. 源码平台规则（扫描时已去掉注释与字符串） ---------- */

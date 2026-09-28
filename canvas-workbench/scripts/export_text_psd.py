@@ -25,7 +25,7 @@ except NameError:
     pass
 
 PSD_RUNTIME = Path.home() / ".dsh" / "canvas-workbench" / "psd-runtime"
-PSD_TOOLS_VERSION = "1.9.30"
+PSD_TOOLS_VERSION = "1.20.0"  # create_pixel_layer/create_group 自 1.20 才有;1.9.30 无图层创建 API(2026-09-28 实测)
 PSD_MARKER = PSD_RUNTIME / ("psd-tools-" + PSD_TOOLS_VERSION + ".ready")
 PIP_INDEX_URL = os.environ.get("DSH_PIP_INDEX", "").strip()
 
@@ -144,6 +144,7 @@ def main() -> int:
     parser.add_argument("--output")
     parser.add_argument("--blocks", help="JSON array of OCR blocks")
     parser.add_argument("--clean-input", default="", help="optional image2 clean-plate with OCR text removed")
+    parser.add_argument("--prepare", action="store_true", help="只准备 psd-tools 运行环境(后台预置),不做导出")
     parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if getattr(args, 'spec', None):
@@ -155,7 +156,7 @@ def main() -> int:
             if key not in spec and key.replace('_', '-') in spec:
                 key = key.replace('_', '-')
             if key in spec:
-                value = spec[action.dest]
+                value = spec[key]
                 if action.type is not None:
                     try: value = action.type(value)
                     except Exception: pass
@@ -164,6 +165,9 @@ def main() -> int:
             if not hasattr(args, key):
                 setattr(args, key, value)
     ensure_psd_runtime()
+    if getattr(args, 'prepare', False):
+        print(json.dumps({"ok": True, "prepared": True}, ensure_ascii=False))
+        return 0
     try:
         from PIL import Image, ImageDraw, ImageFont
         from psd_tools import PSDImage

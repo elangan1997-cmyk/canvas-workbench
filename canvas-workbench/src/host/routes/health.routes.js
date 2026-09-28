@@ -1,5 +1,6 @@
 // 自 lib/index.js apply() 机械迁移（v1.8 Phase 2）：每个 handler 体逐字未改，
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
+import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { imageEngineHealth } from '../../../lib/image-engine.js';
 import { chatGenerationStatus } from '../services/chat-generation.js';
@@ -7,6 +8,14 @@ import { isMac, isWindows, platformCapabilities } from '../../../lib/platform.js
 import { VENDOR_ASSETS } from '../vendor-assets.js';
 import { respond } from '../server/http.js';
 import { name } from '../plugin-meta.js';
+
+const PACKAGE_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')).version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 export function register(router, h) {
   const { ctx, runProcess } = h;
@@ -49,7 +58,7 @@ export function register(router, h) {
             respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({
               ok: true,
               plugin: name,
-              version: '1.7.0',
+              version: PACKAGE_VERSION,
               platform: platformCapabilities(),
               capabilities: {
                 webServer: Boolean(ctx.webServer),

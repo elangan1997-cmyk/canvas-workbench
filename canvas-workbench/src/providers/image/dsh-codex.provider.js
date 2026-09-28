@@ -74,32 +74,14 @@ async function generateWithDshCodex({ ctx, image, prompt, signal }) {
   return Buffer.from(await client.generate(prompt, images.map(dataUrl), signal || AbortSignal.timeout(360000)));
 }
 
-/** 比例提示词:让模型主动按所选比例构图(不靠裁切丢画面)。 */
-function ratioHintFor(imageSize) {
-  const match = /^(\d+)x(\d+)$/.exec(String(imageSize || ''));
-  if (!match) return '';
-  const w = Number(match[1]);
-  const h = Number(match[2]);
-  if (!w || !h) return '';
-  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
-  const divisor = gcd(w, h) || 1;
-  const ratio = (w / divisor) + ':' + (h / divisor);
-  const orient = w === h ? '正方形' : (w > h ? '横版' : '竖版');
-  return '【画面比例】请以' + orient + ' ' + ratio + '（' + w + '×' + h + '）构图，主体与关键细节避开四边，最终画面会按该比例输出。';
-}
-
 export const dshCodexProvider = {
   id: 'dsh-codex',
   capabilities: ['image.generate', 'image.edit'],
   loadCodexModule,
   async generate({ ctx, images, prompt, signal, settings = {}, sizeOnEdit }) {
-    // 比例:上游 size 恒 auto——在提示词里要求模型按比例构图(不丢画面);
-    // 数量与裁切兜底统一由 generateChatImage 处理(串行逐张 + 生成后裁切)。
-    const wantsRatio = Boolean(settings.imageSize && settings.imageSize !== 'auto')
-      && ((Array.isArray(images) && images.length === 0) || sizeOnEdit === true);
-    const hint = wantsRatio ? ratioHintFor(settings.imageSize) : '';
-    const finalPrompt = hint ? String(prompt) + '\n' + hint : prompt;
-    return generateWithDshCodex({ ctx, image: images, prompt: finalPrompt, signal });
+    // 比例提示词由 generateChatImage 在 Provider 分派前统一注入，API 与
+    // dsh-codex 得到完全相同的构图约束；画布局部编辑仍保持原图比例。
+    return generateWithDshCodex({ ctx, image: images, prompt, signal });
   },
   async health(ctx) {
     let installed = false;

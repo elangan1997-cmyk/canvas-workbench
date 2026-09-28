@@ -4,14 +4,17 @@
       python: 'Python 运行时',
       rembg: '去背景引擎',
       vectorize: '转矢量引擎',
-      rembgModel: '识别模型(约170MB)',
+      rembgModel: '去背景模型(BiRefNet 约214MB)',
       ocr: 'OCR 文字识别',
+      psdTools: 'PSD 导出引擎',
       dshCodex: 'dsh-codex 引擎'
     };
 
     function ToolchainCard(props) {
       const status = props.toolchain;
       const [busy, setBusy] = React.useState(false);
+      const [logText, setLogText] = React.useState('');
+      const [logOpen, setLogOpen] = React.useState(false);
       // 打开期间 3s 轮询刷新(有 downloading/preparing 时进度会动)
       React.useEffect(() => {
         if (!status) return undefined;
@@ -46,18 +49,26 @@
           .catch(() => {})
           .finally(() => { setBusy(false); if (typeof props.onRefresh === 'function') props.onRefresh(); });
       };
+      const toggleLog = () => {
+        const next = !logOpen;
+        setLogOpen(next);
+        if (next) {
+          fetch('/dsh-canvas/toolchain-log?lines=80').then((r) => r.text()).then(setLogText).catch(() => setLogText('(日志读取失败)'));
+        }
+      };
       return React.createElement('div', { className: 'dsh-canvas-toolchain' },
         React.createElement('div', { className: 'dsh-canvas-toolchain-head' },
           React.createElement('span', null, '本地工具链'),
           React.createElement('small', null, allReady ? '全部就绪，无需等待' : '后台自动准备，首次使用前无需手动操作'),
-          allReady ? null : React.createElement('button', { className: 'dsh-canvas-tb', disabled: busy, onClick: prepareNow }, busy ? '准备中…' : '立即准备')
+          allReady ? null : React.createElement('button', { className: 'dsh-canvas-tb', disabled: busy, onClick: prepareNow }, busy ? '准备中…' : '立即准备'),
+          React.createElement('button', { className: 'dsh-canvas-tb', onClick: toggleLog }, logOpen ? '收起日志' : '运行日志')
         ),
         React.createElement('div', { className: 'dsh-canvas-toolchain-rows' },
           entries.map((entry) => React.createElement('div', { key: entry.key, className: 'dsh-canvas-toolchain-row' },
             React.createElement('span', { className: 'dsh-canvas-toolchain-name' }, entry.label),
             React.createElement('span', { className: 'dsh-canvas-toolchain-state is-' + entry.item.state }, stateText(entry.item))
           ))
-        )
+        ),
+        logOpen ? React.createElement('pre', { className: 'dsh-canvas-toolchain-log', style: { maxHeight: '180px', overflow: 'auto', margin: '6px 0 0', padding: '8px', fontSize: '11px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all', opacity: 0.9 } }, logText || '…') : null
       );
     }
-

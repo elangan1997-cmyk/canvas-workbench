@@ -11,7 +11,10 @@
           matched = scoped.length ? scoped : null;
         } catch (error) { matched = null; }
       }
-      const images = matched || [];
+      // 旧版本曾把 turn 里所有图片都持久化进 canvas-images。没有明确
+      // imagegen provenance 的旧条目在新版直接隐藏，避免升级后继续显示
+      // 参考图、检查图、裁剪中间图与失效附件。
+      const images = (matched || []).filter((item) => item && item.producer === 'imagegen');
       // 本轮开始时间由聚合节点写进每个条目；旧会话条目没有该字段时为 0，跳过新旧过滤。
       const turnStart = (images.length && images[0] && images[0].startTime) || 0;
       const [preview, setPreview] = React.useState(null);
@@ -160,7 +163,10 @@
           });
         return () => { cancelled = true; };
       }, [key, activeChatSessionId, contextRevision]);
-      if (!visibleImages.length) return null;
+      // 自动上画布开启且当前聊天已绑定项目：最终产物会自动进入画布，
+      // 聊天尾部不再重复展示一套“加入画布”卡片。未绑定项目时仍保留，
+      // 让用户能看到并手动处理生成结果。
+      if (!visibleImages.length || (canvasAutoAddEnabled() && activeCanvasProjectPath)) return null;
       // 附件条目的可操作文件路径：优先条目自带 sourcePath（归档真实文件），
       // 其次当前画布项目拼接路径，最后退回附件引用本身（交给附件解析）。
       const actionPathOf = (img) => {
@@ -305,4 +311,3 @@
         ) : null
       );
     }
-

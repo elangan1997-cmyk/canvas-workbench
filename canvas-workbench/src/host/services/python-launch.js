@@ -4,7 +4,8 @@
 // tmpdir 路径),脚本端 --spec 读取。顺带对齐 macOS 行为(该模式下完全一致)。
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { logOp } from './op-log.js';
 
 /**
  * 以规格文件模式运行 python 脚本。
@@ -14,6 +15,7 @@ import { join } from 'node:path';
  * @param argsObject 各参数(值仅限字符串/数字,路径可为任意含空格/中文)
  */
 export async function runPythonSpec(runOne, python, scriptPath, argsObject, { cwd, timeoutMs } = {}) {
+  const startedAt = Date.now();
   const work = await mkdtemp(join(tmpdir(), 'dsh-pyspec-'));
   try {
     const specPath = join(work, 'spec.json');
@@ -26,12 +28,22 @@ export async function runPythonSpec(runOne, python, scriptPath, argsObject, { cw
       timeoutMs,
     );
     // 结果优先取文件:脚本显式 UTF-8 落盘,绕开沙箱 runner 管道在 Windows 上的编码劣化(乱码实测)。
+    let final = result;
     try {
       const { readFile } = await import('node:fs/promises');
       const fileResult = await readFile(resultPath, 'utf8');
-      if (fileResult && fileResult.trim()) return { ...result, stdout: fileResult };
+      if (fileResult && fileResult.trim()) final = { ...result, stdout: fileResult };
     } catch {}
-    return result;
+    await logOp('python', {
+      script: basename(scriptPath),
+      exitCode: final.exitCode,
+      ms: Date.now() - startedAt,
+      stderrTail: final.stderr ? String(final.stderr).slice(-240) : undefined,
+    });
+    return final;
+  } catch (error) {
+    await logOp('python', { script: basename(scriptPath), error: String((error && error.message) || error).slice(0, 240), ms: Date.now() - startedAt });
+    throw error;
   } finally {
     rm(work, { recursive: true, force: true }).catch(() => {});
   }

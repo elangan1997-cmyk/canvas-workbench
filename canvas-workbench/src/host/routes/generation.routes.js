@@ -3,7 +3,7 @@
 import { dirname, join } from 'node:path';
 import { runPythonSpec } from '../services/python-launch.js';
 import { access, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
-import { resolvePython } from '../../../lib/platform.js';
+import { resolvePythonWithDeps } from '../../../lib/platform.js';
 import { createHash } from 'node:crypto';
 import { generateImage, readImageEngineSettings } from '../../../lib/image-engine.js';
 import { parseQuery, readBody, respond } from '../server/http.js';
@@ -52,7 +52,7 @@ export function register(router, h) {
             const script = join(pluginRoot, 'scripts', 'vectorize_image.py');
             await access(script);
             tempOutput = join(outputDir, '.vectorized-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.svg');
-            const python = await resolvePython(ctx);
+            const python = await resolvePythonWithDeps(ctx);
             const result = await runPythonSpec(
               (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
               python, script,
@@ -126,11 +126,11 @@ export function register(router, h) {
             }
             if (!isRasterImagePath(sourcePath)) throw new Error('当前图片无法进行本地去背景（仅支持 PNG/JPG/WebP/GIF/AVIF/BMP）');
             tempOutput = join(outputDir, '.rembg-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.png');
-            const python = await resolvePython(ctx);
+            const python = await resolvePythonWithDeps(ctx);
             const result = await runPythonSpec(
               (executable, args, cwd) => runProcess(executable, args, cwd),
               python, script,
-              { input: expandHome(sourcePath), output: tempOutput, model: 'isnet-general-use', progress_file: progressPath },
+              { input: expandHome(sourcePath), output: tempOutput, model: 'birefnet-general-lite', progress_file: progressPath },
               { cwd: pluginRoot });
             const lines = String(result.stdout || '').trim().split(/\r?\n/).filter(Boolean);
             let payload = null;
@@ -144,7 +144,7 @@ export function register(router, h) {
             const base = dot > 0 ? originalName.slice(0, dot) : originalName;
             const saved = await writeManagedImage(projectDir, base + '-去背景.png', 'data:image/png;base64,' + finalBytes.toString('base64'));
             await writeProgressFile(progressPath, { ok: true, jobId, stage: 'complete', message: '去背景完成', percent: 100 });
-            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, jobId, engine: 'rembg-isnet-general-use', model: 'isnet-general-use', transparent: true, image: saved }));
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, jobId, engine: 'rembg-birefnet-general-lite', model: 'birefnet-general-lite', transparent: true, image: saved }));
           } catch (err) {
             if (progressPath) await writeProgressFile(progressPath, { ok: false, jobId, stage: 'error', message: String((err && err.message) || err), percent: null }).catch(() => {});
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
@@ -213,7 +213,7 @@ export function register(router, h) {
             if (!isRasterImagePath(modelSourcePath)) throw new Error('当前图片无法转换为模型输入（仅支持栅格图片）');
             if (!isRasterImagePath(compositeSourcePath)) throw new Error('当前图片无法用于无损合成（仅支持栅格图片）');
 
-            const python = await resolvePython(ctx);
+            const python = await resolvePythonWithDeps(ctx);
             const mask = decodeImageData(body.maskData);
             if (mode === 'erase' && !mask) throw new Error('请先用画笔涂抹要擦除的区域');
             if (mask) {

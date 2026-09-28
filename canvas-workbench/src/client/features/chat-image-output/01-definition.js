@@ -22,22 +22,7 @@
         return { turn: match.event.data.turn, images: [], finalImagesSeen: false, startTime: match.event.time || 0 };
       },
       update(context, match) {
-        const visible = extractAssistantVisibleImages(match.event);
-        // 最终可见文本提到的图片只做“合并+名字校准”，不再整体替换。
-        // 旧版“替换”逻辑会因回复里顺带提到一张旧参考图（如基准图文件名），
-        // 把本轮真实生成的全部附件挤掉，叠加 mtime 过滤后卡片直接清空。
-        // 现在旧图引用由 ImageTail 的文件时间过滤负责隐藏，这里不做取舍。
-        if (visible.length) {
-          const reconciled = reconcileFinalImages(context.state.images, visible, match.event.seq, context.state.startTime);
-          const images = [...context.state.images];
-          const seen = new Set(images.map((i) => i.path));
-          for (const item of reconciled) {
-            if (!seen.has(item.path)) { images.push(item); seen.add(item.path); }
-          }
-          return { ...context.state, images, finalImagesSeen: true };
-        }
-        if (context.state.finalImagesSeen) return context.state;
-        const found = extractImagePaths(match.event);
+        const found = extractGeneratedImagePaths(match.event);
         if (!found.length) return context.state;
         const images = [...context.state.images];
         const seen = new Set(images.map((i) => i.path));
@@ -63,7 +48,7 @@
             if (attachmentIndex >= 0) continue;
           }
           seen.add(p);
-          const item = { path: p, seq: match.event.seq, startTime: context.state.startTime || 0, sourcePath: entry.sourcePath || '' };
+          const item = { path: p, seq: match.event.seq, startTime: context.state.startTime || 0, sourcePath: entry.sourcePath || '', producer: 'imagegen' };
           images.push(item);
           additions.push(item);
         }
@@ -124,4 +109,3 @@
         })
         .catch((err) => window.alert('无法在文件夹中显示：' + String((err && err.message) || err)));
     }
-

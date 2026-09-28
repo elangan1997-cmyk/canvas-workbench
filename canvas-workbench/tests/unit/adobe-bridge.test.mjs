@@ -8,7 +8,20 @@ import { join } from 'node:path';
 import {
   buildOutboundManifest, isAdobeBridgePath, isPendingBridgeManifest, isReturnableBridgeFile, nextOutboxSeq, outboxFileName, sanitizeBridgeName, validateInboundManifest
 } from '../../src/shared/utils/adobe-bridge.js';
-import { bridgeDirsFor, createAdobeBridge } from '../../src/host/services/adobe-bridge.js';
+import { bridgeDirsFor, createAdobeBridge, extendScriptPath } from '../../src/host/services/adobe-bridge.js';
+
+test('macOS ExtendScript 用户目录路径改用波浪号，Windows 保留绝对路径', () => {
+  assert.equal(extendScriptPath('/Users/test/.dsh/bridge.jsx', '/Users/test', false), '~/.dsh/bridge.jsx');
+  assert.equal(extendScriptPath('/Users/test2/bridge.jsx', '/Users/test', false), '/Users/test2/bridge.jsx');
+  assert.equal(extendScriptPath('C:\\Users\\test\\bridge.jsx', 'C:\\Users\\test', true), 'C:\\Users\\test\\bridge.jsx');
+});
+
+test('ExtendScript 核心保留波浪号解析桥接根目录，避免 Photoshop 映射到 /Volumes/Users', async () => {
+  const core = await readFile(new URL('../../adobe-bridge/dsh-bridge-core.jsx', import.meta.url), 'utf8');
+  assert.ok(core.includes("new Folder('~/.dsh/canvas-workbench/adobe-bridge')"));
+  assert.ok(core.includes("/^~[\\/]/.test(full) ? full"));
+  assert.ok(!core.includes("B.child(Folder('~'), '.dsh/canvas-workbench/adobe-bridge')"));
+});
 
 test('纯函数：路径判定 / 清单名 / 安全名 / 序号', () => {
   assert.equal(isAdobeBridgePath('/p/项目/ADOBE桥接/来自Photoshop/a.png'), true);
@@ -153,6 +166,8 @@ test('服务：远程驱动在无 runProcess 的环境下明确拒绝；用户�
     const dir = await w.bridge.ensureUserCopy();
     assert.equal(dir, join(w.bridge.root, 'scripts'));
     assert.equal(await rf(join(dir, 'dsh-bridge-core.jsx'), 'utf8'), '\uFEFF// dsh-bridge-core.jsx');
+    assert.equal(await rf(join(dir, 'dsh-bridge-photoshop.jsx'), 'utf8'), '\uFEFF// DSH画布桥接-Photoshop.jsx');
+    assert.equal(await rf(join(dir, 'dsh-bridge-illustrator.jsx'), 'utf8'), '\uFEFF// DSH画布桥接-Illustrator.jsx');
     await wf(join(w.home, 'plugin', 'adobe-bridge', 'dsh-bridge-core.jsx'), '\uFEFF// v2 longer content');
     await w.bridge.ensureUserCopy();
     assert.equal(await rf(join(dir, 'dsh-bridge-core.jsx'), 'utf8'), '\uFEFF// v2 longer content', '源变了要跟着更新');

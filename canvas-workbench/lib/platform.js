@@ -51,8 +51,7 @@ async function resolveFirst(ctx, names) {
   return '';
 }
 
-export async function resolvePython(ctx) {
-  // 便携运行时的相对位置在两个平台上不一样，且 Windows 打包实际没有 Scripts 层：
+export async function resolvePython(ctx) {  // 便携运行时的相对位置在两个平台上不一样，且 Windows 打包实际没有 Scripts 层：
   //   macOS/Linux : python-runtime/bin/python
   //   Windows     : python-runtime/python.exe（根目录；打包清单见 runtime-manifest.txt）
   //               部分构建/Maximize 装配会额外产生 Scripts/python.exe
@@ -62,12 +61,20 @@ export async function resolvePython(ctx) {
   const managedCandidates = isWindows
     ? [join(runtimeRoot, 'python.exe'), join(runtimeRoot, 'Scripts', 'python.exe')]
     : [join(runtimeRoot, 'bin', 'python')];
+  // macOS:CLT 自带 3.9 太老 —— vtracer 的 macOS wheel 只从 cp311 起(3.9 会退到源码编译且需要 Rust,
+  // 普通用户机器必败)。Homebrew 的 3.12/3.13/3.11 依赖 wheel 覆盖最全,优先于 PATH 里的系统 python。
+  const brewCandidates = isMac
+    ? ['3.12', '3.13', '3.11', '3.14'].flatMap((v) => [
+        join('/opt/homebrew/bin', 'python' + v),
+        join('/usr/local/bin', 'python' + v),
+      ])
+    : [];
   try {
     const { access } = await import('node:fs/promises');
-    for (const candidate of managedCandidates) {
+    for (const candidate of [...managedCandidates, ...brewCandidates]) {
       try {
         await access(candidate);
-        return { executable: candidate, prefixArgs: [], managed: true };
+        return { executable: candidate, prefixArgs: [], managed: candidate.includes('python-runtime') };
       } catch {}
     }
   } catch {}
@@ -77,6 +84,35 @@ export async function resolvePython(ctx) {
     : '未检测到 Python 3');
   const lower = executable.toLowerCase();
   return { executable, prefixArgs: isWindows && /(^|[\\/])py(?:\.exe)?$/.test(lower) ? ['-3'] : [], managed: false };
+}
+
+/**
+ * 挑一个「自带 Pillow 等依赖」的解释器:宿主裸 Python(Homebrew/CLT/系统)没有 Pillow,
+ * 而 composite_edit/prepare_mask/normalize_image 等 9 个脚本依赖 PIL 且不自建 venv。
+ * 优先级:便携运行时(Windows,自带全套依赖) → 预置工具链 venv(必带 Pillow)
+ * → 退化到普通 resolvePython(工具链尚未就绪时,报错信息引导等待)。
+ * 自举型脚本(remove_background/ocr/vectorize/psd)传入 venv 解释器时会因依赖
+ * 已可导入而直接复用当前解释器,反而省掉一次重进 venv 的开销。
+ */
+export async function resolvePythonWithDeps(ctx) {
+  const runtimeRoot = join(userHome(), '.dsh', 'canvas-workbench');
+  const venvPython = isWindows ? join('Scripts', 'python.exe') : join('bin', 'python');
+  const { access } = await import('node:fs/promises');
+  const candidates = [
+    join(runtimeRoot, 'python-runtime', isWindows ? 'python.exe' : join('bin', 'python')),
+    join(runtimeRoot, 'python-runtime', 'Scripts', 'python.exe'),
+    join(runtimeRoot, 'rembg-runtime', venvPython),
+    join(runtimeRoot, 'vtracer-runtime', venvPython),
+    join(runtimeRoot, 'ocr-runtime', venvPython),
+    join(runtimeRoot, 'psd-runtime', venvPython),
+  ];
+  for (const candidate of candidates) {
+    try {
+      await access(candidate);
+      return { executable: candidate, prefixArgs: [], managed: candidate.includes('python-runtime') };
+    } catch {}
+  }
+  return resolvePython(ctx);
 }
 
 export async function pickFolder(ctx, runProcess, prompt = '选择画布项目文件夹') {

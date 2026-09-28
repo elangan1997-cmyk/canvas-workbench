@@ -43,7 +43,10 @@ var DSH_BRIDGE = (typeof DSH_BRIDGE !== 'undefined' && DSH_BRIDGE) ? DSH_BRIDGE 
      fsName 在 Windows 是反斜杠（C:\Users\x）；统一按基目录自带的分隔符拼接，
      不要写 X.fsName + '/' + Y 的混分隔（ExtendScript 多数时候能容错，但 File.exists/copy 偶发失败）。 */
   B.child = function (base, name) {
-    var b = base && base.fsName !== undefined ? base.fsName : String(base || '');
+    /* Preserve a tilde-based fullName on macOS. Converting that Folder to
+       fsName too early triggers Photoshop 2025's /Users -> /Volumes/Users bug. */
+    var full = base && base.fullName !== undefined ? String(base.fullName) : '';
+    var b = /^~[\/]/.test(full) ? full : (base && base.fsName !== undefined ? base.fsName : String(base || ''));
     var sep = b.indexOf('\\') >= 0 ? '\\' : '/';
     return b + sep + String(name || '');
   };
@@ -110,7 +113,11 @@ var DSH_BRIDGE = (typeof DSH_BRIDGE !== 'undefined' && DSH_BRIDGE) ? DSH_BRIDGE 
 
   /* ---------- 桥接根目录 / 日志 / 偏好 ---------- */
   B.rootFolder = function () {
-    var f = new Folder(B.child(Folder('~'), '.dsh/canvas-workbench/adobe-bridge'));
+    /* Photoshop 2025/macOS may expose Folder('~').fsName as /Volumes/Users/...
+       even though File('~/.dsh/...') resolves correctly. Keep the tilde in the
+       path string until ExtendScript resolves it, otherwise bridge.json appears
+       missing and all remote operations fail with error 48/offline messages. */
+    var f = new Folder('~/.dsh/canvas-workbench/adobe-bridge');
     if (!f.exists) f.create();
     return f;
   };

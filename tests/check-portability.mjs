@@ -50,6 +50,7 @@ if (host.includes("resolveExecutable('python3')")) throw new Error('unabstracted
 if (!host.includes('platformCapabilities()')) throw new Error('health endpoint lacks platform capabilities');
 
 const client = await readFile(resolve(root, 'canvas-workbench/lib/client.js'), 'utf8');
+const chatImageRouter = await readFile(resolve(root, 'canvas-workbench/lib/chat-image-router.js'), 'utf8');
 if (!client.includes('[A-Za-z]:[\\\\/]')) throw new Error('client lacks Windows drive path support');
 if (!client.includes('pendingRenames.current.get')) throw new Error('client lacks rename-race protection');
 if (!client.includes('displayImageName')) throw new Error('client lacks extension-free canvas labels');
@@ -61,6 +62,9 @@ if (!host.includes('sourcePath: resultPath')) throw new Error('host rename respo
 if (!client.includes('result.data.sourcePath || result.data.path')) throw new Error('client rename result lacks canonical source path');
 if (!client.includes('latestSnapshot.current = {')) throw new Error('client rename does not patch latest snapshot before save');
 if (!client.includes('reconcileFinalImages')) throw new Error('client lacks stable final-image reconciliation');
+if (!chatImageRouter.includes('<canvas_image_output producer="imagegen">final</canvas_image_output>')) throw new Error('imagegen result lacks final-output provenance marker');
+if (!client.includes("item.producer === 'imagegen'")) throw new Error('chat image output is not restricted to imagegen final outputs');
+if (!client.includes('canvasAutoAddEnabled() && activeCanvasProjectPath')) throw new Error('auto-added chat images still duplicate in turn tail');
 if (!client.includes('/[*\\[\\]{}]/.test(candidate.split(/[?#]/, 1)[0])')) throw new Error('client does not reject image glob placeholders');
 for (const marker of ['materialSelection', 'filteredMaterials', 'attachSelectedMaterialsToChat', 'deleteSelectedMaterials', '搜索文件名', '已选 ']) {
   if (!client.includes(marker)) throw new Error(`material library interaction missing: ${marker}`);
@@ -87,6 +91,9 @@ if (!sync.includes('sync_codex_compat')) throw new Error('sync script lacks dsh-
 if (!sync.includes('remove_legacy_home_explorer')) throw new Error('sync script lacks legacy file-browser cleanup');
 if (!sync.includes('$PROFILES_ROOT/web/node_modules/@local/$package')) throw new Error('sync script lacks web profile package sync');
 if (!sync.includes('$PROFILES_ROOT/$active/node_modules/@local/$package')) throw new Error('sync script lacks active profile package sync');
+for (const marker of ['diff -qr "$source/src" "$destination/src"', 'diff -qr "$source/adobe-bridge" "$destination/adobe-bridge"', 'diff -qr "$source/vendor" "$destination/vendor"']) {
+  if (!sync.includes(marker)) throw new Error(`sync freshness check misses runtime tree: ${marker}`);
+}
 if (!host.includes("'/dsh-canvas/image-status'")) throw new Error('host lacks image status endpoint');
 const clientImages = await readFile(resolve(root, 'canvas-workbench/lib/client.js'), 'utf8');
 if (!clientImages.includes("'/dsh-canvas/image-status?path='")) throw new Error('client lacks stale image filtering');
@@ -96,7 +103,10 @@ for (const asset of ['react-18.3.1.production.min.js', 'react-dom-18.3.1.product
 }
 const srcdocPrefix = 'const EXCALIDRAW_SRCDOC = ';
 const srcdocStart = clientImages.indexOf(srcdocPrefix);
-const srcdocEnd = clientImages.indexOf('`;\n\n    // Excalidraw/React', srcdocStart);
+// build-client 分段拼接可能保留一个或多个换行；不要把便携性检查
+// 绑定到生成文件的空行数。
+const srcdocTail = clientImages.slice(srcdocStart).match(/`;\n\s*\/\/ Excalidraw\/React/);
+const srcdocEnd = srcdocTail ? srcdocStart + srcdocTail.index : -1;
 if (srcdocStart < 0 || srcdocEnd < 0) throw new Error('unable to locate Excalidraw srcdoc');
 const srcdocLiteral = clientImages.slice(srcdocStart + srcdocPrefix.length, srcdocEnd + 1);
 const srcdoc = Function('"use strict"; return ' + srcdocLiteral)();
@@ -115,7 +125,7 @@ for (const marker of ['profiles', 'node_modules\\@local', 'desktop\\node_modules
 }
 
 const npmBuilder = await readFile(resolve(root, 'scripts/build-npm-package.mjs'), 'utf8');
-for (const marker of ["const packageName = 'dsh-canvas-workbench'", "bundle: { patch: './cordis.patch.yml' }", "'lib', 'src', 'scripts', 'vendor', 'cordis.patch.yml', 'README.md', 'LICENSE'"]) {
+for (const marker of ["const packageName = 'canvas-workbench'", "bundle: { patch: './cordis.patch.yml' }", "'lib', 'src', 'scripts', 'vendor', 'adobe-bridge', 'cordis.patch.yml', 'README.md', 'LICENSE'", "const npmClientId = \"id: 'canvas-workbench'\""]) {
   if (!npmBuilder.includes(marker)) throw new Error(`npm package builder missing marker: ${marker}`);
 }
 if (!npmBuilder.includes("(?:auth\\.json|\\.env)")) throw new Error('npm package builder lacks credential exclusion');

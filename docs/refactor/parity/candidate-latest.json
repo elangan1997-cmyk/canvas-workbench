@@ -5,7 +5,7 @@
     "body": {
       "ok": true,
       "plugin": "canvas-workbench",
-      "version": "1.7.0",
+      "version": "1.9.36",
       "platform": {
         "platform": "darwin",
         "windows": false,
@@ -25,10 +25,10 @@
       "imageEngine": {
         "engine": "dsh-codex",
         "api": {
-          "configured": false,
-          "baseUrl": "https://ai-pixel.online",
+          "configured": true,
+          "baseUrl": "https://ai.t8star.org",
           "model": "gpt-image-2",
-          "ready": false
+          "ready": true
         },
         "dshCodex": {
           "installed": true,
@@ -54,15 +54,17 @@
     "body": {
       "ok": true,
       "engine": "dsh-codex",
-      "apiBaseUrl": "https://ai-pixel.online",
+      "apiBaseUrl": "https://ai.t8star.org",
       "apiModel": "gpt-image-2",
+      "imageSize": "auto",
+      "imageCount": 1,
       "health": {
         "engine": "dsh-codex",
         "api": {
-          "configured": false,
-          "baseUrl": "https://ai-pixel.online",
+          "configured": true,
+          "baseUrl": "https://ai.t8star.org",
           "model": "gpt-image-2",
-          "ready": false
+          "ready": true
         },
         "dshCodex": {
           "installed": true,

@@ -3,7 +3,7 @@
 // 绕开 DSH 网关对外部 curl 的 403）、截图（不依赖 macOS 屏幕录制权限）、按文本点击 DOM。
 // 前提：DSH Desktop 以 `--remote-debugging-port=9222` 启动。
 //
-//   open -a "DSH Desktop" --args --remote-debugging-port=9222
+//   open -a "DeepSeek Harness" --args --remote-debugging-port=9222
 //
 // 用法（模块）：
 //   const cdp = await connectDsh();
@@ -23,7 +23,7 @@ export async function listTargets(port = DEFAULT_PORT) {
   return res.json();
 }
 
-export async function connectDsh({ port = DEFAULT_PORT, match = (t) => t.type === 'page' && /127\.0\.0\.1:43120/.test(t.url) } = {}) {
+export async function connectDsh({ port = DEFAULT_PORT, match = (t) => t.type === 'page' && (/127\.0\.0\.1:\d+/.test(t.url) || t.url === 'dsh-app://app/') } = {}) {
   const targets = await listTargets(port);
   const target = targets.find(match);
   if (!target) throw new Error('未找到 DSH 渲染页面目标：' + JSON.stringify(targets.map((t) => [t.type, t.url])));
@@ -62,10 +62,19 @@ export function connectTarget(target) {
 
         /** 在页面上下文求值；表达式可返回 Promise。返回反序列化后的值。 */
         async eval(expression, { timeoutMs = 30000 } = {}) {
-          const result = await Promise.race([
-            send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('eval 超时: ' + expression.slice(0, 80))), timeoutMs))
-          ]);
+          let timer = null;
+          const timeout = new Promise((_, rej) => {
+            timer = setTimeout(() => rej(new Error('eval 超时: ' + expression.slice(0, 80))), timeoutMs);
+          });
+          let result;
+          try {
+            result = await Promise.race([
+              send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }),
+              timeout
+            ]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
           if (result.exceptionDetails) {
             const d = result.exceptionDetails;
             throw new Error('页面异常: ' + (d.exception && d.exception.description || d.text));
@@ -74,7 +83,7 @@ export function connectTarget(target) {
         },
 
         /** 同源 fetch 插件 API，返回 { status, headers, body(json|text) }。 */
-        async api(path, init = {}) {
+        async api(path, init = {}, { timeoutMs = 30000 } = {}) {
           const code = `(async () => {
             const r = await fetch(${JSON.stringify(path)}, ${JSON.stringify(init)});
             const ct = r.headers.get('content-type') || '';
@@ -83,7 +92,7 @@ export function connectTarget(target) {
             if (/json/.test(ct)) { try { body = JSON.parse(text); } catch {} }
             return { status: r.status, contentType: ct, body };
           })()`;
-          return this.eval(code);
+          return this.eval(code, { timeoutMs });
         },
 
         async screenshot(path, { format = 'png', quality, fillBackground = true } = {}) {

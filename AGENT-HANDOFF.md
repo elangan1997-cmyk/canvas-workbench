@@ -742,3 +742,79 @@ PS 应用目录 + AI 25 个 locale（含 zh_CN），`scripts-installed.json` 记
 - `check-windows-compat.mjs`（入 `npm run check`）：安装器 BOM/PS5.1/括号配平、禁 `-Command` 直拼、平台专属调用（osascript//Applications/~/Library/LaunchAgents）40 行内必须有 isWindows/isMac/darwin/win32 守卫（守卫确实存在但距离超窗时用 `// platform-guard-ok: 理由` 人工确认，text.routes 已用）、禁硬编码 /tmp。首跑即抓到 2 类真问题。
 - 回归：单测 46/46（+4 Windows 分支）；npm run check 全绿；mac 真机桥接 HTTP 级回归（host-harness + 真 PS）：pull 4s / return+远程置入 2.2s / 归位 [122,126,190,150] 逐位命中 / 组名「HTTP标题 ← 画布」/ 无文档错误信息友好。
 - **v1.8.0 发布**：版本三处一致（package.json=1.8.0、CHANGELOG 定稿、README 全面改口径）；refactor/v1.8 合并 main、tag v1.8.0、GitHub Release（源码版，Release 说明如实标注 Windows 未实机回归）。§40 发布门槛由用户确认放宽（见上）。
+
+## §11 验收记录(2026-09-28 晚,全功能救活轮)
+
+- 起因:录视频当天 Mac 全功能"瘫痪"。根因五个,全部修复并实测:①pip 走 Clash TUN 对 pythonhosted 近 0 速(加三级 pip 策略:官方 NO_PROXY→镜像 NO_PROXY→镜像继承;阿里云经隧道实测 5MB/s,tuna 本机 403);②vtracer macOS wheel 只从 cp311 起,CLT 3.9 必败(resolvePython 优先 Homebrew 3.12/3.13/3.11);③9 个依赖 PIL 的脚本无 venv 自举,裸 brew/CLT python 没有 Pillow(新增 resolvePythonWithDeps:便携运行时→工具链 venv 兜底,全路由换用);④ocr_image.py 在 venv 切换前 import PIL(顺序修正);⑤onnxruntime 把 CoreML EP 排首位,编译 BiRefNet 214MB 无限挂死(new_session 强制 CPUExecutionProvider,CPU 实测建模 2s/推理 10s)。
+- 去背景模型默认切 birefnet-general-lite(214MB,质量优于 isnet),镜像链 gh-proxy/ghfast/mirror.ghproxy。
+- psd-tools 锁 1.20.0(1.9.30 无 create_pixel_layer/create_group 图层 API,此前 PSD 导出从未真正可用)。
+- 新增宿主操作日志:~/.dsh/canvas-workbench/logs/ops.jsonl + GET /dsh-canvas/toolchain-log + 工具链卡片「运行日志」按钮。
+- 预置链加 psdTools 项;runPrepareOnce 加 14 分钟整组超时。
+- ⚠ 激活机制:profile 的 cordis.patch.yml name 决定加载 @local/canvas-workbench(同步副本)还是 node_modules/canvas-workbench(npm/tarball)。npm 形态验证时需把 patch 指向 'canvas-workbench' 并删 @local;pnpm 对同路径 file: 引用有缓存,换文件内容必须 remove+add。
+- 验收证据(HTTP 层,desktop profile,tarball 1.9.35 形态):OCR 3/3 段✓;去背景 15.9s✓;矢量化 2.3s✓;PSD 双图层✓;SVG✓;编辑图片 API 36.9s✓;桥接 inbound✓;工具链七项全 ready,dsh-codex 0.3.1 自动预置✓。
+- npm publish 1.9.35 因 2FA(EOTP)待用户执行:cd ~/设计工作台/dsh-canvas-suite && npm publish dist/npm/dsh-canvas-workbench-1.9.35 --access public(注意 stage 包名需为 canvas-workbench,构建脚本里 dsh-canvas-workbench 名字是旧的,发布前已手工改名)。
+- HEAD: a63c978;本节改动未提交,清单见 git status(11 改 1 新增)。
+
+**2026-09-28 续测（npm 安装形态 + 人工 UI 回归）**
+
+- registry 的 `canvas-workbench@1.9.35` 已公开，但正式包存在确定性打包缺陷：`cordis.patch.yml` 仍指向 `dsh-canvas-workbench`、客户端仍注册 `@local/canvas-workbench`，并遗漏整个 `adobe-bridge/`；命令行显示安装成功但桌面 profile 不加载画布。`scripts/build-npm-package.mjs` 已改为统一 `canvas-workbench`、构建阶段替换客户端 id，并把 Adobe bridge 纳入 npm files；`tests/check-portability.mjs` 同步加契约检查。**未再次 publish，公开 registry 包仍是旧坏包。**
+- 修正版本地 tarball：`dist/npm/canvas-workbench-1.9.35.tgz`，148 files，843575 B，SHA-256 `f66846269d799eef4d4ec64cc12d273f45317f407981f7d8e9aef3507d930edb`。desktop profile 已用该 file tarball remove+add（不要只 `pnpm install --force`，同路径 file: 会复用旧 integrity），健康端点回报 `version=1.9.35`、API=t8star/gpt-image-2 ready、dsh-codex ready。
+- Mac 真实 UI：设计模式/画布/工具栏/素材库折叠、多选 1→2→3→2→3、批量加入画布、批量附加聊天、PNG 改名、SVG 改名、选择工具栏 10 个动作、PNG 导出（1160×900）通过；重启两次后 `canvas.json` 仍为 15 elements / 15 files，项目与设计模式恢复。文件夹选择器在自动化中只能确认“取消”分支，Mac 锁屏后无法继续系统级 Finder 对话框。
+- t8star 真调用：连接测试 200（鉴权/模型均可用）；1024×1024 文生图成功并由目录监听自动上画布；图生图“橙色方形→绿色、其余保持”成功落盘，约 33 秒。OCR 真图识别 16 块；imagetracer SVG 落盘；BiRefNet 去背景输出 1024×1024 RGBA；PSD 草稿结构由 psd-tools 1.20 验证为保留原图层 + OCR 预览组。锁屏后 Photoshop 原生文字层 AppleScript 超时，安全降级草稿并成功打开，故本轮不把原生文字层写成通过（上一轮未锁屏证据仍保留）。
+- 回归：`npm run check` 全绿；`npm test` 53/53；Windows Adobe COM/UAC 注入分支 4/4；集成 Host 55 请求可执行，基线比较仅报 5 个预期 API 演进/环境差异（health 版本、dsh-codex detail、imageSize/imageCount）。独立 Host 对 Electron 内置但无实体包的 `@deepseek-ai/dsh-tools` 增加测试 stage stub，不影响生产加载。
+- Windows 发现并修复一个确定问题：`windows-installer/install.cmd` 传了 `install.ps1` 未声明的 `-SourceRoot`，双击会立即失败；已移除并在 Windows 静态检查加入参数契约绊线。真机仍未验收；`//ELAN@192.168.10.218/Users` 在 Mac 上是已挂载但当前读取 5 秒超时的 SMB share，且 CIFS 只能传文件、不能操控 Windows UI。待 share 恢复后可传 `dist/windows/canvas-workbench-1.9.35-win-qa-20260928-clean.zip`（SHA-256 `3190f6012f744af6b2c34a4e846378740bac05355ef208bf23ef029d4c248fda`）。
+
+**2026-09-28 Mac 后续补测（文件夹导入 + Photoshop 原生文字层）**
+
+- 真实 UI 的项目文件夹浏览器补测通过：从 `/Volumes/Elements/skill学习/插件测试` 进入子目录 `1`，点击「选择此文件夹」后显示「✓ 已加载画布项目」，原画布内容保持完整。这里是插件自带的目录浏览器，不是 Finder 系统对话框。
+- Photoshop 2025 的 legacy ExtendScript 在本机即使新建空文档也会卡在 `saveAs`，并留下 0-byte PSD；Automation 权限已开启，因此不是 TCC 拒绝。为避免继续依赖这个不稳定点，新增 `ag-psd` 直写原生 Type layer 路径，Mac/Windows 共用；Adobe 脚本仅保留为失败回退。
+- 真机 API 补测输出：`photoshop=true`、`nativeTextLayers=true`、`textLayerEngine=ag-psd`、`opened=true`、`blockCount=1`。产物 `QA-t8star-生成-PS原生文字-直接写入补测-文字编辑.psd` 由 psd-tools 识别为隐藏 TypeLayer，Photoshop 2025 首次打开点「更新」后，用 JSX 回读为 `QA文字层 | ArialMT | 42 pt | visible=false`；关闭 QA 文档时不保存，未触碰用户文档。
+- 新增 `src/host/services/native-text-psd.js` 与单测；`npm test` 54/54、`npm run check` 全绿、`git diff --check` 通过。四份本机插件副本完成同步并逐份一致性校验；重启后 `/dsh-canvas/health` 回报 1.9.35、darwin、t8star/gpt-image-2 ready。
+- npm 包已重建并确认声明 `ag-psd ^31.0.2`：`dist/npm/canvas-workbench-1.9.35.tgz`，845137 B，SHA-256 `da73501028e85c1736c1c41abb321df7741e4940415032e8fe312ede4dc6f68c`。公开 npm registry 的 1.9.35 仍是先前坏包，未重新发布。
+
+**2026-09-28 深夜：编辑文字导出 `KeyError: clean_input` 追修**
+
+- 用户在真实 UI 的“编辑文字 → PSD”复现：`export_text_psd.py` 的 spec 兼容逻辑先把 argparse 的 `clean_input` 解析成实际 JSON 键 `clean-input`，但取值仍错误使用 `spec[action.dest]`，因此启用框选背景清理后必定抛 `KeyError: 'clean_input'`。
+- 同一错误复制在 16 个 Python 工具脚本，已全部改为从解析后的 `spec[key]` 取值；新增 `python-spec-keys.test.mjs` 扫描全部 spec-aware 脚本，阻止连字符/下划线回归。
+- 回归：`npm test` 55/55、`npm run check` 全绿、`git diff --check` 通过，四份运行副本同步一致并重启 DSH。
+- 两次真实 clean plate → PSD 均 HTTP 200：① dsh-codex；②按用户要求临时切换 `https://ai.t8star.org` / `gpt-image-2`，响应 `cleanedBackground=true`、`cleanupEngine=api`、`nativeTextLayers=true`、`textLayerEngine=ag-psd`。t8star 产物 `QA-t8star-clean-input键名修复-文字编辑.psd` 由 psd-tools 验证含 Clean background 像素层、保留原图层、隐藏的原生 TypeLayer `QA文字层`；测试后已恢复用户原引擎 `dsh-codex`。
+- npm 发布在此修复前已暂停；registry latest 仍为 1.9.35。下一安全版本建议 1.9.36，按 release skill 必须先由用户确认版本/`latest` 发布轨道后再 bump、commit/tag、publish。
+
+**2026-09-29：Photoshop 双向桥接错误 48 追修**
+
+- 用户真实操作“取 Ps 图层”和“→Ps”均报 `错误 48: 文件或文件夹不存在`。真机逐层定位到 Photoshop 2025/macOS ExtendScript 的路径解析异常：`new File('/Users/...')` 会被错误映射为 `/Volumes/Users/...`；同一文件用 `~/.dsh/...` 可正确识别。中文主脚本名也存在兼容风险。
+- 远程驱动改用稳定 ASCII 副本 `dsh-bridge-photoshop.jsx` / `dsh-bridge-illustrator.jsx`；macOS 用户目录内的驱动路径交给 ExtendScript 前改写为 `~/...`。共享核心的 `B.rootFolder()` 直接保留 `~/.dsh/...`，`B.child()` 遇到 tilde `fullName` 不再提前转成有问题的 `fsName`。Windows COM 路径保持绝对路径不变。
+- 同时发现 `sync-local-plugins.sh` 的“已是最新”只比较 `lib/` 与 `scripts/`，遗漏 `src/`、`adobe-bridge/`、`vendor/`，会让 Host/桥接修复停留在源码而不进入运行副本。现已补齐三棵运行目录比较，并加入 portability 回归断言；四份本机副本重新同步且哈希一致。
+- Mac 真机闭环：独立创建 `DSH-Adobe-Bridge-QA` 文档（不碰用户文档），`POST /pull` 返回 `count=1`，收件 PNG 为 `QA Selected Layer`；DSH UI 显示“✓ 已同步到项目图片目录”；`POST /return` 自动置入 Photoshop，返回 `remote.running=true`、`placed>0`，PS 出现 `QA Selected Layer ← 画布`。QA 文档随后不保存关闭，原先两个用户 PSD 名称和打开状态保持不变。
+- 新增/更新回归：macOS tilde 路径、核心 root/child 路径、ASCII 远程脚本、Windows COM/UAC 分支、同步 freshness 范围。发布仍暂停，必须在完整回归与 Windows 真机验收后再决定 1.9.36。
+
+**2026-09-29：输入区已选 21:9，但聊天模型声称“比例你没选”**
+
+- 现场设置文件确认用户没有漏选：`imageSize=2560x1080`、`imageCount=2`。问题是比例芯片只写入 Host 设置；聊天模型在决定调用 `imagegen` 前看不到具体值，因此自行误判并擅自改口为 16:9。实际执行层虽然会读设置并最终裁切，但 API Provider 原先没有收到明确的 21:9 构图提示，存在先按近似 3:2 构图、最后硬裁导致内容损失的风险。
+- 现把比例约束提升到 Provider 分派前统一注入，API 与 dsh-codex 都会收到：`【画布已选输出比例，必须遵守】...横版 21:9（2560×1080）...禁止改成其他比例`；生成后仍保留精确比例裁切兜底。dsh-codex Provider 内的旧单独注入已移除，避免重复提示。
+- `imagegen` 工具描述同步声明：比例/数量由执行时自动读取，即使不出现在工具参数里，Agent 也不得声称未选择、不得推荐替换比例或再次询问。`prompt` 参数说明也禁止自行补写/更改比例。
+- 注意行业标签：UI 的 `2560×1080` 使用用户可见名称 `21:9`（精确约分是 64:27）；提示词必须保持与芯片一致，同时携带精确目标像素，不能把用户看到的 21:9 改写成 64:27。
+- 回归：`npm test` 58/58、`npm run check`、`git diff --check` 全绿；四份运行副本同步一致，DSH 已重启，健康端点确认 `imageSize=2560x1080` 对应的当前引擎可用。
+
+**2026-09-29：新版 DSH“图片输出”误收参考图/检查裁剪图，且自动上画布后重复展示**
+
+- 用户定义收紧为：聊天尾部“图片输出”只展示本次 turn 由图片模型最终生成的图片；参考图、`read_image`/模型检查图、裁剪中间图、旧文件引用、工具过程附件一律不得出现。自动上画布开启且当前聊天已绑定项目时，最终图已在画布中，聊天尾部整卡不显示。
+- 根因：旧聚合器扫描 `tool/result`、`tool/end`、`assistant/message`、`turn/end` 的全部图片路径，再靠 mtime 猜测是否为新图。新版 DSH 会把检查图和工具附件纳入同一 turn，附件化后 mtime 过滤也不再可靠，因而截图中累计出 11 张并出现多个“图片加载失败”。
+- 改为 provenance 白名单：画布 `imagegen` 的最终结果文本新增 `<canvas_image_output producer="imagegen">final</canvas_image_output>`；客户端只有识别到该标记才采集，并把持久条目标记 `producer: imagegen`。ImageTail 只渲染该 producer；旧版本已持久化但没有 producer 的误收集条目升级后直接隐藏。
+- 自动上画布开启且 `activeCanvasProjectPath` 存在时，ImageTail 返回 null，不再重复显示“加入画布/全部加入画布”；项目未绑定时仍保留最终生成图，避免结果无处可见。
+- 真实新版 DSH UI 验收：重启后当前截图对应会话 `图片输出 11 张` 已消失；DOM `图片输出` 次数=0、`hasEleven=false`、localStorage 自动上画布=`on`、项目 `1` 已绑定。静态回归 `npm test` 58/58、`npm run check`、`git diff --check` 全绿，四份运行副本同步一致。
+
+**2026-09-29：同一张图在聊天与画布中色差明显**
+
+- 先排除素材被换或重编码：聊天归档图与画布 `assets/` 图的 SHA-256 均为 `d3ee788a3ca3cff26e9dbfe40569624da15befc1179188177d8e733bcc3aaf05`，画布元素 `opacity=100`。源 PNG 为 941×1672 RGB，不含 ICC/gAMA/cHRM/sRGB 色彩块，因此不是图片文件或色彩配置文件不一致。
+- 真因是 Excalidraw 0.17.6 暗色主题对两层 `canvas.excalidraw__canvas` 施加 `invert(0.93) hue-rotate(180deg)`；0.93 会抬高黑位并压缩对比度，就是截图中的发白/低饱和。`src/client/core/canvas/frame/00-srcdoc.js` 现仅在 `.theme--dark` 下将还原系数覆盖为 `invert(1) hue-rotate(180deg)`；不改图片字节、元素透明度或浅色主题。
+- 新增 `tests/unit/canvas-color-fidelity.test.mjs` 防回归。另将 `tests/check-portability.mjs` 对生成 bundle 的 srcdoc 结尾定位从“固定两个换行”改为容忍构建分段的可变空白，否则实际 bundle 只保留一个换行时检查会误报。
+- 回归：`npm test` 59/59、`npm run check`、`git diff --check` 全绿；四份运行副本同步一致。完全重启 DSH 后真实 iframe 的 static/interactive 两层 Canvas 计算样式均为 `invert(1) hue-rotate(180deg)`，画布项目 `1` 内容恢复、原元素可选中。UI 取证截图：`/tmp/dsh-color-final-ui.png`。
+
+**2026-09-29：v1.9.36 发布前 Windows 实机验收**
+
+- BiRefNet 的定位明确为前景分割/去背景模型（默认 `birefnet-general-lite`），工具链 UI 从容易误解的“识别模型”改为“去背景模型”；新增文案回归测试。
+- Windows 10/11 实机通过 ToDesk 验证 DSH 可启动并识别 `canvas-workbench`；本地 tarball 安装到 `C:\Users\Elan\.dsh\profiles\desktop` 后回报 `VERSION=1.9.36`、`AG_PSD_PRESENT=True`、`CORDIS_PATCH_PRESENT=True`、`ADOBE_BRIDGE_PRESENT=True`。
+- Windows 自动化门槛覆盖：PowerShell 5.1/BOM、无危险 `-Command` 直拼、平台调用守卫、无硬编码 `/tmp`、Photoshop COM `DoJavaScriptFile`、UAC 安装/取消路径；跨平台原生文字 PSD 由 `ag-psd` 单测验证 Type layer。
+- 限制口径：本轮 Windows 真机确认了安装、加载与关键运行依赖；Photoshop/Illustrator 的真实 GUI 双向往返、t8star 编辑/擦除及 BiRefNet 首次模型下载仍需在发布后 registry 安装形态下继续做应用级操作验收，不能把静态/注入测试冒充完整 Adobe GUI 通过。
+- 发布候选：`canvas-workbench-1.9.36.tgz`，149 entries，847329 B，SHA-256 `63c53cafe59604bd8b8d8d59a5f59a5d4edfac405c68b013d19766cb32f97df6`；单测 60/60，`npm run check` 全绿。

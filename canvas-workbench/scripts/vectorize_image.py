@@ -588,7 +588,7 @@ def main() -> int:
             if key not in spec and key.replace('_', '-') in spec:
                 key = key.replace('_', '-')
             if key in spec:
-                value = spec[action.dest]
+                value = spec[key]
                 if action.type is not None:
                     try:
                         value = action.type(value)

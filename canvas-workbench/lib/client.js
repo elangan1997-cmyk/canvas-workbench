@@ -967,6 +967,19 @@ window.__ModuleLoader__.load({
         });
     }
 
+    // “图片输出”不是通用的图片扫描器。新版 DSH 会把模型读过的参考图、
+    // 裁剪检查图和工具中间附件都放进同一个 turn；只有 canvas imagegen
+    // 路由明确标为 final 的产物才属于这里。
+    function extractGeneratedImagePaths(event) {
+      const data = event && event.data;
+      if (!data) return [];
+      let serialized = '';
+      try { serialized = JSON.stringify(data); } catch (error) { return []; }
+      if (serialized.indexOf('<canvas_image_output producer=\\"imagegen\\">final</canvas_image_output>') < 0
+        && serialized.indexOf('<canvas_image_output producer="imagegen">final</canvas_image_output>') < 0) return [];
+      return extractImagePaths(event).map((item) => ({ ...item, producer: 'imagegen' }));
+    }
+
     // 最终助手回复里的图片名用来做“名字校准”（裸名映射回工具结果里的稳定
     // 附件引用），不再用来整体取舍。中间 tool/result 里的扫描/预览参考图
     // 由图片输出卡片的文件修改时间过滤负责隐藏。
@@ -1023,7 +1036,6 @@ window.__ModuleLoader__.load({
         return stable || { path, seq, startTime: startTime || 0, sourcePath: '' };
       });
     }
-
     // ---- turn-scoped accumulation ----
     const canvasImagesDefinition = {
       kind: 'canvas-images',
@@ -1048,22 +1060,7 @@ window.__ModuleLoader__.load({
         return { turn: match.event.data.turn, images: [], finalImagesSeen: false, startTime: match.event.time || 0 };
       },
       update(context, match) {
-        const visible = extractAssistantVisibleImages(match.event);
-        // 最终可见文本提到的图片只做“合并+名字校准”，不再整体替换。
-        // 旧版“替换”逻辑会因回复里顺带提到一张旧参考图（如基准图文件名），
-        // 把本轮真实生成的全部附件挤掉，叠加 mtime 过滤后卡片直接清空。
-        // 现在旧图引用由 ImageTail 的文件时间过滤负责隐藏，这里不做取舍。
-        if (visible.length) {
-          const reconciled = reconcileFinalImages(context.state.images, visible, match.event.seq, context.state.startTime);
-          const images = [...context.state.images];
-          const seen = new Set(images.map((i) => i.path));
-          for (const item of reconciled) {
-            if (!seen.has(item.path)) { images.push(item); seen.add(item.path); }
-          }
-          return { ...context.state, images, finalImagesSeen: true };
-        }
-        if (context.state.finalImagesSeen) return context.state;
-        const found = extractImagePaths(match.event);
+        const found = extractGeneratedImagePaths(match.event);
         if (!found.length) return context.state;
         const images = [...context.state.images];
         const seen = new Set(images.map((i) => i.path));
@@ -1089,7 +1086,7 @@ window.__ModuleLoader__.load({
             if (attachmentIndex >= 0) continue;
           }
           seen.add(p);
-          const item = { path: p, seq: match.event.seq, startTime: context.state.startTime || 0, sourcePath: entry.sourcePath || '' };
+          const item = { path: p, seq: match.event.seq, startTime: context.state.startTime || 0, sourcePath: entry.sourcePath || '', producer: 'imagegen' };
           images.push(item);
           additions.push(item);
         }
@@ -1150,7 +1147,6 @@ window.__ModuleLoader__.load({
         })
         .catch((err) => window.alert('无法在文件夹中显示：' + String((err && err.message) || err)));
     }
-
     // ---- turn-tail inline images ----
     function ImageTail(props) {
       // 新版 DSH(官方桌面)不再调用插槽 select:turnTail 列表项组件直接收到
@@ -1164,7 +1160,10 @@ window.__ModuleLoader__.load({
           matched = scoped.length ? scoped : null;
         } catch (error) { matched = null; }
       }
-      const images = matched || [];
+      // 旧版本曾把 turn 里所有图片都持久化进 canvas-images。没有明确
+      // imagegen provenance 的旧条目在新版直接隐藏，避免升级后继续显示
+      // 参考图、检查图、裁剪中间图与失效附件。
+      const images = (matched || []).filter((item) => item && item.producer === 'imagegen');
       // 本轮开始时间由聚合节点写进每个条目；旧会话条目没有该字段时为 0，跳过新旧过滤。
       const turnStart = (images.length && images[0] && images[0].startTime) || 0;
       const [preview, setPreview] = React.useState(null);
@@ -1313,7 +1312,10 @@ window.__ModuleLoader__.load({
           });
         return () => { cancelled = true; };
       }, [key, activeChatSessionId, contextRevision]);
-      if (!visibleImages.length) return null;
+      // 自动上画布开启且当前聊天已绑定项目：最终产物会自动进入画布，
+      // 聊天尾部不再重复展示一套“加入画布”卡片。未绑定项目时仍保留，
+      // 让用户能看到并手动处理生成结果。
+      if (!visibleImages.length || (canvasAutoAddEnabled() && activeCanvasProjectPath)) return null;
       // 附件条目的可操作文件路径：优先条目自带 sourcePath（归档真实文件），
       // 其次当前画布项目拼接路径，最后退回附件引用本身（交给附件解析）。
       const actionPathOf = (img) => {
@@ -1458,7 +1460,6 @@ window.__ModuleLoader__.load({
         ) : null
       );
     }
-
     // ---- OCR text rebuild panel (multi-region, review-first) ----
     // OCR is deliberately review-first: the user can disable or correct every
     // candidate before a PSD is generated.  The source image is never changed.
@@ -2343,6 +2344,10 @@ const EXCALIDRAW_SRCDOC = `<!doctype html><html><head><meta charset="utf-8"><sty
     @media(max-width:720px){.dsh-image-editor{padding:8px}.dsh-image-editor-panel{width:calc(100vw - 16px);height:calc(100vh - 16px);border-radius:12px}.dsh-image-editor-foot{grid-template-columns:1fr}.dsh-image-editor-send{min-height:44px}.dsh-image-editor-head{flex-wrap:wrap}.dsh-image-editor-sub{flex-basis:40%}}
     .excalidraw [data-testid="toolbar-image"],#ex-root [data-testid="toolbar-image"],.excalidraw [aria-label="插入图像"],.excalidraw [aria-label="Insert image"],.excalidraw [title^="插入图像"]{display:none!important}
     .excalidraw .dsh-hidden-social-links{display:none!important}
+    /* Excalidraw 暗色主题会把画布先反相绘制，再用 invert(.93) 还原。
+       .93 会把黑位抬高约 7% 并压缩对比度，导致同一张图比聊天预览发白。
+       仅在暗色主题下把还原系数校正为 1，不改图片字节、元素透明度或浅色主题。 */
+    .excalidraw.theme--dark canvas.excalidraw__canvas{filter:invert(1) hue-rotate(180deg)!important}
     /* 设置菜单需要位于画布文件名标签和选中工具条之上；打开菜单时暂时收起标签，关闭后自动恢复。 */
     .dsh-excalidraw-menu-open .dsh-name-layer{display:none!important}
     .dsh-tip{display:none!important}
@@ -2884,7 +2889,6 @@ window.addEventListener("message",function(e){
   });}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)});});
 },true);
 var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"chat-gen-soft-error",message:"生成占位未创建: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"chat-gen-resolve-failed",id:d.id,url:d.url,path:d.path||"",name:d.name||"",message:String(err&&err.message||err)});post({type:"chat-gen-soft-error",message:"生成图未上画布: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if(d.type==="export"&&api){var elements=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted&&item.id!=="dsh_theme_backdrop";});if(!elements.length){post({type:"exported",error:"empty"});return;}var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;if(typeof exporter!=="function"){post({type:"error",message:"导出失败: 当前 Excalidraw 未提供 PNG 导出器"});return;}var state=Object.assign({},api.getAppState()||empty,{exportBackground:true,exportWithDarkMode:false,exportScale:1});Promise.resolve(exporter({elements:elements,appState:state,files:fileObject(api.getFiles?api.getFiles():{}),mimeType:"image/png"})).then(function(blob){var fr=new FileReader();fr.onloadend=function(){post({type:"exported",dataUrl:fr.result})};fr.onerror=function(){post({type:"error",message:"导出失败: 无法读取 PNG 数据"})};fr.readAsDataURL(blob)}).catch(function(err){post({type:"error",message:"导出失败: "+String(err&&err.message||err)})})}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;
-
     // Excalidraw/React are pinned vendor assets served by the plugin host.
     // Keeping these scripts off a public CDN prevents DSH srcdoc/CSP changes
     // or domestic-network failures from leaving the canvas at "loading".
@@ -2984,14 +2988,17 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       python: 'Python 运行时',
       rembg: '去背景引擎',
       vectorize: '转矢量引擎',
-      rembgModel: '识别模型(约170MB)',
+      rembgModel: '去背景模型(BiRefNet 约214MB)',
       ocr: 'OCR 文字识别',
+      psdTools: 'PSD 导出引擎',
       dshCodex: 'dsh-codex 引擎'
     };
 
     function ToolchainCard(props) {
       const status = props.toolchain;
       const [busy, setBusy] = React.useState(false);
+      const [logText, setLogText] = React.useState('');
+      const [logOpen, setLogOpen] = React.useState(false);
       // 打开期间 3s 轮询刷新(有 downloading/preparing 时进度会动)
       React.useEffect(() => {
         if (!status) return undefined;
@@ -3026,21 +3033,29 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           .catch(() => {})
           .finally(() => { setBusy(false); if (typeof props.onRefresh === 'function') props.onRefresh(); });
       };
+      const toggleLog = () => {
+        const next = !logOpen;
+        setLogOpen(next);
+        if (next) {
+          fetch('/dsh-canvas/toolchain-log?lines=80').then((r) => r.text()).then(setLogText).catch(() => setLogText('(日志读取失败)'));
+        }
+      };
       return React.createElement('div', { className: 'dsh-canvas-toolchain' },
         React.createElement('div', { className: 'dsh-canvas-toolchain-head' },
           React.createElement('span', null, '本地工具链'),
           React.createElement('small', null, allReady ? '全部就绪，无需等待' : '后台自动准备，首次使用前无需手动操作'),
-          allReady ? null : React.createElement('button', { className: 'dsh-canvas-tb', disabled: busy, onClick: prepareNow }, busy ? '准备中…' : '立即准备')
+          allReady ? null : React.createElement('button', { className: 'dsh-canvas-tb', disabled: busy, onClick: prepareNow }, busy ? '准备中…' : '立即准备'),
+          React.createElement('button', { className: 'dsh-canvas-tb', onClick: toggleLog }, logOpen ? '收起日志' : '运行日志')
         ),
         React.createElement('div', { className: 'dsh-canvas-toolchain-rows' },
           entries.map((entry) => React.createElement('div', { key: entry.key, className: 'dsh-canvas-toolchain-row' },
             React.createElement('span', { className: 'dsh-canvas-toolchain-name' }, entry.label),
             React.createElement('span', { className: 'dsh-canvas-toolchain-state is-' + entry.item.state }, stateText(entry.item))
           ))
-        )
+        ),
+        logOpen ? React.createElement('pre', { className: 'dsh-canvas-toolchain-log', style: { maxHeight: '180px', overflow: 'auto', margin: '6px 0 0', padding: '8px', fontSize: '11px', lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-all', opacity: 0.9 } }, logText || '…') : null
       );
     }
-
     // Windows 官方桌面用自绘标题栏(顶部一条 -webkit-app-region:drag 拖拽区,
     // 右上是系统最小化/关闭按钮)。画布工具栏若与它同行,点击会被拖拽区吞掉
     // (实测:换行到第二行的按钮就能点)。检测到 Windows 时整体下移避开。

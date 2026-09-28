@@ -63,6 +63,8 @@ test('Windows：remoteEval 用 COM DoJavaScriptFile 驱动用户副本脚本，O
       const driver = await readFile(jsxPath, 'utf8');
       assert.ok(driver.startsWith('\uFEFF'), '驱动 jsx 带 BOM');
       assert.match(driver, /DSH_BRIDGE_HEADLESS = true/);
+      assert.match(driver, /dsh-bridge-photoshop\.jsx/);
+      assert.doesNotMatch(driver, /DSH画布桥接-Photoshop\.jsx/);
       assert.match(driver, /B\.ps\.sendSelection\(false\)/);
       assert.match(cwd, /dsh-canvas-bridge/);
       return { exitCode: 0, stdout: 'OK:3', stderr: '' };

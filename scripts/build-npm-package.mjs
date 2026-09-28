@@ -6,7 +6,9 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const root = resolve(scriptDir, '..');
 const sourceDir = resolve(root, 'canvas-workbench');
 const sourcePackage = JSON.parse(await readFile(resolve(sourceDir, 'package.json'), 'utf8'));
-const packageName = 'dsh-canvas-workbench';
+const packageName = 'canvas-workbench';
+const devClientId = "id: '@local/canvas-workbench'";
+const npmClientId = "id: 'canvas-workbench'";
 const stageDir = resolve(root, 'dist', 'npm', `${packageName}-${sourcePackage.version}`);
 
 const publishPackage = {
@@ -34,7 +36,7 @@ const publishPackage = {
     ...sourcePackage.exports,
     './cordis.patch.yml': './cordis.patch.yml'
   },
-  files: ['lib', 'src', 'scripts', 'vendor', 'cordis.patch.yml', 'README.md', 'LICENSE'],
+  files: ['lib', 'src', 'scripts', 'vendor', 'adobe-bridge', 'cordis.patch.yml', 'README.md', 'LICENSE'],
   dshCanvasCompatibility: sourcePackage.dshCanvasCompatibility,
   dsh: {
     bundle: { patch: './cordis.patch.yml' },
@@ -49,13 +51,14 @@ const publishPackage = {
     '@deepseek-ai/dsh-llm': { optional: true },
     '@deepseek-ai/dsh-tools': { optional: true },
     react: { optional: true }
-  }
+  },
+  dependencies: sourcePackage.dependencies || {}
 };
 
 await rm(stageDir, { recursive: true, force: true });
 await mkdir(stageDir, { recursive: true });
 
-for (const name of ['lib', 'src', 'scripts', 'vendor']) {
+for (const name of ['lib', 'src', 'scripts', 'vendor', 'adobe-bridge']) {
   await cp(resolve(sourceDir, name), resolve(stageDir, name), {
     recursive: true,
     filter: (path) => !/(^|[/\\])(?:__pycache__|\.DS_Store)(?:$|[/\\])/.test(path)
@@ -63,6 +66,17 @@ for (const name of ['lib', 'src', 'scripts', 'vendor']) {
       && !/(^|[/\\])(?:auth\.json|\.env)$/.test(path)
   });
 }
+
+// npm 客户端注册 id 必须与实际安装包名一致，否则 Host 即使加载成功，
+// 前端也不会注册设计模式入口。开发态仍保持 @local/canvas-workbench。
+const stagedClientPath = resolve(stageDir, 'lib', 'client.js');
+let stagedClient = await readFile(stagedClientPath, 'utf8');
+const clientIdHits = stagedClient.split(devClientId).length - 1;
+if (clientIdHits !== 1) {
+  throw new Error(`client id 替换点异常：期望 1 处，实际 ${clientIdHits} 处`);
+}
+stagedClient = stagedClient.replace(devClientId, npmClientId);
+await writeFile(stagedClientPath, stagedClient, 'utf8');
 
 await cp(resolve(sourceDir, 'README.md'), resolve(stageDir, 'README.md'));
 await cp(resolve(root, 'LICENSE'), resolve(stageDir, 'LICENSE'));

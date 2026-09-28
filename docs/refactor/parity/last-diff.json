@@ -1,5 +1,21 @@
 {
   "baselineRef": "refactor-baseline",
-  "at": "2026-09-17T11:59:57.647Z",
-  "diffs": []
+  "at": "2026-09-28T16:45:45.894Z",
+  "diffs": [
+    {
+      "path": ".health.body.version",
+      "baseline": "1.7.0",
+      "candidate": "1.9.36"
+    },
+    {
+      "path": ".image-settings.body.imageSize",
+      "baseline": "<absent>",
+      "candidate": "auto"
+    },
+    {
+      "path": ".image-settings.body.imageCount",
+      "baseline": "<absent>",
+      "candidate": 1
+    }
+  ]
 }

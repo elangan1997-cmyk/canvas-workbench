@@ -3,12 +3,13 @@
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { access, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
-import { closeAdobeDocumentsUnder, isMac, isWindows, openWithSystem, resolvePython, runAdobeJsxViaCom } from '../../../lib/platform.js';
+import { closeAdobeDocumentsUnder, isMac, isWindows, openWithSystem, resolvePythonWithDeps, runAdobeJsxViaCom } from '../../../lib/platform.js';
 import { generateImage, readImageEngineSettings } from '../../../lib/image-engine.js';
 import { readBody, respond } from '../server/http.js';
 import { runPythonSpec } from '../services/python-launch.js';
 import { decodeImageData, normalizeTextLayerText, safeImageName } from '../../shared/utils/data-url.js';
 import { analyzeTextWithCurrentModel, visionBlocks } from '../services/text-analysis.js';
+import { buildNativeTextPsd } from '../services/native-text-psd.js';
 import { PLUGIN_ROOT } from '../vendor-assets.js';
 import { name } from '../plugin-meta.js';
 
@@ -62,7 +63,7 @@ export function register(router, h) {
             const pluginRoot = PLUGIN_ROOT;
             const script = join(pluginRoot, 'scripts', 'ocr_image.py');
             await access(script);
-            const python = await resolvePython(ctx);
+            const python = await resolvePythonWithDeps(ctx);
             const runOcr = async (crop) => {
               // Sparse-text mode is more reliable for a selected artwork area:
               // psm 6 treats the whole crop as one uniform paragraph and can
@@ -183,7 +184,7 @@ export function register(router, h) {
             const pluginRoot = PLUGIN_ROOT;
             const script = join(pluginRoot, 'scripts', 'export_text_psd.py');
             await access(script);
-            const python = await resolvePython(ctx);
+            const python = await resolvePythonWithDeps(ctx);
             let cleanInput = '';
             let cleanupEngine = '';
             let cleanupWarning = '';
@@ -427,6 +428,22 @@ export function register(router, h) {
 
             let photoshop = false;
             let photoshopWarning = '';
+            let textLayerEngine = 'draft';
+            const addPhotoshopWarning = (message) => {
+              const value = String(message || '').trim();
+              if (value) photoshopWarning = [photoshopWarning, value].filter(Boolean).join('；');
+            };
+            // Photoshop 2025 can freeze its legacy ExtendScript saveAs path
+            // after creating a zero-byte file. Build native Type layers
+            // directly first so Mac and Windows share a deterministic path.
+            try {
+              await writeFile(finalPsd, buildNativeTextPsd(await readFile(draftPsd), exportBlocks));
+              photoshop = true;
+              textLayerEngine = 'ag-psd';
+              addPhotoshopWarning('已创建 ' + enabledBlocks.length + ' 个可编辑原生文字图层，默认隐藏等待校对；Photoshop 首次打开若提示更新文字图层，请点“更新”');
+            } catch (err) {
+              addPhotoshopWarning('直接写入原生文字图层失败，已尝试 Adobe 兼容路径：' + String((err && err.message) || err));
+            }
             const jsxPayload = JSON.stringify({ input: draftPsd, output: finalPsd, blocks: exportBlocks, cleanBackground: Boolean(cleanInput) });
             const jsx = '#target photoshop\n(function(){\n'
               + 'var cfg=' + jsxPayload + ';\n'
@@ -440,16 +457,17 @@ export function register(router, h) {
             // interpreted with the host's legacy Mac encoding.
             const appleScript = 'tell application id "com.adobe.Photoshop"\nactivate\ndo javascript (read POSIX file ' + JSON.stringify(jsxPath) + ' as «class utf8»)\nend tell\n';
             await writeFile(appleScriptPath, appleScript, 'utf8');
-            if (body.openPhotoshop !== false && isMac) {
+            if (!photoshop && body.openPhotoshop !== false && isMac) {
               try {
                 const osascript = await ctx.subprocess.resolveExecutable('osascript');
                 const scripted = await runProcessWithTimeout(osascript, [appleScriptPath], outputDir, 120000);
                 try { await stat(finalPsd); photoshop = scripted.exitCode === 0; } catch (err) {}
-                if (!photoshop) photoshopWarning = String(scripted.stderr || '').trim() || '未能调用 Photoshop 原生文字层，已使用 PSD 草稿兜底';
+                if (!photoshop) addPhotoshopWarning(String(scripted.stderr || '').trim() || '未能调用 Photoshop 原生文字层，已使用 PSD 草稿兜底');
+                else textLayerEngine = 'photoshop';
               } catch (err) {
-                photoshopWarning = String((err && err.message) || err);
+                addPhotoshopWarning(String((err && err.message) || err));
               }
-            } else if (body.openPhotoshop !== false && isWindows) {
+            } else if (!photoshop && body.openPhotoshop !== false && isWindows) {
               // Windows 同样能建**原生文字层**：改用 COM `DoJavaScriptFile` 驱动
               // Photoshop（与 Adobe 桥接的远程驱动同一机制）。
               // 旧版这里直接退回 PSD 草稿，导致「编辑文字」产出的 "OCR text N"
@@ -463,19 +481,20 @@ export function register(router, h) {
                 });
                 try { await stat(finalPsd); photoshop = scripted.ok === true; } catch (err) {}
                 if (!photoshop) {
-                  photoshopWarning = scripted.error || '未能调用 Photoshop 原生文字层，已使用 PSD 草稿兜底';
+                  addPhotoshopWarning(scripted.error || '未能调用 Photoshop 原生文字层，已使用 PSD 草稿兜底');
                 } else {
                   // 文字层默认隐藏是上游设计（先把 OCR 结果交用户核对再启用），但用户
                   // 打开 PS 看不到文字会误以为没生成 —— 用反馈栏把去哪找说清楚。
-                  photoshopWarning = '已创建 ' + enabledBlocks.length + ' 个可编辑文字图层，默认隐藏（图层名含 review before enabling），在 Photoshop 图层面板点开前面的眼睛即可编辑';
+                  textLayerEngine = 'photoshop';
+                  addPhotoshopWarning('已创建 ' + enabledBlocks.length + ' 个可编辑文字图层，默认隐藏（图层名含 review before enabling），在 Photoshop 图层面板点开前面的眼睛即可编辑');
                 }
               } catch (err) {
-                photoshopWarning = String((err && err.message) || err);
+                addPhotoshopWarning(String((err && err.message) || err));
               }
-            } else if (body.openPhotoshop === false) {
-              photoshopWarning = '已生成 PSD 草稿（未调用 Photoshop），原图与 OCR 文字预览均已保留';
-            } else {
-              photoshopWarning = '已生成可打开的 PSD；当前平台不支持原生 Photoshop 文字层自动化';
+            } else if (!photoshop && body.openPhotoshop === false) {
+              addPhotoshopWarning('已生成 PSD 草稿（未调用 Photoshop），原图与 OCR 文字预览均已保留');
+            } else if (!photoshop) {
+              addPhotoshopWarning('已生成可打开的 PSD；当前平台不支持原生 Photoshop 文字层自动化');
             }
             const sourcePsd = photoshop ? finalPsd : draftPsd;
             const bytes = await readFile(sourcePsd);
@@ -511,7 +530,7 @@ export function register(router, h) {
             }
             const info = await stat(saved.path);
             const warnings = [cleanupWarning, photoshopWarning, openError].filter(Boolean).join('；');
-            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, image: { path: saved.path, name: saved.name, mtime: info.mtimeMs, kind: 'psd', managed: true, url: previewUrl(saved.path, info.mtimeMs) }, photoshop, opened, openError, cleanedBackground: Boolean(cleanInput), cleanupEngine: cleanupEngine || 'none', styleEngine: 'local-font-heuristic', warning: warnings, blockCount: enabledBlocks.length, selectionCount: selections.length }));
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, image: { path: saved.path, name: saved.name, mtime: info.mtimeMs, kind: 'psd', managed: true, url: previewUrl(saved.path, info.mtimeMs) }, photoshop, nativeTextLayers: photoshop, textLayerEngine, opened, openError, cleanedBackground: Boolean(cleanInput), cleanupEngine: cleanupEngine || 'none', styleEngine: 'local-font-heuristic', warning: warnings, blockCount: enabledBlocks.length, selectionCount: selections.length }));
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
           } finally {
