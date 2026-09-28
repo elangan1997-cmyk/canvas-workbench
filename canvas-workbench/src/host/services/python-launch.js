@@ -17,13 +17,20 @@ export async function runPythonSpec(runOne, python, scriptPath, argsObject, { cw
   const work = await mkdtemp(join(tmpdir(), 'dsh-pyspec-'));
   try {
     const specPath = join(work, 'spec.json');
-    await writeFile(specPath, JSON.stringify(argsObject), 'utf8');
+    const resultPath = join(work, 'result.json');
+    await writeFile(specPath, JSON.stringify({ ...argsObject, result_output: resultPath }), 'utf8');
     const result = await runOne(
       python.executable,
       [...(python.prefixArgs || []), scriptPath, '--spec', specPath],
       cwd || tmpdir(),
       timeoutMs,
     );
+    // 结果优先取文件:脚本显式 UTF-8 落盘,绕开沙箱 runner 管道在 Windows 上的编码劣化(乱码实测)。
+    try {
+      const { readFile } = await import('node:fs/promises');
+      const fileResult = await readFile(resultPath, 'utf8');
+      if (fileResult && fileResult.trim()) return { ...result, stdout: fileResult };
+    } catch {}
     return result;
   } finally {
     rm(work, { recursive: true, force: true }).catch(() => {});

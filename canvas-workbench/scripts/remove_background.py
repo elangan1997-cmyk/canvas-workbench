@@ -288,7 +288,15 @@ def main() -> int:
         result = remove(image.convert("RGBA"), session=session)
         result.save(args.output, format="PNG", optimize=True)
     emit_progress("complete", "去背景完成", 100)
-    print('{"success":true,"model":"isnet-general-use","image":"' + str(args.output).replace('\\', '\\\\').replace('"', '\\"') + '"}')
+    _final = '{"success":true,"model":"isnet-general-use","image":"' + str(args.output).replace('\\', '\\\\').replace('"', '\\"') + '"}'
+    _out = getattr(args, 'result_output', None)
+    if _out:
+        try:
+            from pathlib import Path as _P2
+            _P2(_out).write_text(_final, encoding='utf-8')
+        except Exception:
+            pass
+    print(_final)
     return 0
 
 

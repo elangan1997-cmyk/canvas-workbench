@@ -340,6 +340,13 @@ def main() -> int:
         result = {"success": True, "width": original_width, "height": original_height, "blocks": blocks[:200]}
         if crop_info:
             result["crop"] = crop_info
+        _out = getattr(args, 'result_output', None)
+        if _out:
+            try:
+                from pathlib import Path as _P2
+                _P2(_out).write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
+            except Exception:
+                pass
         print(json.dumps(result, ensure_ascii=False))
         return 0
     except Exception as exc:  # pragma: no cover - surfaced to host/UI
