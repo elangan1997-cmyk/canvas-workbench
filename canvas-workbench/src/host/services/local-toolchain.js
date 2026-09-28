@@ -4,11 +4,8 @@
 // 所有状态落在 ~/.dsh/canvas-workbench/toolchain-status.json,前端经 /dsh-canvas/toolchain-status 读取。
 import { access, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { dshHome } from './image-engine-settings.js';
 import { resolvePython } from '../../../lib/platform.js';
@@ -55,22 +52,30 @@ async function reachable(url, timeoutMs = 4000) {
 }
 
 async function download(urls, dest, onProgress) {
+  // 注意:不要用 Readable.fromWeb + stream.pipeline——该链路在 Electron 44 / Node 24
+  // 下会损坏字节流(Win 实机复刻验证:三个源直连全 GZIP-OK,经此链写盘后 magic 全错且字节数各异)。
+  // 改为 web 标准 reader 循环,内存聚合后一次性写盘。
   let lastError = '';
   for (const url of urls) {
     try {
       const res = await fetch(url, { redirect: 'follow' });
       if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
       const total = Number(res.headers.get('content-length')) || 0;
+      const reader = res.body.getReader();
+      const chunks = [];
       let done = 0;
-      const source = Readable.fromWeb(res.body);
-      source.on('data', (chunk) => {
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) break;
+        const chunk = Buffer.from(step.value);
+        chunks.push(chunk);
         done += chunk.length;
         if (onProgress && (total ? done % 5242880 < chunk.length : true)) onProgress(done, total);
-      });
+      }
+      const buffer = Buffer.concat(chunks);
+      if (!buffer.length) throw new Error('空响应');
       await mkdir(dirname(dest), { recursive: true });
-      await pipeline(source, createWriteStream(dest));
-      const info = await stat(dest);
-      if (!info.size) throw new Error('空文件');
+      await writeFile(dest, buffer);
       return dest;
     } catch (error) {
       lastError = String((error && error.message) || error);
