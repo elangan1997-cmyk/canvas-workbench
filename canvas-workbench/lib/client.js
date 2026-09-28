@@ -3939,16 +3939,24 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           .finally(() => setImageSettingsBusy(false));
       };
       const startCodexLogin = () => {
-        const popup = window.open('about:blank', '_blank');
-        if (popup) popup.opener = null;
         setImageSettingsBusy(true);
         setImageSettings((prev) => prev ? { ...prev, error: '', notice: '正在打开 ChatGPT 登录页…' } : prev);
         fetch('/plugins/dsh-openai-codex/auth/login', { method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json' } })
           .then((r) => r.json().catch(() => ({})).then((data) => ({ ok: r.ok, data })))
           .then((result) => {
             if (!result.ok || !result.data || !result.data.url) throw new Error(result.data && result.data.error || 'dsh-codex 登录服务尚未加载，请重启 DSH 后重试');
-            if (!popup) throw new Error('浏览器阻止了登录窗口，请允许 DSH 弹出窗口后重试');
-            popup.location.replace(result.data.url);
+            // 不先开空白窗再跳转(空白窗在 Electron 里会被弹窗拦截器拦)——直接开真实 URL;
+            // 若仍被拦,退化为 <a> 标签模拟点击(用户手势上下文内不会被拦)。
+            let popup = window.open(result.data.url, '_blank');
+            if (!popup) {
+              const link = document.createElement('a');
+              link.href = result.data.url;
+              link.target = '_blank';
+              link.rel = 'noopener';
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+            }
             setImageSettings((prev) => prev ? { ...prev, notice: '请在新窗口完成 ChatGPT 授权；本页会自动刷新登录状态。', error: '' } : prev);
             let attempts = 0;
             const timer = window.setInterval(() => {
@@ -3964,7 +3972,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
               }).catch(() => {});
             }, 1500);
           })
-          .catch((err) => { if (popup) popup.close(); setImageSettings((prev) => prev ? { ...prev, error: String((err && err.message) || err), notice: '' } : prev); })
+          .catch((err) => { setImageSettings((prev) => prev ? { ...prev, error: String((err && err.message) || err), notice: '' } : prev); })
           .finally(() => setImageSettingsBusy(false));
       };
       const testApiSettings = () => {
