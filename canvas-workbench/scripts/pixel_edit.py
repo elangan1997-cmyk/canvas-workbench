@@ -111,7 +111,10 @@ def main():
         from pathlib import Path as _P
         spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
         for action in parser._actions:
-            if action.dest in spec:
+            key = action.dest
+            if key not in spec and key.replace('_', '-') in spec:
+                key = key.replace('_', '-')
+            if key in spec:
                 value = spec[action.dest]
                 if action.type is not None:
                     try: value = action.type(value)

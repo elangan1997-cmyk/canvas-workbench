@@ -257,7 +257,7 @@ export function register(router, h) {
             const modelToken = Date.now() + '-' + Math.random().toString(16).slice(2);
             tempModelInput = join(outputDir, '.canvas-model-input-' + modelToken + '.webp');
             tempModelMask = tempMask ? join(outputDir, '.canvas-model-mask-' + modelToken + '.png') : '';
-            const modelSpec = { source: expandHome(modelSourcePath), 'output-image': tempModelInput, 'max-side': '1024' };
+            const modelSpec = { source: expandHome(modelSourcePath), output_image: tempModelInput, max_side: '1024' };
             if (tempMask) {
               // 有蒙版时只把蒙版周围的原生分辨率窗口交给模型（带上下文边距），避免整图缩放再放大造成擦除区发虚。
               tempCropInfo = join(outputDir, '.canvas-crop-' + modelToken + '.json');

@@ -47,7 +47,10 @@ def main():
         spec = _json.loads(_P(args.spec).read_text(encoding='utf-8'))
         # 值经 argparse 声明的 type 转换器处理(如 Path),与命令行语义一致。
         for action in parser._actions:
-            if action.dest in spec:
+            key = action.dest
+            if key not in spec and key.replace('_', '-') in spec:
+                key = key.replace('_', '-')
+            if key in spec:
                 value = spec[action.dest]
                 if action.type is not None:
                     try:
