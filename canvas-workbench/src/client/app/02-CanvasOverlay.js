@@ -176,6 +176,9 @@
       const [adobeInstall, setAdobeInstall] = React.useState({ scriptsInstalled: true, cepInstalled: true });
       const [imageSettings, setImageSettings] = React.useState(null);
       const [toolchain, setToolchain] = React.useState(null);
+      React.useEffect(() => {
+        fetch('/dsh-canvas/toolchain-status').then((r) => r.json()).then((d) => { if (d && d.ok) setToolchain(d.status); }).catch(() => {});
+      }, []);
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
@@ -2113,6 +2116,31 @@
                   .catch((err) => { setUpdating(false); setFeedback('⚠ 更新请求失败:' + String((err && err.message) || err)); });
               }
             }, updating ? '⏳ 更新中…' : (updateInfo && updateInfo.hasUpdate ? '🔄 更新到 ' + updateInfo.latest + '（当前 ' + updateInfo.current + '）' : '🔄 检查更新')),
+            React.createElement('button', {
+              title: toolchain && toolchain.items && Object.values(toolchain.items).some((v) => v && v.state === 'error')
+                ? '部分工具准备失败,点此重试'
+                : '查看本地工具链(Python/去背景/矢量/OCR/dsh-codex)准备状态,未就绪时一键准备',
+              onClick: () => {
+                setMoreMenuOpen(false);
+                fetch('/dsh-canvas/toolchain-status').then((r) => r.json()).then((d) => {
+                  if (!(d && d.ok)) return;
+                  setToolchain(d.status);
+                  const items = d.status.items || {};
+                  const errors = Object.entries(items).filter(([k, v]) => v && v.state === 'error');
+                  const pending = Object.entries(items).filter(([k, v]) => v && ['downloading', 'preparing', 'extracting'].includes(v.state));
+                  if (pending.length) {
+                    setFeedback('⏳ 工具链准备中: ' + pending.map(([k]) => k).join('、') + '…');
+                  } else if (errors.length) {
+                    setFeedback('⚠ 部分工具失败: ' + errors.map(([k, v]) => k + '(' + String(v.error || '').slice(0, 30) + ')').join('、') + ' — 正在重试…');
+                    fetch('/dsh-canvas/toolchain-prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' } }).catch(() => {});
+                  } else {
+                    setFeedback('✓ 本地工具链全部就绪');
+                  }
+                }).catch(() => setFeedback('⚠ 工具链状态读取失败'));
+              }
+            }, toolchain && toolchain.items && Object.values(toolchain.items).some((v) => v && v.state === 'error')
+              ? '🛠 本地工具链(有失败,点击重试)'
+              : '🛠 本地工具链状态'),
             React.createElement('button', {
               title: '开启后画布背景跟随 macOS 系统外观，关闭则跟随 DSH 的主题设置',
               onClick: () => {
