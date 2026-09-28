@@ -80,7 +80,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input")
     parser.add_argument("--output")
-    parser.add_argument("--blocks", required=True, help="JSON array of OCR blocks")
+    parser.add_argument("--blocks", default=None, help="JSON array of OCR blocks")
     parser.add_argument("--clean-input", default="", help="optional clean plate with text removed")
     parser.add_argument('--spec', default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
