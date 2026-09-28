@@ -90,7 +90,13 @@ export function register(router, h) {
             const { dshHome: debugHome } = await import('../services/image-engine-settings.js');
             const debugDir = debugJoin(debugHome(), 'canvas-workbench');
             await debugMkdir(debugDir, { recursive: true });
-            await debugWrite(debugJoin(debugDir, 'client-debug.json'), JSON.stringify(body, null, 2) + '\n', 'utf8');
+            // 合并写入:标题栏/模型等多个探针各报各的字段,不互相覆盖。
+            let merged = {};
+            try { merged = JSON.parse(await (await import('node:fs/promises')).readFile(debugJoin(debugDir, 'client-debug.json'), 'utf8')); } catch {}
+            const stamped = { ...merged, ...body };
+            if (body.modelTracking) stamped.modelTracking = body.modelTracking;
+            if (body.titlebar) stamped.titlebar = body.titlebar;
+            await debugWrite(debugJoin(debugDir, 'client-debug.json'), JSON.stringify(stamped, null, 2) + '\n', 'utf8');
             respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true }));
           } catch (err) {
             respond(res, 400, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false }));

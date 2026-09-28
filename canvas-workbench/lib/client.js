@@ -1842,13 +1842,31 @@ window.__ModuleLoader__.load({
       }, []);
       React.useEffect(() => {
         activeChatModelSelection = null;
-        if (!modelDirectoriesApi || !props.sessionId || typeof modelDirectoriesApi.directoryFor !== 'function') return;
+        // 模型追踪诊断:分级上报断点(无 API/无会话/无目录/正常),与标题栏探针同通道。
+        const reportModelStage = (stage, extra) => {
+          fetch('/dsh-canvas/client-debug', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ modelTracking: { stage, ...extra }, at: Date.now() })
+          }).catch(() => {});
+        };
+        if (!modelDirectoriesApi) { reportModelStage('no-api'); return; }
+        if (!props.sessionId) { reportModelStage('no-session'); return; }
+        if (typeof modelDirectoriesApi.directoryFor !== 'function') { reportModelStage('api-shape'); return; }
         let directory;
-        try { directory = modelDirectoriesApi.directoryFor(props.sessionId); } catch (e) { return; }
+        try { directory = modelDirectoriesApi.directoryFor(props.sessionId); } catch (e) { reportModelStage('directoryFor-threw', { error: String(e && e.message || e) }); return; }
+        if (!directory) { reportModelStage('no-directory'); return; }
         const update = () => {
           try {
             const snapshot = directory.store.getSnapshot();
             if (snapshot && snapshot.current) activeChatModelSelection = { ...snapshot.current };
+            // 模型追踪诊断:与标题栏探针同一通道,远程可读(Win 模型识别走不通排查用)。
+            reportModelStage('ok', {
+              snapshotKeys: snapshot ? Object.keys(snapshot) : null,
+              current: snapshot && snapshot.current
+                ? { provider: snapshot.current.provider || null, model: snapshot.current.model || snapshot.current.id || null }
+                : null
+            });
           } catch (e) {}
         };
         update();
