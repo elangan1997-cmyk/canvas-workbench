@@ -2,7 +2,7 @@
   "name": "@local/canvas-workbench",
   "version": "1.9.33",
   "private": true,
-  "description": "本地生图工作台,Lovart 平价平替:开自己的 API 生图(任意 OpenAI 兼容接口,零订阅),画布排版+修图/擦除/去背景/OCR/转矢量,可编辑 PSD/AI 交付,Photoshop/Illustrator 图层级双向桥接",
+  "description": "本地生图工作台,零订阅费:开自己的 API 生图(任意 OpenAI 兼容接口,零订阅),画布排版+修图/擦除/去背景/OCR/转矢量,可编辑 PSD/AI 交付,Photoshop/Illustrator 图层级双向桥接",
   "scripts": {
     "check": "node ../tests/check-portability.mjs && node scripts/check-syntax.mjs && node scripts/check-generated-jsx.mjs && node scripts/check-adobe-bridge-jsx.mjs && node scripts/check-windows-compat.mjs && node scripts/build-client.mjs --check && node scripts/patch-vendor-excalidraw.mjs --check",
     "test": "node --test \"tests/unit/**/*.test.mjs\" \"tests/migration/**/*.test.mjs\"",
@@ -79,7 +79,7 @@
     "material-library",
     "openai-compatible",
     "image-api",
-    "lovart-alternative",
+    "local-design-workstation",
     "ai-image-generator"
   ]
 }

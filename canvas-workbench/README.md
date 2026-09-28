@@ -1,12 +1,12 @@
 # Canvas Workbench · 本地生图工作台
 
-> A local-first AI image workstation inside DeepSeek Harness — an affordable, bring-your-own-API alternative to cloud design agents like Lovart: generate, edit, and deliver from your own machine, with layer-level Photoshop/Illustrator round-trip as the premium edge.
+> A local-first AI image workstation inside DeepSeek Harness — a zero-subscription, bring-your-own-API alternative to cloud design subscription platforms: generate, edit, and deliver from your own machine, with layer-level Photoshop/Illustrator round-trip as the premium edge.
 
-**开自己的 API 生图,不交订阅费**——在 DSH 里完成「生成 → 编辑 → 交付」整条链路:聊天生图、画布排版、修图擦除、可编辑 PSD/AI 交付,文件全程在你自己的磁盘上。可视为**本地版的 Lovart 平价平替**:核心链路对齐,成本是你自己的 API 用量;再叠加两个云端产品给不了的溢价点——**PS/AI 图层级双向联动**与**可编辑文件交付**。
+**开自己的 API 生图,不交订阅费**——在 DSH 里完成「生成 → 编辑 → 交付」整条链路:聊天生图、画布排版、修图擦除、可编辑 PSD/AI 交付,文件全程在你自己的磁盘上。可视为**零订阅的本地 AI 设计工作台**:核心链路对齐,成本是你自己的 API 用量;再叠加两个云端产品给不了的溢价点——**PS/AI 图层级双向联动**与**可编辑文件交付**。
 
 ### 你可能在找它(Looking for one of these?)
 
-- 「**本地生图工具 / Lovart 平替 / 不想交订阅费的 AI 设计**」→ 开自己的 API(任意 OpenAI 兼容接口,国内大模型/企业网关直连),本地零订阅
+- 「**本地生图工具 / 零订阅 AI 设计 / 不想交订阅费的 AI 设计**」→ 开自己的 API(任意 OpenAI 兼容接口,国内大模型/企业网关直连),本地零订阅
 - 「**批量生图 / 抽卡 / 一次生成多张**挑图」→ 数量 ×2/×4/×8,画布占位逐张原位替换
 - 「AI 生图**比例控制 / 9:16 竖版 / 16:9 / 21:9 电影感**」→ 输入区 13 档比例,生成后精确裁切
 - 「DSH **聊天生成的图自动放到画布 / 自动上画布**」→ 生成中占位 → 完成原位替换,全自动
@@ -17,7 +17,7 @@
 - 「DSH 和 **Photoshop / Illustrator 联动 / 图层互传 / PS 桥接**」→ Adobe 双向桥接
 - 「DSH **素材库 / 素材管理 / 设计素材**」→ 带颜色标签的本机素材库
 - 「不想开 ChatGPT 订阅,**用自己的图片 API / 国内大模型 API / 企业网关**做设计」→ 任意 OpenAI 兼容接口直连
-- *DSH canvas plugin · local Lovart alternative · infinite canvas · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
+- *DSH canvas plugin · local AI design workstation · infinite canvas · image editing · background removal · PSD export · Photoshop bridge · designer workbench*
 
 ---
 
@@ -94,7 +94,7 @@ dsh plugin --profile web add canvas-workbench
 
 引擎不会静默切换,状态面板实时显示安装/登录/凭据状态。
 
-## 是 Lovart 的平价平替吗?
+## 和云端订阅平台比?
 
 对**核心链路——生图 → 编辑 → 交付**来说,是:
 
