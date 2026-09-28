@@ -51,11 +51,23 @@ function visionBlocks(value, width, height) {
   }).filter(Boolean).sort((a, b) => a.y - b.y || a.x - b.x);
 }
 
+function detectImageMediaType(bytes) {
+  if (!bytes || !bytes.length) return null;
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg';
+  if (bytes.length >= 12 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif';
+  return null;
+}
+
 async function analyzeTextWithCurrentModel(ctx, uploaded, body, simplified) {
   const provider = String(body.provider || '').trim();
   const model = String(body.model || '').trim();
   if (!provider || !model) throw new Error('未取得当前聊天模型');
-  const mediaType = uploaded.mime === 'image/jpg' ? 'image/jpeg' : uploaded.mime;
+  // 不信任 data URL 声明的 mime(画布图片的声明和真实字节可能不一致——WebP 存成 .png 等)。
+  // 从魔术数检测真实类型,否则 DSH 附件验证会抛 "Declared image type does not match its bytes"。
+  const detectedMediaType = detectImageMediaType(uploaded.bytes);
+  const mediaType = detectedMediaType || (uploaded.mime === 'image/jpg' ? 'image/jpeg' : uploaded.mime);
   if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mediaType)) throw new Error('当前图片格式不支持模型分析');
   const attachment = await ctx.attachments.saveImage({ data: new Uint8Array(uploaded.bytes), mediaType, name: String(body.name || '画布图片') });
   const info = await ctx.llm.resolveModelInfo(provider, model, AbortSignal.timeout(15000));
