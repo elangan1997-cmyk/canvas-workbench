@@ -38,7 +38,9 @@ def _pip_args():
 
 
 def _runtime_python():
-    return PSD_RUNTIME / ("Scripts" / "python.exe" if os.name == "nt" else "bin" / "python")
+    if os.name == "nt":
+        return PSD_RUNTIME / "Scripts" / "python.exe"
+    return PSD_RUNTIME / "bin" / "python"
 
 
 def _install(py):
