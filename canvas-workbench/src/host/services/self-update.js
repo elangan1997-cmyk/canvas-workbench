@@ -2,6 +2,7 @@
 // pnpm 完成 profile 依赖/锁文件/白名单升级——与手动升级流程完全一致,不再依赖
 // 插件市场检索节奏(市场有 minimumReleaseAge 24h 策略,且未必及时提供更新按钮)。
 // 源码/开发副本安装(@local)不支持,提示走同步脚本。
+import { existsSync } from 'node:fs';
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -138,7 +139,11 @@ export async function performSelfUpdate() {
   if (!manifest || !manifest.dist) return { ok: false, error: '读取版本信息失败' };
   const integrity = String(manifest.dist.integrity || '');
 
-  // 2) 三处配置升级(package.json / pnpm-lock.yaml / pnpm-workspace.yaml)
+  // 2) 两处配置升级(package.json 依赖 / pnpm-workspace 白名单)。
+  // 不再手工改写 lockfile:那会把 lock 里 canvas-workbench 的版本条目换字了事,
+  // 绕过依赖解析——1.9.36 起 npm 包新增的 runtime dependencies(如 ag-psd)永远
+  // 不会被装上,宿主加载插件又不装 npm dependencies,最终整个插件 failed to
+  // import(入口消失的真实根因)。改用 pnpm add 走完整解析。
   try {
     const pkgPath = join(profileDir, 'package.json');
     const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
@@ -147,16 +152,6 @@ export async function performSelfUpdate() {
     await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
   } catch (err) {
     return { ok: false, error: '更新 package.json 失败:' + String((err && err.message) || err) };
-  }
-  try {
-    const lockPath = join(profileDir, 'pnpm-lock.yaml');
-    const lock = await readFile(lockPath, 'utf8');
-    let next = lock.replace(new RegExp('(canvas-workbench:\\n\\s+specifier: \\^?)[0-9.]+\\n\\s+version: [0-9.]+'), '$1' + check.latest + '\n        version: ' + check.latest);
-    next = next.replace(new RegExp('canvas-workbench@[0-9.]+:\\n\\s+resolution: \\{integrity: [^}]+\\}'), 'canvas-workbench@' + check.latest + ':\n    resolution: {integrity: ' + integrity + '}');
-    next = next.replace(new RegExp('canvas-workbench@[0-9.]+: \\{\\}'), 'canvas-workbench@' + check.latest + ': {}');
-    await writeFile(lockPath, next, 'utf8');
-  } catch (err) {
-    return { ok: false, error: '更新锁文件失败:' + String((err && err.message) || err) };
   }
   try {
     const wsPath = join(profileDir, 'pnpm-workspace.yaml');
@@ -170,15 +165,37 @@ export async function performSelfUpdate() {
     return { ok: false, error: '更新安装策略白名单失败:' + String((err && err.message) || err) };
   }
 
-  // 3) 应用自带 pnpm 安装(ELECTRON_RUN_AS_NODE 复用应用二进制)
+  // 3) 用应用自带 pnpm 正常安装(完整依赖解析)。
   const exe = process.execPath;
   const resources = process.resourcesPath || join(dirname(exe), '..', 'resources');
   const pnpm = join(resources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs');
-  const result = await runUpdater(exe, [pnpm, 'install', '--dir', profileDir], { ...process.env, ELECTRON_RUN_AS_NODE: '1' });
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+  const runPnpm = (args) => runUpdater(exe, [pnpm, ...args, '--dir', profileDir], env);
+  let result = await runPnpm(['add', PACKAGE_NAME + '@' + check.latest]);
+  // 历史手改 lockfile 里的陈旧条目(如未满 24h 保护期的旧版本)会被供应链策略
+  // 拦下:按 pnpm 提示重建 lockfile 后重试一次。profile 依赖树很小,重建安全。
+  if (!result.ok && /MINIMUM_RELEASE_AGE|supply-chain|clean --lockfile/i.test(String(result.log) + String(result.error || ''))) {
+    await runPnpm(['clean', '--lockfile']);
+    result = await runPnpm(['add', PACKAGE_NAME + '@' + check.latest]);
+  }
   const logTail = String(result.log || '').split(/\r?\n/).filter(Boolean).slice(-6).join(' | ');
   if (!result.ok) {
-    const fallback = `操作失败(可能文件被占用)。请完全退出 DSH 后在 PowerShell 运行:\n$env:ELECTRON_RUN_AS_NODE=1\n& "${exe}" "${pnpm}" install --dir "${profileDir}"`;
+    const fallback = `操作失败(可能文件被占用)。请完全退出 DSH 后在 PowerShell 运行:\n$env:ELECTRON_RUN_AS_NODE=1\n& "${exe}" "${pnpm}" add ${PACKAGE_NAME}@${check.latest} --dir "${profileDir}"`;
     return { ok: false, error: (result.error || logTail || '安装器退出码 ' + result.code) + '\n' + fallback, log: result.log };
   }
-  return { ok: true, installed: check.latest, restartRequired: true, log: logTail };
+
+  // 4) 装后依赖自检:宿主加载插件不装 npm dependencies,任何缺失都会让整个
+  // 插件导入失败——发现即补装,杜绝"显示已安装但入口消失"。
+  const repaired = [];
+  try {
+    const installedPkg = JSON.parse(await readFile(join(profileDir, 'node_modules', PACKAGE_NAME, 'package.json'), 'utf8'));
+    const deps = installedPkg.dependencies || {};
+    for (const [depName, depRange] of Object.entries(deps)) {
+      if (existsSync(join(profileDir, 'node_modules', depName))) continue;
+      const fix = await runPnpm(['add', depName + '@' + depRange]);
+      if (fix.ok) repaired.push(depName + '@' + depRange);
+    }
+  } catch {}
+  const repairNote = repaired.length ? ';已自动补装缺失依赖: ' + repaired.join(', ') : '';
+  return { ok: true, installed: check.latest, restartRequired: true, log: logTail + repairNote };  return { ok: true, installed: check.latest, restartRequired: true, log: logTail };
 }

@@ -1,12 +1,26 @@
-import { initializeCanvas, readPsd, writePsdBuffer } from 'ag-psd';
-
-// ag-psd only needs ImageData-shaped buffers for this workflow. Supplying the
-// lightweight factory keeps the plugin portable and avoids a native canvas
-// dependency on both macOS and Windows.
-initializeCanvas(
-  () => { throw new Error('canvas drawing is not required for PSD text layers'); },
-  (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) })
-);
+// ag-psd 懒加载:宿主加载插件只装包本体、不装 npm dependencies——静态 import 在
+// 依赖缺失时会让整个插件"failed to import"(1.9.36~1.9.41 的真实事故:入口消失
+// 的根因)。改为首次使用时动态加载:缺依赖只影响 PSD 文字层导出并给出可操作提示,
+// 画布其余功能不受牵连。
+let agPsdModule = null;
+async function ensureAgPsd() {
+  if (agPsdModule) return agPsdModule;
+  let mod;
+  try {
+    mod = await import('ag-psd');
+  } catch (err) {
+    throw new Error('PSD 原生文字层依赖 ag-psd 未安装(插件更新时依赖未随装)。请用「更多 → 检查更新」重装本插件修复依赖后重试。原始错误: ' + String((err && err.message) || err));
+  }
+  // ag-psd only needs ImageData-shaped buffers for this workflow. Supplying the
+  // lightweight factory keeps the plugin portable and avoids a native canvas
+  // dependency on both macOS and Windows.
+  mod.initializeCanvas(
+    () => { throw new Error('canvas drawing is not required for PSD text layers'); },
+    (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) })
+  );
+  agPsdModule = mod;
+  return mod;
+}
 
 function color(value) {
   const match = /^#?([0-9a-f]{6})$/i.exec(String(value || ''));
@@ -42,7 +56,8 @@ function nativeTextLayer(block, index) {
   };
 }
 
-export function buildNativeTextPsd(draftBytes, blocks) {
+export async function buildNativeTextPsd(draftBytes, blocks) {
+  const { readPsd, writePsdBuffer } = await ensureAgPsd();
   const psd = readPsd(draftBytes, { useImageData: true, skipThumbnail: true });
   const enabled = (Array.isArray(blocks) ? blocks : [])
     .filter((block) => block && block.enabled !== false && String(block.text || '').trim())

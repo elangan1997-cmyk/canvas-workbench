@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.42（2026-09-30）
+
+npm 安装通道根因修复 + pymupdf 自举：
+
+- **【根因修复】npm/市场安装形态下插件整体"failed to import"（入口消失的真凶）**：宿主加载插件只装包本体、不装 npm dependencies，而自更新流程手工改写 lockfile 只替换 canvas-workbench 条目、绕过依赖解析——1.9.36 起 npm 包运行时依赖的 ag-psd 永远不会被装上，静态 import 失败 → 宿主服务与客户端全部不加载（"显示已安装但设计模式入口消失"；@local 副本因自带嵌套 node_modules 侥幸正常）。三层修复：①自更新弃用手工 lockfile 改写，改用 `pnpm add` 完整解析，陈旧 lockfile 被供应链策略拦下时自动重建重试，装后逐项自检 dependencies 并自动补装缺失；②`native-text-psd.js` 的 ag-psd 改为懒加载——缺依赖只影响 PSD 文字层导出并给出可操作提示，不再拖垮整个插件；③本机修复路径：`pnpm clean --lockfile` + 重建安装（实测 npm 通道全链复活）。
+- **pymupdf 自举（Windows .ai/.pdf 画布预览根治，Win 交接遗留项）**：`document_preview.py` 缺库不再报"预览转换器不可用"——自举隔离 venv（`~/.dsh/canvas-workbench/pymupdf-runtime`，PyMuPDF 1.26.5），marker 命中零下载；实测首跑 2m13s 建环境、二跑 0.46s 出图。
+
 ## 1.9.41（2026-09-29 晚）
 
 Win 网络环境实测回合（1 个文件修复 + 2 项源码侧加固）：

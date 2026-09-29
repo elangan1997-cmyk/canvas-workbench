@@ -28,6 +28,8 @@ import json
 import os
 import sys
 
+PYMUPDF_VERSION = "1.26.5"
+
 
 def emit(payload):
     sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -69,9 +71,33 @@ def main():
     except Exception:
         try:
             import fitz  # 旧版本模块名
-        except Exception as exc:
-            emit({"success": False, "error": "pymupdf 不可用: %s" % exc})
-            return 2
+        except Exception:
+            # 缺库不再"预览转换器不可用"了事:自举隔离 venv(pymupdf-runtime)并重入,
+            # 与 export_text_psd.py 的 PSD_RUNTIME 模式一致。首次约 30MB 下载,
+            # marker 文件命中即零下载(Windows .ai/.pdf 画布预览的根治,Win 交接项)。
+            import subprocess as sp
+            from pathlib import Path
+            runtime = Path.home() / ".dsh" / "canvas-workbench" / "pymupdf-runtime"
+            marker = runtime / ("pymupdf-" + PYMUPDF_VERSION + ".ready")
+            py = runtime / ("Scripts" / "python.exe" if os.name == "nt" else Path("bin") / "python")
+            index_url = os.environ.get("DSH_PIP_INDEX", "").strip()
+            pip_cmd = ["-m", "pip", "install", "--disable-pip-version-check", "--prefer-binary", "--timeout", "120"]
+            if index_url:
+                pip_cmd += ["-i", index_url]
+            ready = False
+            if marker.is_file() and py.exists():
+                probe = sp.run(
+                    [str(py), "-c", "import importlib.util as u; raise SystemExit(0 if (u.find_spec('pymupdf') or u.find_spec('fitz')) else 1)"],
+                    stdout=sp.DEVNULL, stderr=sp.DEVNULL, timeout=30)
+                ready = probe.returncode == 0
+            if not ready:
+                runtime.mkdir(parents=True, exist_ok=True)
+                if not py.exists():
+                    sp.run([sys.executable, "-m", "venv", str(runtime)], check=True, timeout=300)
+                sp.run([str(py), *pip_cmd, "PyMuPDF==" + PYMUPDF_VERSION], check=True, timeout=600)
+                marker.write_text(PYMUPDF_VERSION + "\n", encoding="utf-8")
+            rerun = sp.run([str(py), *sys.argv], check=False)
+            raise SystemExit(rerun.returncode)
 
     try:
         if not os.path.isfile(args.input) or os.path.getsize(args.input) <= 0:

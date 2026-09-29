@@ -437,7 +437,7 @@ export function register(router, h) {
             // after creating a zero-byte file. Build native Type layers
             // directly first so Mac and Windows share a deterministic path.
             try {
-              await writeFile(finalPsd, buildNativeTextPsd(await readFile(draftPsd), exportBlocks));
+              await writeFile(finalPsd, await buildNativeTextPsd(await readFile(draftPsd), exportBlocks));
               photoshop = true;
               textLayerEngine = 'ag-psd';
               addPhotoshopWarning('已创建 ' + enabledBlocks.length + ' 个可编辑原生文字图层，默认隐藏等待校对；Photoshop 首次打开若提示更新文字图层，请点“更新”');
