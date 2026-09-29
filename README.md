@@ -4,7 +4,7 @@
 
 **开自己的 API 生图,不交订阅费**——在 DSH 里完成「生成 → 编辑 → 交付」整条链路:聊天生图**自动上画布**、画布排版、修图擦除、可编辑 PSD/AI 交付,文件全程在你自己的磁盘上。可视为**零订阅的本地 AI 设计工作台**:核心链路对齐,成本是你自己的 API 用量;再叠加两个云端产品给不了的溢价点——**PS/AI 图层级双向联动**与**可编辑文件交付**。
 
-**最新版本 [`v1.9.0`](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.9.0)**:聊天生图全自动上画布(生成中占位 → 原位替换)、输入区生图**比例 13 档 + 数量 ×1~×8**、两引擎统一生效、新版官方桌面全面适配、Windows 推荐分支全量并入。
+**最新版本 [`v1.9.40`](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.9.40)**:1.9.x 线持续打磨——PSD 原生文字层修复、BiRefNet 去背景默认、Windows EPERM/Adobe 桥接修复、聊天生图重复上画布三链路根治、界面文案如实化(引擎/模型不再虚报)。1.9.0 底座:聊天生图全自动上画布(生成中占位 → 原位替换)、输入区生图**比例 13 档 + 数量 ×1~×8**、两引擎统一生效、新版官方桌面全面适配、Windows 推荐分支全量并入。
 
 ---
 
@@ -130,7 +130,7 @@ cd dsh-canvas-suite
 
 | 情况 | 推荐 |
 |---|---|
-| macOS 新电脑 | [`v1.5.9` Release](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9) 的 `macOS-Complete` DMG/PKG(整机重装验收基线),装好后按方式一/二升级画布到 1.9.0 |
+| macOS 新电脑 | [`v1.5.9` Release](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.5.9) 的 `macOS-Complete` DMG/PKG(整机重装验收基线),装好后按方式一/二升级画布到最新版(≥1.9.40) |
 | Windows 新电脑 | 源码安装(方式二,全量 Win 兼容修复已并入 main);或已实机验证的 `v1.4.0-windows-preview.4` 整包后升级 |
 
 npm 包与源码包都不含 DSH 本体、Python 运行时、模型文件、账号或 API Key。
@@ -236,4 +236,4 @@ MIT
 
 # DSH Canvas Workbench (English)
 
-A design-focused canvas plugin for DeepSeek Harness (DSH) Desktop. It brings chat-driven image generation (auto-placed onto the canvas with in-place placeholder replacement), aspect-ratio & batch-count controls (13 presets, ×1–×8), an infinite canvas with project persistence, in-canvas image editing / smart erase / background removal / OCR / vectorize / layered PSD export, and a layer-level Photoshop/Illustrator round-trip bridge — all local-first, bring-your-own-API. Latest: [v1.9.0](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.9.0). Install via `dsh plugin add canvas-workbench` (npmmirror fallback for mainland China) or from source (`./sync-local-plugins.sh` on macOS, `install-windows.cmd` on Windows). MIT licensed.
+A design-focused canvas plugin for DeepSeek Harness (DSH) Desktop. It brings chat-driven image generation (auto-placed onto the canvas with in-place placeholder replacement), aspect-ratio & batch-count controls (13 presets, ×1–×8), an infinite canvas with project persistence, in-canvas image editing / smart erase / background removal / OCR / vectorize / layered PSD export, and a layer-level Photoshop/Illustrator round-trip bridge — all local-first, bring-your-own-API. Latest: [v1.9.40](https://github.com/elangan1997-cmyk/dsh-canvas-suite/releases/tag/v1.9.40). Install via `dsh plugin add canvas-workbench` (npmmirror fallback for mainland China) or from source (`./sync-local-plugins.sh` on macOS, `install-windows.cmd` on Windows). MIT licensed.
