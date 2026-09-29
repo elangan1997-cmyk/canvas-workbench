@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.41（2026-09-29 晚）
+
+Win 网络环境实测回合（1 个文件修复 + 2 项源码侧加固）：
+
+- **画布 dsh-codex 生图走代理 fetch**：`OpenAICodexImageClient` 第二参默认 `globalThis.fetch`（直连），画布路径此前漏传——国内直连 chatgpt.com 不可达，生图必报「OpenAI Codex image request failed」。现把 dsh-codex 服务按其代理设置（scoped/global + proxyUrl）构建的 requestFetch 传入；无代理配置时语义等同直连，Mac 无影响。Win 实测：编辑文字→清洁底（dsh-codex 引擎）45s 全流程通过。
+- **【严重回归加固】用户图像引擎配置不再可能被写回出厂默认**（Win 实机观测 1.9.40 升级后 engine/imageSize/imageCount 全部丢失）：设置写入改为原子写（tmp+rename，杜绝升级重启期间的撕裂写）；覆盖前自动留 `image-engine.json.bak` 单槽备份；配置路由只提交请求体里实际存在的字段；文件损坏时读取带 `corrupted` 标记而非无痕回退默认。新增 4 组回归单测锁定「只补缺失、绝不覆盖」。
+- **PSD/AI 交付预览不再重复上画布**：交付 PSD 的元素预览（JPEG）被物化成 `xxx-2.jpg` 进 assets 后，按路径/文件名判重都拦不住（扩展名变了+带 -N 后缀）；重放派发与文件扫描两处判重的归一化升级为「去 -N 后缀 + 去扩展名」按文件名主干比对（`xxx-文字编辑.psd` 与 `xxx-文字编辑-2.jpg` 视为同源）。
+
 ## 1.9.40（2026-09-29）
 
 Mac 真机验收回合（用户实测反馈驱动，两项均为跨平台正确性修复）：

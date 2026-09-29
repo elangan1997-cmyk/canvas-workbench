@@ -1,6 +1,6 @@
 // 图像引擎设置与旧版 API 凭据存储（自 lib/image-engine.js 逐字迁移，v1.8 Phase 3）。
 // API Key 只落在本机 ~/.codex-pixel/auth.json（0600），绝不进入项目、前端、日志或 Git（执行文档禁止 9）。
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -42,7 +42,7 @@ export async function readImageEngineSettings() {
   const defaults = { engine: 'dsh-codex', apiBaseUrl: DEFAULT_API_BASE_URL, apiModel: DEFAULT_API_MODEL, imageSize: 'auto', imageCount: 1 };
   try {
     const parsed = JSON.parse(await readFile(imageEngineSettingsPath(), 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return defaults;
+    if (!parsed || typeof parsed !== 'object') return { ...defaults, corrupted: true };
     return {
       ...defaults,
       ...parsed,
@@ -53,7 +53,10 @@ export async function readImageEngineSettings() {
       imageCount: normalizeImageCount(parsed.imageCount),
     };
   } catch {
-    return defaults;
+    // 文件缺失是全新安装(正常,返回形状与默认值完全一致);存在但解析失败是
+    // 撕裂/损坏写(异常,附 corrupted 标记;后续写入前会先留备份,绝不无声丢配置)。
+    try { await readFile(imageEngineSettingsPath(), 'utf8'); } catch { return defaults; }
+    return { ...defaults, corrupted: true };
   }
 }
 
@@ -68,9 +71,18 @@ export async function writeImageEngineSettings(patch = {}) {
     imageSize: normalizeImageSize(patch.imageSize ?? current.imageSize),
     imageCount: normalizeImageCount(patch.imageCount ?? current.imageCount),
   };
+  delete next.corrupted;
   const filename = imageEngineSettingsPath();
   await mkdir(dirname(filename), { recursive: true, mode: 0o700 });
-  await writeFile(filename, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  // 写前把现有内容留一份单槽备份:配置若被异常重置,可从此恢复并定位发生时刻。
+  // 原子写(tmp+rename)杜绝升级重启期间的撕裂写把 JSON 写坏。
+  try {
+    const previous = await readFile(filename, 'utf8');
+    if (previous.trim()) await writeFile(filename + '.bak', previous, { encoding: 'utf8', mode: 0o600 });
+  } catch {}
+  const tmp = filename + '.tmp';
+  await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await rename(tmp, filename);
   return next;
 }
 

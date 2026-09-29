@@ -36,13 +36,14 @@ export function register(router, h) {
           }
           try {
             const body = JSON.parse(await readBody(req) || '{}');
-            const settings = await writeImageEngineSettings({
-              engine: body.engine,
-              apiBaseUrl: body.apiBaseUrl,
-              apiModel: body.apiModel,
-              imageSize: body.imageSize,
-              imageCount: body.imageCount
-            });
+            // 只提交 body 里实际出现的字段:升级/重载期间客户端若发出部分请求,
+            // 绝不能让 undefined 字段参与归一化链路(1.9.40 Win 实机观测到用户
+            // 配置被写回出厂默认,此处按"只补缺失、绝不覆盖"收紧)。
+            const patch = {};
+            for (const key of ['engine', 'apiBaseUrl', 'apiModel', 'imageSize', 'imageCount']) {
+              if (body && Object.prototype.hasOwnProperty.call(body, key) && body[key] !== undefined && body[key] !== null) patch[key] = body[key];
+            }
+            const settings = await writeImageEngineSettings(patch);
             if (body.apiKey || body.clearApiKey === true) {
               await writeLegacyApiAuth({ apiKey: body.apiKey, baseUrl: settings.apiBaseUrl, clear: body.clearApiKey === true });
             }

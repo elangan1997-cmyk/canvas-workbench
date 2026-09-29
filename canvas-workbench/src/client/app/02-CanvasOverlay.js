@@ -114,11 +114,11 @@
                 // 文件名带 -N 后缀，与重放的归档原始路径/原始名都对不上——路径
                 // 之外再按「剥掉末尾 -数字 后缀的归一化文件名」比对，两个维度
                 // 任一命中即视为已在画布，阻断重放链路的重复加入。
-                const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '');
+                const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
                 const alreadyOnCanvas = ((latestSnapshot.current || {}).elements || [])
                   .some((item) => item && item.type === 'image' && !item.isDeleted && item.customData && (
                     String(item.customData.dshSourcePath || '') === path ||
-                    (dispatchName && String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '') === dispatchName)
+                    (dispatchName && String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '') === dispatchName)
                   ));
                 if (alreadyOnCanvas) continue;
                 const name = imageName(path) || '聊天生成.png';
@@ -1906,7 +1906,7 @@
                 const linkedNames = new Set();
                 for (const el of (latestSnapshot.current || {}).elements || []) {
                   if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshSourcePath) linked.add(el.customData.dshSourcePath);
-                  if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshFileName) linkedNames.add(String(el.customData.dshFileName).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, ''));
+                  if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshFileName) linkedNames.add(String(el.customData.dshFileName).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, ''));
                 }
                 if (!autoAddBaseline.current) {
                   try {
@@ -1919,7 +1919,7 @@
                     if (!item || !item.path) continue;
                     // ADOBE桥接/ 下的文件由桥接轮询器按清单上画布（要打出处印、要 ack），这里跳过以免重复添加。
                     if (isAdobeBridgePath(item.path)) continue;
-                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path) || linkedNames.has(String(item.name || imageName(item.path)).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, ''))) continue;
+                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path) || linkedNames.has(String(item.name || imageName(item.path)).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, ''))) continue;
                     autoAddBaseline.current.add(item.path);
                     if (Number(item.mtime || 0) > Date.now() - 15 * 60 * 1000) fresh.push(item);
                   }

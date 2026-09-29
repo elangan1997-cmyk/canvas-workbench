@@ -69,7 +69,15 @@ async function generateWithDshCodex({ ctx, image, prompt, signal }) {
     ? service.credentials
     : module.OpenAICodexCredentialStore ? new module.OpenAICodexCredentialStore() : null;
   if (!credentials || !module.OpenAICodexImageClient) throw new Error('当前 dsh-codex 未提供图片编辑客户端，请重启 DSH 后重试');
-  const client = new module.OpenAICodexImageClient(credentials);
+  // OpenAICodexImageClient 的第二参默认 globalThis.fetch（直连）。chatgpt.com 在
+  // 国内直连不可达，必须把 dsh-codex 服务里按其代理设置（scoped/global + proxyUrl）
+  // 构建的 requestFetch 传进来，否则生图必然报"OpenAI Codex image request failed"。
+  const proxyFetch = service && service.proxy && typeof service.proxy.fetch === 'function'
+    ? service.proxy.fetch
+    : module.OpenAICodexProxyTransport
+      ? new module.OpenAICodexProxyTransport(() => ({ proxyMode: 'scoped', proxyUrl: '' })).fetch
+      : undefined;
+  const client = new module.OpenAICodexImageClient(credentials, proxyFetch);
   const images = Array.isArray(image) ? image : image ? [image] : [];
   return Buffer.from(await client.generate(prompt, images.map(dataUrl), signal || AbortSignal.timeout(360000)));
 }
