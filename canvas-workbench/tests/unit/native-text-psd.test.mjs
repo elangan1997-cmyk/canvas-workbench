@@ -3,9 +3,9 @@ import test from 'node:test';
 import { readPsd, writePsdBuffer } from 'ag-psd';
 import { buildNativeTextPsd } from '../../src/host/services/native-text-psd.js';
 
-test('native PSD writer creates hidden editable Type layers with reviewed styling', () => {
+test('native PSD writer creates hidden editable Type layers with reviewed styling', async () => {
   const draft = writePsdBuffer({ width: 64, height: 64, children: [] });
-  const bytes = buildNativeTextPsd(draft, [
+  const bytes = await buildNativeTextPsd(draft, [
     { text: '文字层 QA', x: 12, y: 18, fontSize: 24, fontPostScript: 'ArialMT', color: '#112233', enabled: true },
     { text: '排除', x: 1, y: 1, enabled: false }
   ]);
