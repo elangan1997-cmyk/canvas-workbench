@@ -78,6 +78,7 @@ def main():
     parser.add_argument("--output-image", type=pathlib.Path)
     parser.add_argument("--mask", type=pathlib.Path)
     parser.add_argument("--output-mask", type=pathlib.Path)
+    parser.add_argument("--output-overlay", type=pathlib.Path)
     parser.add_argument("--max-side", type=int, default=1024)
     parser.add_argument("--crop-to-mask", action="store_true")
     parser.add_argument("--crop-info", type=pathlib.Path)
@@ -137,6 +138,22 @@ def main():
             mask = mask.resize(target, Image.Resampling.LANCZOS)
         args.output_mask.parent.mkdir(parents=True, exist_ok=True)
         mask.save(args.output_mask, format="PNG", optimize=True)
+
+        if args.output_overlay is not None:
+            # Engines whose edit API takes no mask parameter (e.g. dsh-codex chat
+            # backend) cannot see a separate mask: bake the editable region into
+            # the image itself as an unmistakable semi-transparent magenta block
+            # so the prompt can point the model at it ("remove what is under the
+            # magenta block"). The clean output-image above stays for engines
+            # that accept a real mask parameter.
+            overlay = source.copy()
+            tint = Image.new("RGB", overlay.size, (255, 0, 255))
+            selected = mask.getchannel("A").point(lambda value: 255 if value < 255 else 0)
+            if selected.size != overlay.size:
+                selected = selected.resize(overlay.size, Image.Resampling.NEAREST)
+            overlay = Image.composite(Image.blend(overlay, tint, 0.55), overlay, selected)
+            args.output_overlay.parent.mkdir(parents=True, exist_ok=True)
+            overlay.save(args.output_overlay, format="WEBP", quality=90, method=6)
 
     if args.crop_info:
         args.crop_info.parent.mkdir(parents=True, exist_ok=True)

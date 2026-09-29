@@ -164,6 +164,7 @@ export function register(router, h) {
           let tempMask = '';
           let tempModelInput = '';
           let tempModelMask = '';
+          let tempModelOverlay = '';
           let tempCropInfo = '';
           let tempGenerated = '';
           let tempComposite = '';
@@ -230,13 +231,22 @@ export function register(router, h) {
               if (prepared.exitCode !== 0) throw new Error(prepared.stderr.trim() || '擦除遮罩预处理失败');
             }
 
+            // 引擎能力差异要在构建提示词前知道:dsh-codex 的生成接口不接收 mask
+            // 参数——模型看不到蒙版时,纯选区擦除(如"去掉这几颗蓝莓")会原样返回。
+            // 这类引擎改用"蒙版烘焙图":擦除区域画成紫红色半透明色块让模型定位,
+            // 提示词同步说明。API 引擎有原生 mask 参数,继续走干净图+mask。
+            const engineSettings = await readImageEngineSettings();
+            const useMaskOverlay = engineSettings.engine === 'dsh-codex' && Boolean(tempMask);
             const previousHistory = Array.isArray(body.editHistory) ? body.editHistory.filter((item) => typeof item === 'string' && item.trim()).slice(-10) : [];
             const currentInstruction = prompt || '仅清除遮罩区域并制作干净底图：依据遮罩边界四周的真实背景连续补全，不添加任何新内容';
             const cumulative = mode === 'edit' && previousHistory.length
               ? '以原始母版为基础，依次完成这些已确认修改：\n- ' + previousHistory.join('\n- ') + '\n本次继续修改：' + currentInstruction
               : currentInstruction;
             const finalPrompt = mode === 'erase'
-              ? '这是严格的局部 clean-plate 图像修复，不是整图重绘、风格化生成或重新设计。透明遮罩覆盖的区域是必须移除的内容，遮罩外区域是锁定参考。\n'
+              ? '这是严格的局部 clean-plate 图像修复，不是整图重绘、风格化生成或重新设计。'
+              + (useMaskOverlay
+                ? '图中紫红色半透明色块覆盖的区域是必须移除的内容（色块本身不是画面内容，最终输出中不得保留色块及其边缘），色块外区域是锁定参考。\n'
+                : '透明遮罩覆盖的区域是必须移除的内容，遮罩外区域是锁定参考。\n')
               + cumulative
               + '\n硬性要求：\n'
               + '1. 将透明遮罩内的原始内容视为不存在，彻底移除其中的文字、字形、标点、线条、描边、阴影、压痕、色块、反射和所有碎片；不得读取、猜测、复制、复原或改写原内容。\n'
@@ -247,14 +257,17 @@ export function register(router, h) {
                 : '4. 不得在遮罩内生成任何可读或不可读字符、深色碎点、幽灵轮廓、新物体或装饰。\n')
               + '5. 遮罩外的产品、排版、颜色、清晰度、构图和所有像素必须保持不变；只允许改变透明遮罩区域。'
               : cumulative
-                + (mask ? '\n本次只允许修改遮罩选区；遮罩外必须逐像素保持原样。' : '\n本次为整图修改。')
+                + (mask
+                  ? (useMaskOverlay
+                    ? '\n图中紫红色半透明色块是遮罩选区（色块不是画面内容，输出不得保留色块）；只允许修改色块区域，色块外必须逐像素保持原样。'
+                    : '\n本次只允许修改遮罩选区；遮罩外必须逐像素保持原样。')
+                  : '\n本次为整图修改。')
                 + '\n保持未提及区域、产品身份、材质纹理、构图、颜色和清晰度不变，不要自行增加文字或装饰。';
 
             const width = Math.max(1, Number(body.width || 1));
             const height = Math.max(1, Number(body.height || 1));
             await access(compositeScript);
             await access(modelInputScript);
-            const engineSettings = await readImageEngineSettings();
             const modelToken = Date.now() + '-' + Math.random().toString(16).slice(2);
             tempModelInput = join(outputDir, '.canvas-model-input-' + modelToken + '.webp');
             tempModelMask = tempMask ? join(outputDir, '.canvas-model-mask-' + modelToken + '.png') : '';
@@ -264,6 +277,10 @@ export function register(router, h) {
               tempCropInfo = join(outputDir, '.canvas-crop-' + modelToken + '.json');
               modelSpec.mask = tempMask;
               modelSpec['output-mask'] = tempModelMask;
+              if (useMaskOverlay) {
+                tempModelOverlay = join(outputDir, '.canvas-model-overlay-' + modelToken + '.webp');
+                modelSpec['output-overlay'] = tempModelOverlay;
+              }
               modelSpec['crop-to-mask'] = true;
               modelSpec['crop-info'] = tempCropInfo;
             }
@@ -273,9 +290,11 @@ export function register(router, h) {
             if (modelPrepared.exitCode !== 0) throw new Error(modelPrepared.stderr.trim() || '模型输入预处理失败');
             const sourceBytes = await readFile(tempModelInput);
             const maskBytes = tempModelMask ? await readFile(tempModelMask) : null;
+            const overlayBytes = tempModelOverlay ? await readFile(tempModelOverlay).catch(() => null) : null;
+            const modelImage = useMaskOverlay && overlayBytes ? overlayBytes : sourceBytes;
             const generated = await generateImage({
               ctx,
-              image: sourceBytes,
+              image: modelImage,
               mask: maskBytes,
               prompt: finalPrompt,
               engine: engineSettings.engine,
@@ -321,7 +340,7 @@ export function register(router, h) {
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
           } finally {
-            for (const path of [tempInput, tempRawMask, tempMask, tempModelInput, tempModelMask, tempCropInfo, tempGenerated, tempComposite]) if (path) await unlink(path).catch(() => {});
+            for (const path of [tempInput, tempRawMask, tempMask, tempModelInput, tempModelMask, tempModelOverlay, tempCropInfo, tempGenerated, tempComposite]) if (path) await unlink(path).catch(() => {});
           }
           return;
   });
