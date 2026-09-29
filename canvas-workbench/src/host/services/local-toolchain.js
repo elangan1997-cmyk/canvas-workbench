@@ -25,16 +25,49 @@ const PYTHON_VERSION = '3.11.10';
 // 装错代际会被宿主启动时的 peer 校验直接拒载、显示"版本不匹配"):
 // 0.2.x 核心(0.2.0 正式 / 0.2.0-rc.x)配 0.3.2(peers ^0.2.0-rc.1);
 // 0.1.7-rc.x 内核配 0.3.1(peers ^0.1.7-rc.2)。核心换代时同步更新此表。
-const DSH_CODEX_PAIRING = [
-  { corePrefix: '0.2', version: '0.3.2' },
-  { corePrefix: '0.1', version: '0.3.1' },
-];
-const DSH_CODEX_FALLBACK = '0.3.2';
-
-function pairedDshCodexVersion(coreVersion) {
-  const v = String(coreVersion || '');
-  for (const row of DSH_CODEX_PAIRING) if (v.startsWith(row.corePrefix + '.')) return row.version;
-  return DSH_CODEX_FALLBACK;
+function coreGeneration(version) {
+  return String(version || '').split('.').slice(0, 2).join('.');
+}
+function peerGenerations(rangeText) {
+  const gens = new Set();
+  for (const m of String(rangeText || '').matchAll(/(\d+)\.(\d+)\.(\d+)/g)) gens.add(m[1] + '.' + m[2]);
+  return gens;
+}
+/** 候选版与当前内核是否同代兼容:peer 里每个 @deepseek-ai/dsh-* 声明范围提取的代际须包含核心代际。 */
+function dshCodexCompatible(coreVersion, candidateManifest) {
+  const peers = candidateManifest && candidateManifest.peerDependencies;
+  if (!peers || typeof peers !== 'object') return true;
+  for (const [name, range] of Object.entries(peers)) {
+    if (name !== '@deepseek-ai/dsh' && !name.startsWith('@deepseek-ai/dsh-')) continue;
+    if (!peerGenerations(range).has(coreGeneration(coreVersion))) return false;
+  }
+  return true;
+}
+function compareVersionsDesc(a, b) {
+  const pa = String(a).split('.'), pb = String(b).split('.');
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const na = Number(pa[i]) || 0, nb = Number(pb[i]) || 0;
+    if (na !== nb) return nb - na;
+  }
+  return 0;
+}
+/**
+ * 动态解析要安装的 dsh-codex 版本:npm 全量清单从新到旧取第一个与当前内核
+ * 代际兼容的版本,即「当前内核能用的最新版」(不写死版本号,官方发新版即自动跟进;
+ * 老内核上新版不兼容时自动回退到仍兼容的最近版本)。同时返回官方版本集合,
+ * 用于区分官方版与用户自管的自定义 fork。
+ */
+async function resolveDshCodex(registry, coreVersion) {
+  const res = await fetch(`${registry}/dsh-codex`, { redirect: 'follow' });
+  if (!res.ok) throw new Error('读取 dsh-codex 版本清单失败 HTTP ' + res.status);
+  const manifest = await res.json();
+  const versions = Object.keys(manifest.versions || {}).sort(compareVersionsDesc);
+  for (const version of versions) {
+    if (dshCodexCompatible(coreVersion, manifest.versions[version])) {
+      return { version, entry: manifest.versions[version], officialVersions: new Set(versions) };
+    }
+  }
+  throw new Error(`npm 上没有与当前内核(${coreVersion || '?'})兼容的 dsh-codex 版本`);
 }
 
 /** 运行时核心代际:借本插件必有的 peer(dsh-tools)的解析位置读宿主核心版本。 */
@@ -324,35 +357,33 @@ async function activeProfileDir() {
 }
 
 /**
- * 预置 dsh-codex(聊天生图引擎之一):按运行核心代际选配对版本(0.2.x→0.3.2,
- * 0.1.7→0.3.1),npm 拉取(官方源→npmmirror 兜底),解压进 profile 的
- * node_modules,并补 deps + bundles 注册,重启后插件与登录路由就位。
- * 已装版本与核心代际不匹配时(如桌面升级 0.2.0 后遗留 0.3.1)自动换正确版本。
+ * 预置 dsh-codex(聊天生图引擎之一):动态解析 npm 上与当前内核代际兼容的最新版
+ * (官方源→npmmirror 兜底),解压进 profile 的 node_modules,并补 deps + bundles
+ * 注册,重启后插件与登录路由就位。已装官方版本落后于解析结果时自动升级;
+ * 官方清单之外的自定义 fork(用户自管)不擅自替换。
  */
 async function ensureDshCodex() {
   try {
     const profileDir = await activeProfileDir();
     const coreVersion = await runningCoreVersion();
-    const DSH_CODEX_VERSION = pairedDshCodexVersion(coreVersion);
+    const registry = (await reachable('https://registry.npmjs.org/dsh-codex')) ? 'https://registry.npmjs.org' : NPM_MIRROR;
+    const resolved = await resolveDshCodex(registry, coreVersion);
+    const DSH_CODEX_VERSION = resolved.version;
     const moduleEntry = join(profileDir, 'node_modules', 'dsh-codex', 'lib', 'index.js');
     if (await exists(moduleEntry)) {
       let installed = '';
       try { installed = String(JSON.parse(await readFile(join(profileDir, 'node_modules', 'dsh-codex', 'package.json'), 'utf8')).version || ''); } catch {}
-      const knownOfficial = DSH_CODEX_PAIRING.some((row) => row.version === installed);
+      const knownOfficial = resolved.officialVersions.has(installed);
       if (installed === DSH_CODEX_VERSION || !knownOfficial) {
-        // 版本已是配对版,或是官方配对表之外的自定义 fork(用户自管,不擅自替换)。
+        // 已是解析出的最新兼容版,或是官方清单之外的自定义 fork(用户自管,不擅自替换)。
         await patchStatus({ dshCodex: { state: 'ready', source: 'existing', version: installed } });
         return;
       }
-      await patchStatus({ dshCodex: { state: 'downloading', note: `已装 ${installed} 与核心 ${coreVersion || '?'} 代际不匹配,升级到 ${DSH_CODEX_VERSION}` } });
+      await patchStatus({ dshCodex: { state: 'downloading', note: `已装 ${installed} 落后于当前内核(${coreVersion || '?'})可用的最新版,升级到 ${DSH_CODEX_VERSION}` } });
     } else {
-      await patchStatus({ dshCodex: { state: 'downloading', note: `核心 ${coreVersion || '?'} → dsh-codex ${DSH_CODEX_VERSION}` } });
+      await patchStatus({ dshCodex: { state: 'downloading', note: `核心 ${coreVersion || '?'} → dsh-codex ${DSH_CODEX_VERSION}(最新兼容版)` } });
     }
-    const registry = (await reachable('https://registry.npmjs.org/dsh-codex')) ? 'https://registry.npmjs.org' : NPM_MIRROR;
-    const metaRes = await fetch(`${registry}/dsh-codex/${DSH_CODEX_VERSION}`, { redirect: 'follow' });
-    if (!metaRes.ok) throw new Error('读取 dsh-codex 包信息失败 HTTP ' + metaRes.status);
-    const meta = await metaRes.json();
-    const tarball = meta && meta.dist && meta.dist.tarball;
+    const tarball = resolved.entry && resolved.entry.dist && resolved.entry.dist.tarball;
     if (!tarball) throw new Error('包信息里没有 tarball 地址');
     const work = join(tmpdir(), 'dsh-codex-' + Date.now().toString(36));
     await mkdir(work, { recursive: true });
