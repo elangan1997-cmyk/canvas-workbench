@@ -21,7 +21,31 @@ const GH_MIRRORS = ['https://gh-proxy.com/', 'https://ghfast.top/', 'https://mir
 
 const PYTHON_BUILD_TAG = '20241016';
 const PYTHON_VERSION = '3.11.10';
-const DSH_CODEX_VERSION = '0.3.1';
+// dsh-codex 与 DSH 核心代际配对(官方按内核代际发版,peer 范围不交叉满足,
+// 装错代际会被宿主启动时的 peer 校验直接拒载、显示"版本不匹配"):
+// 0.2.x 核心(0.2.0 正式 / 0.2.0-rc.x)配 0.3.2(peers ^0.2.0-rc.1);
+// 0.1.7-rc.x 内核配 0.3.1(peers ^0.1.7-rc.2)。核心换代时同步更新此表。
+const DSH_CODEX_PAIRING = [
+  { corePrefix: '0.2', version: '0.3.2' },
+  { corePrefix: '0.1', version: '0.3.1' },
+];
+const DSH_CODEX_FALLBACK = '0.3.2';
+
+function pairedDshCodexVersion(coreVersion) {
+  const v = String(coreVersion || '');
+  for (const row of DSH_CODEX_PAIRING) if (v.startsWith(row.corePrefix + '.')) return row.version;
+  return DSH_CODEX_FALLBACK;
+}
+
+/** 运行时核心代际:借本插件必有的 peer(dsh-tools)的解析位置读宿主核心版本。 */
+async function runningCoreVersion() {
+  try {
+    const { createRequire } = await import('node:module');
+    const pkgPath = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tools/package.json');
+    const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
+    return String(pkg.version || '');
+  } catch { return ''; }
+}
 // 2026-09-28 默认模型切 BiRefNet-lite(214MB,质量显著优于 isnet 的 170MB);
 // 文件名必须与 rembg 会话名一致,pooch 按文件名命中缓存。
 const REMBG_MODEL_URL = 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx';
@@ -300,18 +324,30 @@ async function activeProfileDir() {
 }
 
 /**
- * 预置 dsh-codex(聊天生图引擎之一):npm 拉 0.3.1(官方源→npmmirror 兜底),
- * 解压进 profile 的 node_modules,并补 deps + bundles 注册,重启后插件与登录路由就位。
+ * 预置 dsh-codex(聊天生图引擎之一):按运行核心代际选配对版本(0.2.x→0.3.2,
+ * 0.1.7→0.3.1),npm 拉取(官方源→npmmirror 兜底),解压进 profile 的
+ * node_modules,并补 deps + bundles 注册,重启后插件与登录路由就位。
+ * 已装版本与核心代际不匹配时(如桌面升级 0.2.0 后遗留 0.3.1)自动换正确版本。
  */
 async function ensureDshCodex() {
   try {
     const profileDir = await activeProfileDir();
+    const coreVersion = await runningCoreVersion();
+    const DSH_CODEX_VERSION = pairedDshCodexVersion(coreVersion);
     const moduleEntry = join(profileDir, 'node_modules', 'dsh-codex', 'lib', 'index.js');
     if (await exists(moduleEntry)) {
-      await patchStatus({ dshCodex: { state: 'ready', source: 'existing' } });
-      return;
+      let installed = '';
+      try { installed = String(JSON.parse(await readFile(join(profileDir, 'node_modules', 'dsh-codex', 'package.json'), 'utf8')).version || ''); } catch {}
+      const knownOfficial = DSH_CODEX_PAIRING.some((row) => row.version === installed);
+      if (installed === DSH_CODEX_VERSION || !knownOfficial) {
+        // 版本已是配对版,或是官方配对表之外的自定义 fork(用户自管,不擅自替换)。
+        await patchStatus({ dshCodex: { state: 'ready', source: 'existing', version: installed } });
+        return;
+      }
+      await patchStatus({ dshCodex: { state: 'downloading', note: `已装 ${installed} 与核心 ${coreVersion || '?'} 代际不匹配,升级到 ${DSH_CODEX_VERSION}` } });
+    } else {
+      await patchStatus({ dshCodex: { state: 'downloading', note: `核心 ${coreVersion || '?'} → dsh-codex ${DSH_CODEX_VERSION}` } });
     }
-    await patchStatus({ dshCodex: { state: 'downloading' } });
     const registry = (await reachable('https://registry.npmjs.org/dsh-codex')) ? 'https://registry.npmjs.org' : NPM_MIRROR;
     const metaRes = await fetch(`${registry}/dsh-codex/${DSH_CODEX_VERSION}`, { redirect: 'follow' });
     if (!metaRes.ok) throw new Error('读取 dsh-codex 包信息失败 HTTP ' + metaRes.status);
@@ -361,7 +397,7 @@ async function ensureDshCodex() {
     try {
       const pkg = JSON.parse(await readFile(pkgPath, 'utf8'));
       pkg.dependencies = pkg.dependencies || {};
-      if (!pkg.dependencies['dsh-codex']) pkg.dependencies['dsh-codex'] = DSH_CODEX_VERSION;
+      pkg.dependencies['dsh-codex'] = DSH_CODEX_VERSION;
       const bundles = (((pkg.dsh || {}).profile || {}).bundles);
       if (Array.isArray(bundles) && !bundles.includes('dsh-codex')) bundles.push('dsh-codex');
       await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
