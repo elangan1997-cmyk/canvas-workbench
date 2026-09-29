@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.9.40（2026-09-29）
+
+Mac 真机验收回合（用户实测反馈驱动，两项均为跨平台正确性修复）：
+
+- **画布占位卡片文案纠偏（5 处）**：Win 热修只覆盖了底部提示与完成标签，画布占位卡片是第三个文案面——①编辑/擦除占位卡副标题不再虚报「Codex 优先 · 失败自动切换 image2」（改为中性「处理中 · 完成后自动替换」，引擎由底部提示行实时显示）；②去背景占位卡副标题、③选中工具栏提示、④完成提示如实显示 birefnet-general-lite（完成提示动态取实际使用的模型）；⑤元素模型名标记兜底值同步更新。
+- **聊天生图重复上画布第三链路修复**：图片上画布时物化进 assets 会撞名改名（`名字-2.png`），元素记录的路径/文件名随之物化为带 `-2` 版本，而宿主完成记录重放携带的是原始归档路径/原始名——路径与文件名两道判重在此链路全部失配，页面刷新/聊天切换后的重放轮询会把同一张图再次加入画布（实测字节级相同的 `-2`/`-2-2` 副本成对出现）。重放派发与文件扫描器两处判重升级为「归一化文件名」双维度比对（剥掉末尾 `-数字` 后缀，`v1-2.png` 与 `v1.png` 视为同名，任一维度命中即跳过）。已知取舍：与现有元素同基名的无关新文件会被跳过（与 1.9.39 #5 同类，可接受）。
+
+## 1.9.39（2026-09-29）
+
+Windows 实机热修回合（基线 npm 1.9.38-rc，真机验证后回合源码，7 项全部跨平台，Mac 行为语义不变）：
+
+- **PSD 原生文字层层序修复**：`buildNativeTextPsd()` 此前把文字层 prepend 到 ag-psd `children` 开头，而 ag-psd 的 children 顺序是「底部在前、顶部在后」（与 Photoshop 图层面板相反），导致文字层被 Clean background 盖住、点开「小眼睛」也看不到字。改为追加到末尾（=堆叠顶部）；psd-tools 解析实测文字层位于清洁背景之上。
+- **imagegen 输出 schema 补声明 `imageCount`**：多图时 execute 写入的 `value.imageCount` 未在 `additionalProperties:false` 的 output schema 里声明，触发 DSH 非致命校验告警；补 `{ type: 'integer' }` 声明。
+- **去背景进度/结果文案动态化**：`remove_background.py` 两处写死 `isnet-general-use`（加载文案与结果 JSON 的 model 字段）随默认模型切到 birefnet-general-lite 后失真；改为动态 `args.model`，加载阶段给 40% 进度并标明「本地已缓存」。
+- **图像引擎文案如实显示**：擦除/编辑的处理中提示不再虚报「优先 Codex，失败自动切换」——改为实时请求 `/dsh-canvas/image-settings` 按当前引擎显示；完成标签修正引擎值匹配（宿主返回 `'api'`/`'dsh-codex'`，旧的 `'image2-api'` 判断永远落空）。
+- **聊天生图重复上画布修复（两处）**：①「项目新增文件」扫描判重增加文件名维度（画布 assets 缓存副本路径≠源路径、仅按路径判会漏，命中元素 `dshFileName` 即跳过，阻断级联重复）；②整页重载后内存态去重表清零、宿主完成环重放导致重复派发，改为派发前比对画布现有元素的 `customData.dshSourcePath` 兜底去重。
+- **长请求连接中断不再误报「生成失败」**：文字重建 PSD/AI（清洁底 1–2 分钟 + Adobe 脚本）超约 2 分钟的同步响应会被 webview→DSH 核心转发链切断，但服务端仍会完成并落盘、由文件扫描自动上画布；导出 catch 按错误特征（Failed to fetch / LoadFailed / networkerror / aborted）分类，中断类只关对话框并提示「任务仍在后台执行、勿重复点击」，真实业务错误仍走原路径。
+- **发布包补 `ag-psd: ^31.0.2` 依赖**（前次交接项）：npm 安装形态下 ag-psd 缺失导致原生文字层路径不可用的问题根治。
+
+## 1.9.38（2026-09-29）
+
+- Windows 实机补测确认仅 `chmod` 仍无法避免 `copyFile` 的 `EPERM`；同步 Adobe JSX 前先清除只读属性并删除旧目录项，再复制新脚本，兼容 Photoshop/Illustrator 保持打开的场景。
+
+## 1.9.37（2026-09-29）
+
+- 修复 Windows npm 安装形态下 Adobe 桥接脚本二次同步报 `EPERM: operation not permitted, copyfile`：覆盖前清除目标 JSX 的只读属性，复制后保持用户副本可写；Photoshop/Illustrator 正在运行时也能刷新桥接脚本。
+- 增加只读旧脚本覆盖回归，防止 Windows 从 npm 更新后“取 Ps 图层/取 Ai 对象”被旧副本卡住。
+
 ## 1.9.36（2026-09-29）
 
 - **文字重建 PSD 修复**：修正 `--spec` 中连字号键与 argparse 下划线 `dest` 的取值错配，解决“编辑文字→PSD”的 `KeyError: clean_input`；同时扫描并修正全部 16 个 spec-aware Python 工具。新增 `ag-psd` 原生 Type layer 写入路径，Mac/Windows 共用，Adobe 脚本作为失败回退。

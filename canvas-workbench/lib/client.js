@@ -2397,7 +2397,7 @@ function dims2(d){return new Promise(function(res){var i=new Image();i.onload=fu
   function deleteSelectedImages(ids){if(!api||!Array.isArray(ids)||!ids.length)return;var selected={};ids.forEach(function(id){selected[id]=true;});var now=Date.now(),updated=(api.getSceneElements()||[]).map(function(item){if(!item||!selected[item.id])return item;return Object.assign({},item,{isDeleted:true,version:Number(item.version||1)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now});});api.updateScene({elements:updated,appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:{}}),commitToHistory:true});post({type:"deleted-selection",count:ids.length,snapshot:serialize(updated,api.getAppState()||empty,api.getFiles()||{})});}
   function svgText(value){return String(value||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");}
   function editStatusDataURL(title,subtitle,state,ratio){var width=800,height=Math.max(360,Math.min(1200,Math.round(width/Math.max(.35,Math.min(2.4,Number(ratio)||1.6))))),failed=state==="failed",accent=failed?"#fb7185":"#60a5fa",safeTitle=svgText(title),safeSub=svgText(subtitle).slice(0,120),svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+width+' '+height+'"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#111827"/><stop offset="1" stop-color="#1e293b"/></linearGradient><pattern id="p" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M0 28L28 0" stroke="#ffffff" stroke-opacity=".035" stroke-width="8"/></pattern></defs><rect width="100%" height="100%" rx="28" fill="url(#g)"/><rect width="100%" height="100%" rx="28" fill="url(#p)"/><rect x="3" y="3" width="794" height="'+(height-6)+'" rx="26" fill="none" stroke="'+accent+'" stroke-opacity=".65" stroke-width="6" stroke-dasharray="16 14"/>'+(failed?'<path d="M370 '+(height/2-70)+'l60 60m0-60l-60 60" stroke="'+accent+'" stroke-width="18" stroke-linecap="round"/>':'<circle cx="400" cy="'+(height/2-55)+'" r="42" fill="none" stroke="#334155" stroke-width="14"/><path d="M400 '+(height/2-97)+'a42 42 0 0 1 42 42" fill="none" stroke="'+accent+'" stroke-width="14" stroke-linecap="round"/>')+'<text x="400" y="'+(height/2+40)+'" fill="#f8fafc" font-family="PingFang SC, sans-serif" font-size="38" font-weight="700" text-anchor="middle">'+safeTitle+'</text><text x="400" y="'+(height/2+88)+'" fill="#94a3b8" font-family="PingFang SC, sans-serif" font-size="21" text-anchor="middle">'+safeSub+'</text></svg>';return "data:image/svg+xml;base64,"+btoa(unescape(encodeURIComponent(svg)));}
-  function createEditPlaceholder(item,subtitle){if(!api||!item)throw new Error("画布尚未就绪");var source=(api.getSceneElements()||[]).find(function(el){return el&&el.id===item.id&&el.type==="image"&&!el.isDeleted;});if(!source)throw new Error("原图片已不在画布中");var now=Date.now(),token=now.toString(36)+"_"+Math.random().toString(36).slice(2,9),requestId="edit_"+token,id="e_edit_pending_"+token,fileId="f_edit_pending_"+token,ratio=Number(source.width||1)/Math.max(1,Number(source.height||1)),dataURL=editStatusDataURL("图片修改中…",subtitle||"Codex 优先 · 失败自动切换 image2", "processing",ratio),selected={};selected[id]=true;api.addFiles([{id:fileId,dataURL:dataURL,mimeType:"image/svg+xml",created:now,lastRetrieved:now}]);var placeholder=Object.assign({},source,{id:id,fileId:fileId,x:Number(source.x||0)+Number(source.width||240)+70,y:Number(source.y||0),index:undefined,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),updated:now,isDeleted:false,customData:Object.assign({},source.customData||{},{dshFileName:"图片修改中…",dshSourcePath:"",dshSourceMtime:0,dshSourceKind:"placeholder",dshManaged:false,dshEditTitle:"图片修改中…",dshEditSubtitle:subtitle||"Codex 优先 · 失败自动切换 image2",dshEditStartedAt:now,dshEditState:"processing",dshEditRequestId:requestId})});api.updateScene({elements:(api.getSceneElements()||[]).concat([placeholder]),appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:selected}),commitToHistory:true});setTimeout(function(){if(api&&typeof api.scrollToContent==="function")api.scrollToContent([placeholder],{fitToContent:false,animate:true});},60);return {requestId:requestId,placeholderId:id};}
+  function createEditPlaceholder(item,subtitle){if(!api||!item)throw new Error("画布尚未就绪");var source=(api.getSceneElements()||[]).find(function(el){return el&&el.id===item.id&&el.type==="image"&&!el.isDeleted;});if(!source)throw new Error("原图片已不在画布中");var now=Date.now(),token=now.toString(36)+"_"+Math.random().toString(36).slice(2,9),requestId="edit_"+token,id="e_edit_pending_"+token,fileId="f_edit_pending_"+token,ratio=Number(source.width||1)/Math.max(1,Number(source.height||1)),dataURL=editStatusDataURL("图片修改中…",subtitle||"处理中 · 完成后自动替换", "processing",ratio),selected={};selected[id]=true;api.addFiles([{id:fileId,dataURL:dataURL,mimeType:"image/svg+xml",created:now,lastRetrieved:now}]);var placeholder=Object.assign({},source,{id:id,fileId:fileId,x:Number(source.x||0)+Number(source.width||240)+70,y:Number(source.y||0),index:undefined,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),updated:now,isDeleted:false,customData:Object.assign({},source.customData||{},{dshFileName:"图片修改中…",dshSourcePath:"",dshSourceMtime:0,dshSourceKind:"placeholder",dshManaged:false,dshEditTitle:"图片修改中…",dshEditSubtitle:subtitle||"处理中 · 完成后自动替换",dshEditStartedAt:now,dshEditState:"processing",dshEditRequestId:requestId})});api.updateScene({elements:(api.getSceneElements()||[]).concat([placeholder]),appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:selected}),commitToHistory:true});setTimeout(function(){if(api&&typeof api.scrollToContent==="function")api.scrollToContent([placeholder],{fitToContent:false,animate:true});},60);return {requestId:requestId,placeholderId:id};}
   function findEditPlaceholder(detail){return (api&&api.getSceneElements?api.getSceneElements():[]).find(function(item){return item&&item.type==="image"&&!item.isDeleted&&((detail.placeholderId&&item.id===detail.placeholderId)||(item.customData&&item.customData.dshEditRequestId===detail.requestId));});}
   function markEditPlaceholderFailed(detail){if(!api)return;var placeholder=findEditPlaceholder(detail);if(!placeholder)return;var now=Date.now(),fileId="f_edit_failed_"+now.toString(36)+"_"+Math.random().toString(36).slice(2,7),ratio=Number(placeholder.width||1)/Math.max(1,Number(placeholder.height||1)),message=String(detail.message||"请重新编辑"),dataURL=editStatusDataURL("图片修改失败",message,"failed",ratio);api.addFiles([{id:fileId,dataURL:dataURL,mimeType:"image/svg+xml",created:now,lastRetrieved:now}]);var selected={};selected[placeholder.id]=true;var updated=(api.getSceneElements()||[]).map(function(item){if(!item||item.id!==placeholder.id)return item;return Object.assign({},item,{fileId:fileId,version:Number(item.version||1)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now,customData:Object.assign({},item.customData||{},{dshFileName:"图片修改失败",dshEditState:"failed",dshManaged:false})});});api.updateScene({elements:updated,appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:selected}),commitToHistory:false});post({type:"image-edit-placeholder-failed",message:message});}
   function reopenFailedImageEdit(detail){if(!api||!detail||!detail.retryItem)return false;var placeholder=findEditPlaceholder(detail),retry=detail.retryItem,selected={};if(retry.id)selected[retry.id]=true;var now=Date.now(),updated=(api.getSceneElements()||[]).map(function(item){if(!placeholder||!item||item.id!==placeholder.id)return item;return Object.assign({},item,{isDeleted:true,version:Number(item.version||1)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now});});api.updateScene({elements:updated,appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:selected}),commitToHistory:false});if(typeof updateImageEditorState==="function")updateImageEditorState(Object.assign({},retry,{busy:false,error:String(detail.message||"生成失败，可直接重试")}));return true;}
@@ -2482,7 +2482,7 @@ function dims2(d){return new Promise(function(res){var i=new Image();i.onload=fu
     if(!api||!detail||!detail.image||!detail.image.url)return Promise.reject(new Error("去背景结果无效"));
     var placeholder=findEditPlaceholder(detail),source=(api.getSceneElements()||[]).find(function(item){return item&&item.id===detail.elementId&&item.type==="image"&&!item.isDeleted;});
     if(!placeholder&&!source)return Promise.reject(new Error("原图片和等待图片均已不在画布中"));
-    return fetch(detail.image.url,{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error("读取去背景结果失败 HTTP "+r.status);return r.blob();}).then(toDataURLBlob).then(function(dataURL){return dims2(dataURL).then(function(dm){var now=Date.now(),token=now.toString(36)+"_"+Math.random().toString(36).slice(2,8),fileId="f_bg_"+token,ratio=dm.w/Math.max(1,dm.h),base=placeholder||source,w=Number(base.width||240),h=Math.max(1,Math.round(w/ratio)),mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png",id=placeholder?placeholder.id:("e_bg_"+token),selected={};selected[id]=true;api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime,created:now,lastRetrieved:now}]);var sourceCustom=source&&source.customData||{},el=Object.assign({},base,{id:id,fileId:fileId,x:placeholder?Number(placeholder.x||0):Number(source.x||0)+Number(source.width||w)+70,y:placeholder?Number(placeholder.y||0):Number(source.y||0),width:w,height:h,index:placeholder?placeholder.index:undefined,seed:placeholder?placeholder.seed:Math.floor(Math.random()*1e9),version:Number(base.version||0)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now,isDeleted:false,customData:Object.assign({},sourceCustom,placeholder&&placeholder.customData||{},{dshFileName:detail.image.name||"去背景.png",dshSourcePath:detail.image.path||"",dshSourceMtime:Number(detail.image.mtime||0),dshSourceKind:"image",dshManaged:true,dshBackgroundRemoved:true,dshBackgroundModel:detail.model||"isnet-general-use",dshEditState:"complete"})}),all=api.getSceneElements()||[],next=placeholder?all.map(function(item){return item&&item.id===placeholder.id?el:item;}):all.concat([el]);api.updateScene({elements:next,appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:selected}),commitToHistory:false});post({type:"image-background-removed",name:detail.image.name||"去背景.png",model:detail.model||"isnet-general-use"});});});
+    return fetch(detail.image.url,{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error("读取去背景结果失败 HTTP "+r.status);return r.blob();}).then(toDataURLBlob).then(function(dataURL){return dims2(dataURL).then(function(dm){var now=Date.now(),token=now.toString(36)+"_"+Math.random().toString(36).slice(2,8),fileId="f_bg_"+token,ratio=dm.w/Math.max(1,dm.h),base=placeholder||source,w=Number(base.width||240),h=Math.max(1,Math.round(w/ratio)),mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png",id=placeholder?placeholder.id:("e_bg_"+token),selected={};selected[id]=true;api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime,created:now,lastRetrieved:now}]);var sourceCustom=source&&source.customData||{},el=Object.assign({},base,{id:id,fileId:fileId,x:placeholder?Number(placeholder.x||0):Number(source.x||0)+Number(source.width||w)+70,y:placeholder?Number(placeholder.y||0):Number(source.y||0),width:w,height:h,index:placeholder?placeholder.index:undefined,seed:placeholder?placeholder.seed:Math.floor(Math.random()*1e9),version:Number(base.version||0)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now,isDeleted:false,customData:Object.assign({},sourceCustom,placeholder&&placeholder.customData||{},{dshFileName:detail.image.name||"去背景.png",dshSourcePath:detail.image.path||"",dshSourceMtime:Number(detail.image.mtime||0),dshSourceKind:"image",dshManaged:true,dshBackgroundRemoved:true,dshBackgroundModel:detail.model||"birefnet-general-lite",dshEditState:"complete"})}),all=api.getSceneElements()||[],next=placeholder?all.map(function(item){return item&&item.id===placeholder.id?el:item;}):all.concat([el]);api.updateScene({elements:next,appState:Object.assign({},api.getAppState()||empty,{selectedElementIds:selected}),commitToHistory:false});post({type:"image-background-removed",name:detail.image.name||"去背景.png",model:detail.model||"birefnet-general-lite"});});});
   }
   function addVectorizedImage(detail){
     if(!api||!detail||!detail.image||!detail.image.url)return Promise.reject(new Error("矢量化结果无效"));
@@ -2670,7 +2670,7 @@ function Main(){
     var saveSelectionToMaterials=function(ids){var items=materialPayloadForSelection(ids);if(items.length)post({type:"save-to-materials",items:items,source:"selection-toolbar"});else post({type:"error",message:"所选图片暂时无法读取"});};
     var beginMaterialDrag=function(ids,event){var items=materialPayloadForSelection(ids);if(!items.length)return;if(event&&event.dataTransfer){event.dataTransfer.effectAllowed="copy";event.dataTransfer.setData("application/x-dsh-canvas-image",JSON.stringify({count:items.length}));event.dataTransfer.setData("text/plain",items.length===1?items[0].name:(items.length+" 张画布图片"));}post({type:"material-drag-start",items:items});};
     var sendSelectionToChat=function(ids){if(!api)return;var wanted=new Set(Array.isArray(ids)?ids:[]),files=fileObject(api.getFiles?api.getFiles():{}),images=(api.getSceneElements?api.getSceneElements():[]).filter(function(item){return item&&item.type==="image"&&!item.isDeleted&&wanted.has(item.id);}).map(function(item,index){var file=files[item.fileId],custom=item.customData||{};return file&&file.dataURL?{dataURL:file.dataURL,name:custom.dshFileName||("canvas-selection-"+(index+1)+"-"+String(item.id).slice(-6)+".png"),width:Math.max(1,Number(item.width||0)),height:Math.max(1,Number(item.height||0)),sourceKind:String(custom.dshSourceKind||"image")} : null;}).filter(Boolean);if(!images.length){post({type:"error",message:"所选图片暂时无法读取，请稍后重试"});return;}var batchId="chat_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,7);images.forEach(function(image,index){setTimeout(function(){post({type:"request-send-selection-item",batchId:batchId,index:index+1,total:images.length,image:image});},index*90);});};
-    var requestBackgroundRemoval=function(id){if(!api)return;var target=(api.getSceneElements()||[]).find(function(item){return item&&item.id===id&&item.type==="image"&&!item.isDeleted;}),files=fileObject(api.getFiles?api.getFiles():{}),file=target&&files[target.fileId];if(!target||!file||!file.dataURL){post({type:"error",message:"当前图片数据不可用"});return;}try{var custom=target.customData||{},job=createEditPlaceholder({id:id},"本地 rembg · isnet-general-use · 首次使用自动准备"),name=custom.dshFileName||("画布图片-"+String(id).slice(-6)+".png");post({type:"request-remove-background",requestId:job.requestId,placeholderId:job.placeholderId,elementId:id,fileId:target.fileId,name:name,imageData:file.dataURL,imagePath:custom.dshSourcePath||""});}catch(err){post({type:"error",message:String(err&&err.message||err)});}};
+    var requestBackgroundRemoval=function(id){if(!api)return;var target=(api.getSceneElements()||[]).find(function(item){return item&&item.id===id&&item.type==="image"&&!item.isDeleted;}),files=fileObject(api.getFiles?api.getFiles():{}),file=target&&files[target.fileId];if(!target||!file||!file.dataURL){post({type:"error",message:"当前图片数据不可用"});return;}try{var custom=target.customData||{},job=createEditPlaceholder({id:id},"本地 rembg · birefnet-general-lite · 首次使用自动准备"),name=custom.dshFileName||("画布图片-"+String(id).slice(-6)+".png");post({type:"request-remove-background",requestId:job.requestId,placeholderId:job.placeholderId,elementId:id,fileId:target.fileId,name:name,imageData:file.dataURL,imagePath:custom.dshSourcePath||""});}catch(err){post({type:"error",message:String(err&&err.message||err)});}};
     var submitImageEdit=function(payload){if(!imageEditor||imageEditor.busy)return;try{var job=createEditPlaceholder(imageEditor),request=Object.assign({},imageEditor);setImageEditor(null);var posEl=(api&&api.getSceneElements?api.getSceneElements():[]).find(function(item){return item&&item.id===request.id;})||null;post({type:"request-image-edit",requestId:job.requestId,placeholderId:job.placeholderId,elementId:request.id,fileId:request.fileId,name:request.name,imageData:request.dataURL,imagePath:request.sourcePath,editRootPath:request.editRootPath,editHistory:request.editHistory,editDepth:request.editDepth,mode:request.mode,prompt:payload.prompt,maskData:payload.maskData,width:request.width,height:request.height,atX:posEl?posEl.x:undefined,atY:posEl?posEl.y:undefined});}catch(err){setImageEditor(Object.assign({},imageEditor,{busy:false,error:String(err&&err.message||err)}));}};
     return window.React.createElement('div',{style:{position:'absolute',inset:0}},
       window.React.createElement('div',{style:{position:'absolute',inset:0}},window.React.createElement(window.ExcalidrawLib.Excalidraw,{excalidrawAPI:function(a){api=a;if(!ready){ready=true;post({type:"ready"})}},initialData:{elements:[],appState:empty,files:{}},onChange:onCanvasChange,viewModeEnabled:false,zenModeEnabled:false,langCode:"zh-CN"})),
@@ -2685,7 +2685,7 @@ function Main(){
         toolbar.count>1?window.React.createElement('span',{className:'dsh-selection-count'},'已选 '+toolbar.count+' 张'):null,
         toolbar.count>1?window.React.createElement('span',{className:'dsh-selection-divider'}):null,
         window.React.createElement('button',{className:'dsh-selection-action dsh-primary',title:'把所选图片附加到聊天输入框',onClick:function(){sendSelectionToChat(toolbar.ids);}},'发送至聊天'),
-        toolbar.count===1?window.React.createElement('button',{className:'dsh-selection-action',title:'本地 rembg isnet-general-use 去除背景；首次使用自动准备环境和模型',onClick:function(){requestBackgroundRemoval(toolbar.ids[0]);}},'去除背景'):null,
+        toolbar.count===1?window.React.createElement('button',{className:'dsh-selection-action',title:'本地 rembg birefnet-general-lite 去除背景；首次使用自动准备环境和模型',onClick:function(){requestBackgroundRemoval(toolbar.ids[0]);}},'去除背景'):null,
         toolbar.count===1?window.React.createElement('button',{className:'dsh-selection-action',title:'画笔涂抹后智能擦除',onClick:function(){openImageEditor('erase',toolbar.ids[0]);}},'智能擦除'):null,
         toolbar.count===1?window.React.createElement('button',{className:'dsh-selection-action',title:'不经过主聊天，直接输入图片修改需求',onClick:function(){openImageEditor('edit',toolbar.ids[0]);}},'编辑图片'):null,
         toolbar.count===1?window.React.createElement('button',{className:'dsh-selection-action dsh-photoshop',title:'在 Photoshop 中打开链接文件；保存后自动刷新画布',onClick:function(){openInPhotoshop(toolbar.ids[0]);}},'Ps 编辑'):null,
@@ -3166,6 +3166,19 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 // 占位原位替换还是兜底加入,只处理一次,否则会出现两张一样的图。
                 if (chatHandledRef.current.has(path)) continue;
                 chatHandledRef.current.add(path);
+                // 整页重载后 chatHandledRef / autoAddDispatched 都会清零，而宿主的
+                // 完成记录环形列表仍会重放近期路径：按画布已有元素兜底去重。
+                // 注意物化副本会撞名改名（name-2.png）：元素指向 assets 缓存路径、
+                // 文件名带 -N 后缀，与重放的归档原始路径/原始名都对不上——路径
+                // 之外再按「剥掉末尾 -数字 后缀的归一化文件名」比对，两个维度
+                // 任一命中即视为已在画布，阻断重放链路的重复加入。
+                const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '');
+                const alreadyOnCanvas = ((latestSnapshot.current || {}).elements || [])
+                  .some((item) => item && item.type === 'image' && !item.isDeleted && item.customData && (
+                    String(item.customData.dshSourcePath || '') === path ||
+                    (dispatchName && String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '') === dispatchName)
+                  ));
+                if (alreadyOnCanvas) continue;
                 const name = imageName(path) || '聊天生成.png';
                 const slotId = pending.shift();
                 if (slotId) {
@@ -4223,7 +4236,19 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
               : (result.data.photoshop ? '已写入 Photoshop 文字层' : '已生成 PSD 草稿（文字层需在 Photoshop 中继续整理）');
             setFeedback('✓ ' + suffix + cleanup + '，文件已加入画布：' + image.name + (result.data.warning ? '；' + result.data.warning : ''));
           })
-          .catch((err) => setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ ' + (format === 'psd' ? 'PSD' : 'AI/SVG') + ' 生成失败：' + String((err && err.message) || err) } : prev));
+          .catch((err) => {
+            const raw = String((err && err.message) || err);
+            // 长任务（image2 清洁底 + Adobe 脚本）常超 2 分钟，客户端连接可能被中途
+            // 切断（Failed to fetch）：服务端仍会完成并把成品落盘，文件扫描会自动
+            // 上画布。这不是生成失败——关掉对话框并明确提示，避免重复点击产出多份。
+            const interrupted = /Failed to fetch|LoadFailed|networkerror|aborted/i.test(raw);
+            if (interrupted) {
+              setTextRebuild(null);
+              setFeedback('⏳ 连接等待被中断，但任务仍在后台执行：完成后成品会自动加入画布和项目文件夹，请勿重复点击以免生成多份');
+            } else {
+              setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ ' + (format === 'psd' ? 'PSD' : 'AI/SVG') + ' 生成失败：' + raw } : prev);
+            }
+          });
       };
       const detectTextRebuild = (selectedRegions) => {
         const active = textRebuild;
@@ -4448,7 +4473,17 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
               const suffix = result.data.photoshop ? '已写入 Photoshop 文字层' : '已生成 PSD 草稿（文字层需在 Photoshop 中继续整理）';
               setFeedback('✓ ' + suffix + cleanup + '，文件已加入画布：' + image.name + (result.data.warning ? '；' + result.data.warning : ''));
             })
-            .catch((err) => setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ PSD 生成失败：' + String((err && err.message) || err) } : prev));
+            .catch((err) => {
+              const raw = String((err && err.message) || err);
+              // 同上：连接中断 ≠ 生成失败，服务端会完成并自动上画布。
+              const interrupted = /Failed to fetch|LoadFailed|networkerror|aborted/i.test(raw);
+              if (interrupted) {
+                setTextRebuild(null);
+                setFeedback('⏳ 连接等待被中断，但任务仍在后台执行：完成后成品会自动加入画布和项目文件夹，请勿重复点击以免生成多份');
+              } else {
+                setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ PSD 生成失败：' + raw } : prev);
+              }
+            });
         } else if (d.type === 'request-remove-background') {
           const current = projectRef.current;
           if (removeProgressTimer.current) {
@@ -4489,7 +4524,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 if (knownDiskPaths.current) knownDiskPaths.current.add(result.data.image.path);
               }
               post({ type: 'image-remove-bg-result', requestId: d.requestId, placeholderId: d.placeholderId, elementId: d.elementId, ...result.data });
-              setFeedback('✓ 去背景完成（rembg isnet-general-use），已生成透明 PNG');
+              setFeedback('✓ 去背景完成（rembg ' + (result.data.model || 'birefnet-general-lite') + '），已生成透明 PNG');
               window.setTimeout(() => setRemoveProgress(null), 1600);
             })
             .catch((err) => {
@@ -4554,7 +4589,11 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
             .catch((err) => setFeedback('⚠ 导入文件失败：' + String((err && err.message) || err)));
         } else if (d.type === 'request-image-edit') {
           const current = projectRef.current;
-          setFeedback(d.mode === 'erase' ? '智能擦除处理中：优先 Codex，失败自动切换 image2 API…' : '图片编辑处理中：不占用聊天上下文…');
+          // 引擎路由由画布图像引擎设置决定（dsh-codex 或 api），这里只如实显示当前选中的引擎。
+          fetch('/dsh-canvas/image-settings').then((r) => r.json()).then((s) => (s && s.engine) || '').catch(() => '').then((engineName) => {
+            const via = engineName === 'api' ? 'image2 API' : engineName === 'dsh-codex' ? 'Codex' : '图像引擎';
+            setFeedback((d.mode === 'erase' ? '智能擦除' : '图片编辑') + '处理中：使用 ' + via + '（不占用聊天上下文）…');
+          });
           fetch('/dsh-canvas/edit-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -4569,7 +4608,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 if (knownDiskPaths.current) knownDiskPaths.current.add(result.data.image.path);
               }
               post({ type: 'image-edit-result', requestId: d.requestId, placeholderId: d.placeholderId, elementId: d.elementId, ...result.data });
-              const engineLabel = result.data.engine === 'image2-api' ? 'image2 API 兜底' : 'Codex';
+              const engineLabel = result.data.engine === 'api' ? 'image2 API' : result.data.engine === 'dsh-codex' ? 'Codex' : String(result.data.engine || '');
               setFeedback('✓ ' + (d.mode === 'erase' ? '智能擦除' : '图片编辑') + '完成（' + engineLabel + '），已生成新图');
             })
             .catch((err) => {
@@ -4919,8 +4958,13 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
               // 避免把历史文件一次性全倒上画布，也避免复活用户刚从画布删掉的旧图。
               try {
                 const linked = new Set();
+                // 画布把元素图像缓存进 assets（materialize-image），文件名取自元素的
+                // dshFileName；这些缓存副本的路径不等于元素源路径，仅按路径判会漏。
+                // 按文件名一并排除，避免缓存副本被当成"项目新增文件"重复上画布。
+                const linkedNames = new Set();
                 for (const el of (latestSnapshot.current || {}).elements || []) {
                   if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshSourcePath) linked.add(el.customData.dshSourcePath);
+                  if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshFileName) linkedNames.add(String(el.customData.dshFileName).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, ''));
                 }
                 if (!autoAddBaseline.current) {
                   try {
@@ -4933,7 +4977,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                     if (!item || !item.path) continue;
                     // ADOBE桥接/ 下的文件由桥接轮询器按清单上画布（要打出处印、要 ack），这里跳过以免重复添加。
                     if (isAdobeBridgePath(item.path)) continue;
-                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path)) continue;
+                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path) || linkedNames.has(String(item.name || imageName(item.path)).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, ''))) continue;
                     autoAddBaseline.current.add(item.path);
                     if (Number(item.mtime || 0) > Date.now() - 15 * 60 * 1000) fresh.push(item);
                   }

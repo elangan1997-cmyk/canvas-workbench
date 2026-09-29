@@ -228,6 +228,9 @@ function routedTool(ctx, original, getChatContext) {
           },
           writeError: { type: 'string' },
           notice: { type: 'string' },
+          // 多图时 execute 会写入 imageCount 供 presentResult 显示「已生成 N 张图片」，
+          // 必须在 schema 里声明，否则 additionalProperties:false 会触发非致命校验告警。
+          imageCount: { type: 'integer' },
         },
       },
       render: (_args, value) => contentOf(value),

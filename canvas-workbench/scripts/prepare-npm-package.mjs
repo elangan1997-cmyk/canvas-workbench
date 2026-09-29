@@ -93,6 +93,9 @@ const publishPkg = {
     '@deepseek-ai/dsh-tools': '0.1.0-rc.7 || >=0.1.0 <0.2.0 || >=0.1.7-rc.1 <0.2.0',
     '@deepseek-ai/dsh-llm': '0.1.0-rc.7 || >=0.1.0 <0.2.0 || >=0.1.7-rc.1 <0.2.0',
   },
+  dependencies: {
+    'ag-psd': '^31.0.2',
+  },
 };
 await writeFile(join(outDir, 'package.json'), JSON.stringify(publishPkg, null, 2) + '\n');
 

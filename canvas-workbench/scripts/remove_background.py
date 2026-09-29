@@ -297,16 +297,16 @@ def main() -> int:
     from rembg import new_session, remove
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    emit_progress("model", "正在下载/加载 isnet-general-use 模型（首次使用可能需要一些时间）", None)
+    emit_progress("model", "正在加载 " + args.model + " 模型（本地已缓存，加载大模型需要一些时间）", 40)
     session = new_session_with_progress(new_session, args.model)
     emit_progress("processing", "模型已就绪，正在移除背景", 88)
     with Image.open(args.input) as image:
-        # isnet-general-use 已提供软 alpha；保留 alpha matting 关闭时的
+        # isnet/birefnet 均提供软 alpha；保留 alpha matting 关闭时的
         # 原始边缘，避免产品边缘被过度侵蚀。
         result = remove(image.convert("RGBA"), session=session)
         result.save(args.output, format="PNG", optimize=True)
     emit_progress("complete", "去背景完成", 100)
-    _final = '{"success":true,"model":"isnet-general-use","image":"' + str(args.output).replace('\\', '\\\\').replace('"', '\\"') + '"}'
+    _final = '{"success":true,"model":"' + args.model + '","image":"' + str(args.output).replace('\\', '\\\\').replace('"', '\\"') + '"}'
     _out = getattr(args, 'result_output', None)
     if _out:
         try:

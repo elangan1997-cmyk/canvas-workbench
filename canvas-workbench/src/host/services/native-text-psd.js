@@ -47,7 +47,10 @@ export function buildNativeTextPsd(draftBytes, blocks) {
   const enabled = (Array.isArray(blocks) ? blocks : [])
     .filter((block) => block && block.enabled !== false && String(block.text || '').trim())
     .slice(0, 200);
-  psd.children = [...enabled.map(nativeTextLayer), ...(Array.isArray(psd.children) ? psd.children : [])];
+  // ag-psd 的 children 顺序是「底部在前、顶部在后」（与 Photoshop 图层面板相反）。
+  // 原生文字层必须追加到末尾（=堆叠顶部），否则会被不透明的 Clean background
+  // 盖住 —— 用户点开图层「小眼睛」也看不到文字。
+  psd.children = [...(Array.isArray(psd.children) ? psd.children : []), ...enabled.map(nativeTextLayer)];
   // Photoshop asks once to update the newly-created text engine data. After
   // choosing Update the layers are normal editable Type layers; the warning is
   // safer than shipping stale raster text data as if it were current.

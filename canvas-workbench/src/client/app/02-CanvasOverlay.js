@@ -108,6 +108,19 @@
                 // 占位原位替换还是兜底加入,只处理一次,否则会出现两张一样的图。
                 if (chatHandledRef.current.has(path)) continue;
                 chatHandledRef.current.add(path);
+                // 整页重载后 chatHandledRef / autoAddDispatched 都会清零，而宿主的
+                // 完成记录环形列表仍会重放近期路径：按画布已有元素兜底去重。
+                // 注意物化副本会撞名改名（name-2.png）：元素指向 assets 缓存路径、
+                // 文件名带 -N 后缀，与重放的归档原始路径/原始名都对不上——路径
+                // 之外再按「剥掉末尾 -数字 后缀的归一化文件名」比对，两个维度
+                // 任一命中即视为已在画布，阻断重放链路的重复加入。
+                const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '');
+                const alreadyOnCanvas = ((latestSnapshot.current || {}).elements || [])
+                  .some((item) => item && item.type === 'image' && !item.isDeleted && item.customData && (
+                    String(item.customData.dshSourcePath || '') === path ||
+                    (dispatchName && String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '') === dispatchName)
+                  ));
+                if (alreadyOnCanvas) continue;
                 const name = imageName(path) || '聊天生成.png';
                 const slotId = pending.shift();
                 if (slotId) {
@@ -1165,7 +1178,19 @@
               : (result.data.photoshop ? '已写入 Photoshop 文字层' : '已生成 PSD 草稿（文字层需在 Photoshop 中继续整理）');
             setFeedback('✓ ' + suffix + cleanup + '，文件已加入画布：' + image.name + (result.data.warning ? '；' + result.data.warning : ''));
           })
-          .catch((err) => setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ ' + (format === 'psd' ? 'PSD' : 'AI/SVG') + ' 生成失败：' + String((err && err.message) || err) } : prev));
+          .catch((err) => {
+            const raw = String((err && err.message) || err);
+            // 长任务（image2 清洁底 + Adobe 脚本）常超 2 分钟，客户端连接可能被中途
+            // 切断（Failed to fetch）：服务端仍会完成并把成品落盘，文件扫描会自动
+            // 上画布。这不是生成失败——关掉对话框并明确提示，避免重复点击产出多份。
+            const interrupted = /Failed to fetch|LoadFailed|networkerror|aborted/i.test(raw);
+            if (interrupted) {
+              setTextRebuild(null);
+              setFeedback('⏳ 连接等待被中断，但任务仍在后台执行：完成后成品会自动加入画布和项目文件夹，请勿重复点击以免生成多份');
+            } else {
+              setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ ' + (format === 'psd' ? 'PSD' : 'AI/SVG') + ' 生成失败：' + raw } : prev);
+            }
+          });
       };
       const detectTextRebuild = (selectedRegions) => {
         const active = textRebuild;
@@ -1390,7 +1415,17 @@
               const suffix = result.data.photoshop ? '已写入 Photoshop 文字层' : '已生成 PSD 草稿（文字层需在 Photoshop 中继续整理）';
               setFeedback('✓ ' + suffix + cleanup + '，文件已加入画布：' + image.name + (result.data.warning ? '；' + result.data.warning : ''));
             })
-            .catch((err) => setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ PSD 生成失败：' + String((err && err.message) || err) } : prev));
+            .catch((err) => {
+              const raw = String((err && err.message) || err);
+              // 同上：连接中断 ≠ 生成失败，服务端会完成并自动上画布。
+              const interrupted = /Failed to fetch|LoadFailed|networkerror|aborted/i.test(raw);
+              if (interrupted) {
+                setTextRebuild(null);
+                setFeedback('⏳ 连接等待被中断，但任务仍在后台执行：完成后成品会自动加入画布和项目文件夹，请勿重复点击以免生成多份');
+              } else {
+                setTextRebuild((prev) => prev ? { ...prev, busy: false, error: '⚠ PSD 生成失败：' + raw } : prev);
+              }
+            });
         } else if (d.type === 'request-remove-background') {
           const current = projectRef.current;
           if (removeProgressTimer.current) {
@@ -1431,7 +1466,7 @@
                 if (knownDiskPaths.current) knownDiskPaths.current.add(result.data.image.path);
               }
               post({ type: 'image-remove-bg-result', requestId: d.requestId, placeholderId: d.placeholderId, elementId: d.elementId, ...result.data });
-              setFeedback('✓ 去背景完成（rembg isnet-general-use），已生成透明 PNG');
+              setFeedback('✓ 去背景完成（rembg ' + (result.data.model || 'birefnet-general-lite') + '），已生成透明 PNG');
               window.setTimeout(() => setRemoveProgress(null), 1600);
             })
             .catch((err) => {
@@ -1496,7 +1531,11 @@
             .catch((err) => setFeedback('⚠ 导入文件失败：' + String((err && err.message) || err)));
         } else if (d.type === 'request-image-edit') {
           const current = projectRef.current;
-          setFeedback(d.mode === 'erase' ? '智能擦除处理中：优先 Codex，失败自动切换 image2 API…' : '图片编辑处理中：不占用聊天上下文…');
+          // 引擎路由由画布图像引擎设置决定（dsh-codex 或 api），这里只如实显示当前选中的引擎。
+          fetch('/dsh-canvas/image-settings').then((r) => r.json()).then((s) => (s && s.engine) || '').catch(() => '').then((engineName) => {
+            const via = engineName === 'api' ? 'image2 API' : engineName === 'dsh-codex' ? 'Codex' : '图像引擎';
+            setFeedback((d.mode === 'erase' ? '智能擦除' : '图片编辑') + '处理中：使用 ' + via + '（不占用聊天上下文）…');
+          });
           fetch('/dsh-canvas/edit-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1511,7 +1550,7 @@
                 if (knownDiskPaths.current) knownDiskPaths.current.add(result.data.image.path);
               }
               post({ type: 'image-edit-result', requestId: d.requestId, placeholderId: d.placeholderId, elementId: d.elementId, ...result.data });
-              const engineLabel = result.data.engine === 'image2-api' ? 'image2 API 兜底' : 'Codex';
+              const engineLabel = result.data.engine === 'api' ? 'image2 API' : result.data.engine === 'dsh-codex' ? 'Codex' : String(result.data.engine || '');
               setFeedback('✓ ' + (d.mode === 'erase' ? '智能擦除' : '图片编辑') + '完成（' + engineLabel + '），已生成新图');
             })
             .catch((err) => {
@@ -1861,8 +1900,13 @@
               // 避免把历史文件一次性全倒上画布，也避免复活用户刚从画布删掉的旧图。
               try {
                 const linked = new Set();
+                // 画布把元素图像缓存进 assets（materialize-image），文件名取自元素的
+                // dshFileName；这些缓存副本的路径不等于元素源路径，仅按路径判会漏。
+                // 按文件名一并排除，避免缓存副本被当成"项目新增文件"重复上画布。
+                const linkedNames = new Set();
                 for (const el of (latestSnapshot.current || {}).elements || []) {
                   if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshSourcePath) linked.add(el.customData.dshSourcePath);
+                  if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshFileName) linkedNames.add(String(el.customData.dshFileName).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, ''));
                 }
                 if (!autoAddBaseline.current) {
                   try {
@@ -1875,7 +1919,7 @@
                     if (!item || !item.path) continue;
                     // ADOBE桥接/ 下的文件由桥接轮询器按清单上画布（要打出处印、要 ack），这里跳过以免重复添加。
                     if (isAdobeBridgePath(item.path)) continue;
-                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path)) continue;
+                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path) || linkedNames.has(String(item.name || imageName(item.path)).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, ''))) continue;
                     autoAddBaseline.current.add(item.path);
                     if (Number(item.mtime || 0) > Date.now() - 15 * 60 * 1000) fresh.push(item);
                   }
