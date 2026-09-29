@@ -2,7 +2,7 @@
 // 协议：adobe-bridge/PROTOCOL.md。跑法：npm test（或 node --test tests/unit/adobe-bridge.test.mjs）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -168,9 +168,10 @@ test('服务：远程驱动在无 runProcess 的环境下明确拒绝；用户�
     assert.equal(await rf(join(dir, 'dsh-bridge-core.jsx'), 'utf8'), '\uFEFF// dsh-bridge-core.jsx');
     assert.equal(await rf(join(dir, 'dsh-bridge-photoshop.jsx'), 'utf8'), '\uFEFF// DSH画布桥接-Photoshop.jsx');
     assert.equal(await rf(join(dir, 'dsh-bridge-illustrator.jsx'), 'utf8'), '\uFEFF// DSH画布桥接-Illustrator.jsx');
+    await chmod(join(dir, 'dsh-bridge-core.jsx'), 0o444);
     await wf(join(w.home, 'plugin', 'adobe-bridge', 'dsh-bridge-core.jsx'), '\uFEFF// v2 longer content');
     await w.bridge.ensureUserCopy();
-    assert.equal(await rf(join(dir, 'dsh-bridge-core.jsx'), 'utf8'), '\uFEFF// v2 longer content', '源变了要跟着更新');
+    assert.equal(await rf(join(dir, 'dsh-bridge-core.jsx'), 'utf8'), '\uFEFF// v2 longer content', '只读的旧副本也要能更新（Windows npm 安装会继承只读属性）');
   } finally { await w.dispose(); }
 });
 

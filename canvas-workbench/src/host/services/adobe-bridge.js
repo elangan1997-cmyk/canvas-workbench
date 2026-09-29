@@ -1,7 +1,7 @@
 // Adobe 桥接 Host 服务：握手文件、收件清单校验、发件箱写入、出处解析、脚本安装、日志。
 // 协议契约见 adobe-bridge/PROTOCOL.md；纯函数在 ../../shared/utils/adobe-bridge.js（有单测）。
 // 本文件只做文件系统 I/O，不依赖 DSH ctx（便于 tests/unit 用临时目录直接测）。
-import { access, appendFile, copyFile, cp, mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, copyFile, cp, mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -29,10 +29,26 @@ const REMOTE_SCRIPT_FILES = {
   illustrator: { source: 'DSH画布桥接-Illustrator.jsx', target: 'dsh-bridge-illustrator.jsx' }
 };
 const filesForApp = (app) => SCRIPT_FILES_BY_APP[app] || SCRIPT_FILES;
+// npm/pnpm files can carry the Windows read-only attribute into the first
+// user copy. A later unconditional copy then fails with EPERM while Adobe is
+// open. Clear that attribute before replacing the small JSX file. Missing
+// destinations are expected on first install.
+const copyBridgeFile = async (source, target) => {
+  await chmod(target, 0o666).catch(() => {});
+  // On Windows, fs.copyFile() can still return EPERM when the destination was
+  // created from an npm package carrying the read-only attribute. Replacing
+  // the directory entry first is reliable even while Photoshop/Illustrator is
+  // open (the scripts are not held open between evaluations).
+  await unlink(target).catch((error) => {
+    if (error?.code !== 'ENOENT') throw error;
+  });
+  await copyFile(source, target);
+  await chmod(target, 0o666).catch(() => {});
+};
 const copyUserScripts = async (sourceDir, userCopyDir) => {
-  for (const file of SCRIPT_FILES) await copyFile(join(sourceDir, file), join(userCopyDir, file));
+  for (const file of SCRIPT_FILES) await copyBridgeFile(join(sourceDir, file), join(userCopyDir, file));
   for (const item of Object.values(REMOTE_SCRIPT_FILES)) {
-    await copyFile(join(sourceDir, item.source), join(userCopyDir, item.target));
+    await copyBridgeFile(join(sourceDir, item.source), join(userCopyDir, item.target));
   }
 };
 // Photoshop 2025 on macOS can mis-resolve an absolute /Users/... ExtendScript
@@ -436,7 +452,7 @@ export function createAdobeBridge({ pluginVersion, pluginRoot, previewUrl, home,
         try {
           await mkdir(dir, { recursive: true });
           await access(dir, fsConstants.W_OK);
-          for (const file of filesForApp(target.app)) await copyFile(join(sourceDir, file), join(dir, file));
+          for (const file of filesForApp(target.app)) await copyBridgeFile(join(sourceDir, file), join(dir, file));
           done.push(dir);
         } catch (err) {
           // 目录不可写但该应用的脚本已全部在位（之前用管理员装过）→ 视为已安装，不算失败
