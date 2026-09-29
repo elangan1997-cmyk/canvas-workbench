@@ -77,7 +77,7 @@ const publishPkg = {
   keywords: ['dsh', 'dsh-plugin', 'dsh-bundle', 'canvas', 'excalidraw', 'design'],
   repository: {
     type: 'git',
-    url: 'git+https://github.com/elangan1997-cmyk/dsh-canvas-suite.git',
+    url: 'git+https://github.com/elangan1997-cmyk/canvas-workbench.git',
     directory: 'canvas-workbench',
   },
   dsh: {
