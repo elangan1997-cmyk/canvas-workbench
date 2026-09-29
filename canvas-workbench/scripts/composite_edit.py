@@ -107,11 +107,13 @@ def main():
         # painted area. Keep that core fully generated so old glyphs cannot
         # leak back into the repaired region.
         core = selected.point(lambda value: 255 if value >= 8 else 0)
-        # Feather ring outside the core: a wide, low-frequency transition
-        # (about 1.8% of the short side, 14–48px) so a slight tone/texture
-        # difference of the generated core fades out instead of reading as a
-        # rectangular patch. The core itself stays fully opaque.
-        feather_radius = max(14, min(48, round(min(source.size) * 0.018)))
+        # Feather ring outside the core: a low-frequency transition (about
+        # 0.8% of the short side, 6–24px) so a slight tone/texture difference
+        # of the generated core fades out instead of reading as a rectangular
+        # patch. Kept narrow: a wide ring partially blends generated pixels
+        # over neighbouring elements in dense layouts (user-reported
+        # regression). The core itself stays fully opaque.
+        feather_radius = max(6, min(24, round(min(source.size) * 0.008)))
         feather_kernel = feather_radius * 2 + 1
         expanded = core.filter(ImageFilter.MaxFilter(feather_kernel))
         feather = expanded.filter(ImageFilter.GaussianBlur(max(3.0, feather_radius * 0.72)))

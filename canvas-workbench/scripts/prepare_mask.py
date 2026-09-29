@@ -50,11 +50,12 @@ def main():
     # that region enough to include glyph antialiasing, shadows and outlines.
     selected = mask.getchannel("A").point(lambda value: 255 - value)
     # Bold display type often has antialiasing, shadow and outline extending
-    # well beyond the user's painted centre line. At 2K/2.4K the previous 24px
-    # cap could leave vertical glyph fragments outside the composite core.
-    # Use roughly 2% of the short side, capped at 48px to avoid reaching nearby
-    # products when the user paints a reasonably tight selection.
-    radius = max(10, min(48, round(min(source.size) * 0.020)))
+    # beyond the user's painted centre line. But a wide expansion eats
+    # neighbouring elements in dense layouts (user-reported regression), so
+    # keep it tight: roughly 1% of the short side, capped at 24px. Residual
+    # fragments near the boundary are handled by the model prompt (boundary
+    # elements get reconstructed from their visible part), not by mask reach.
+    radius = max(6, min(24, round(min(source.size) * 0.010)))
     kernel = radius * 2 + 1
     if kernel % 2 == 0:
         kernel += 1
