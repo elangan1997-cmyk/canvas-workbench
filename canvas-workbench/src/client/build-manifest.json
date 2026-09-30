@@ -148,11 +148,7 @@
     },
     {
       "file": "features/chat-image-output/03-native-strip.js",
-      "note": "聊天图片输出组件（时间过滤、三级回退、灯箱）",
-      "lines": [
-        1134,
-        1430
-      ]
+      "note": "原生缩略图带双入口:悬停「加入画布」按钮 + 打开方式菜单项"
     },
     {
       "file": "features/text-edit/01-TextRebuildPanel.js",
