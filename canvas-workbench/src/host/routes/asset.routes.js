@@ -1,7 +1,8 @@
 // 自 lib/index.js apply() 机械迁移（v1.8 Phase 2）：每个 handler 体逐字未改，
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
-import { isAbsolutePath, isWindows, revealFile } from '../../../lib/platform.js';
-import { access, mkdir, readFile, readdir, rename, stat } from 'node:fs/promises';
+import { isAbsolutePath, isMac, isWindows, revealFile, resolveFirst } from '../../../lib/platform.js';
+import { access, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { expandHome, isPathWithin, normalizeLocalPath, pathComparable } from '../../shared/utils/paths.js';
 import { parseQuery, readBody, respond } from '../server/http.js';
@@ -200,6 +201,51 @@ export function register(router, h) {
             if (!info.isFile()) throw new Error('目标不是文件');
             const result = await revealFile(ctx, runProcess, target, dirname(target));
             if (result.exitCode !== 0) throw new Error(result.stderr.trim() || (isWindows ? '资源管理器定位失败' : '访达定位失败'));
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, path: target }));
+          } catch (err) {
+            respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
+          }
+          return;
+  });
+
+  router.add({ method: 'POST', path: '/dsh-canvas/clipboard-image', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          // 画布"复制原图":web 侧 navigator.clipboard 的图片写入在这版 Electron
+          // 里会被静默丢弃(实测 write 正常返回、系统剪贴板不变,只有文本写得进),
+          // 由宿主进程直写系统剪贴板绕开全部 web 剪贴板权限。macOS 走
+          // osascript 读 PNG 字节入剪贴板;Windows 走 PowerShell STA SetImage。
+          try {
+            const body = JSON.parse(await readBody(req) || '{}');
+            const target = normalizeLocalPath(String(body.path || ''));
+            if (!isAbsolutePath(target) || !isImagePath(target)) throw new Error('bad image path');
+            const info = await stat(target);
+            if (!info.isFile() || info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new Error('invalid image file');
+            let pngPath = target;
+            let tempPng = '';
+            if (extname(target).toLowerCase() !== '.png') {
+              const sips = await resolveFirst(ctx, ['sips']);
+              if (!sips) throw new Error('未找到 sips，无法转换 PNG');
+              tempPng = join(tmpdir(), 'dsh-canvas-clipboard-' + Date.now().toString(36) + '.png');
+              const conv = await runProcess(sips, ['-s', 'format', 'png', target, '--out', tempPng], dirname(target));
+              if (conv.exitCode !== 0) throw new Error('PNG 转换失败：' + String(conv.stderr || '').trim());
+              pngPath = tempPng;
+            }
+            let result;
+            if (isMac) {
+              const osascript = await resolveFirst(ctx, ['osascript']);
+              if (!osascript) throw new Error('未找到 osascript');
+              const escaped = pngPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              result = await runProcess(osascript, ['-e', 'set the clipboard to (read (POSIX file "' + escaped + '") as «class PNGf»)'], dirname(pngPath));
+            } else if (isWindows) {
+              const powershell = await resolveFirst(ctx, ['powershell.exe', 'powershell']);
+              if (!powershell) throw new Error('未找到 Windows PowerShell');
+              const script = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile(' + JSON.stringify(pngPath) + '); [System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose()';
+              const encoded = Buffer.from(script, 'utf16le').toString('base64');
+              result = await runProcess(powershell, ['-NoLogo', '-NoProfile', '-STA', '-EncodedCommand', encoded], dirname(pngPath));
+            } else {
+              throw new Error('当前平台不支持系统级剪贴板写入');
+            }
+            if (tempPng) { await rm(tempPng, { force: true }).catch(() => {}); }
+            if (result.exitCode !== 0) throw new Error('写入剪贴板失败：' + String(result.stderr || '').trim());
             respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, path: target }));
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));

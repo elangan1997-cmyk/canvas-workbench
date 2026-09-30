@@ -34,7 +34,7 @@ function windowsAbsoluteCandidates(names) {
   return out;
 }
 
-async function resolveFirst(ctx, names) {
+export async function resolveFirst(ctx, names) {
   const absolute = windowsAbsoluteCandidates(names);
   if (absolute.length) {
     const { access } = await import('node:fs/promises');

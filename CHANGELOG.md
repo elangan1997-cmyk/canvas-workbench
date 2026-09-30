@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.48（2026-09-30）
+
+- **【新】画布复制图片 = 原图字节**（用户实测：Cmd+C 复制 PNG，贴出来的是带白色边框的画布渲染图而非原图）：在画布 copy 事件捕获阶段接管——选中恰好一张带本地源文件的图片时，取源文件原始字节写入剪贴板（PNG 原字节直写；JPEG/WebP 先转 PNG），多选/非图片/无源文件不拦截、保持 Excalidraw 原生行为。
+- **【根因】web 剪贴板图片写入在这版 Electron 下会被静默丢弃**（排障关键发现，CDP 实测三级证据）：iframe 与主页面的 `navigator.clipboard.write` 对 image/png 均正常返回但系统剪贴板不变，只有文本写得进（writeText 可达系统层）。故复制走**宿主进程直写系统剪贴板**：新增 `/dsh-canvas/clipboard-image` 路由，macOS 用 osascript 读 PNG 字节入剪贴板、Windows 用 PowerShell STA `Clipboard::SetImage`，非 PNG 经 sips 转换；路由不可用时退回 copy 事件窗口内的 Promise ClipboardItem 写入。端到端实测：选中 Z01 复制 → 系统剪贴板 PNGf 与源文件**逐字节一致**（1,996,808 字节，md5 相同）。
+- 附带：`lib/platform.js` 的 `resolveFirst` 改为导出（宿主路由复用二进制解析）。
+
 ## 1.9.47（2026-09-30）
 
 - **【修复】换渠道重试成功的图自动上画布**（用户实测：首次出图失败、agent 降级换渠道——如 t8star 网关——重新生成的图一张也上不去）：自动上画布此前只认宿主 generation-status 登记的本插件管线产出,agent 换工具/换通道写出的图对它不可见。现新增「其他渠道候选队列」:实时轮次的事件流里新出现的绝对路径图片(工具结果/最终回复文本,不区分渠道)入队,轮询统一消费——image-status 按 mtime 判新鲜(旧图引用/对比读取不自动上),判重沿用路径+主干名 md5 确认,有占位则原位替换、否则兜底加入;只收页面加载后的实时轮次,历史回放不灌历史图;附件引用(无 mtime)不自动加,仍走菜单手动。CDP 实机验证:agent 用 shell 渲写 PNG→回复给路径→自动归档 assets 并落画布。

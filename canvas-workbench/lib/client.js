@@ -2983,6 +2983,65 @@ window.addEventListener("paste",function(e){
     for(var i=0;i<files.length;i+=1){var file=files[i],prepared=await prepareExternalImage(file);addImageDataURL(prepared.dataURL,prepared.dm,{name:file.name||("剪贴板图片-"+(i+1)+".png"),path:"",externalDrop:true});}
   }).catch(function(err){post({type:"error",message:"粘贴图片失败: "+String(err&&err.message||err)});});
 },true);
+// ---- 复制画布图片 = 原图字节 ----
+// Excalidraw 自带的 Cmd+C/右键复制写进剪贴板的是"画布渲染导出图"——带
+// 元素边框/画布背景样式,与原图不一致(设计交付贴进微信/PS 会多出白边)。
+// 这里在 copy 事件捕获阶段接管:选中恰好一张带本地源文件的图片时,取源
+// 文件原始字节写入剪贴板(PNG 原字节直写,JPEG/WebP 经画布转 PNG——剪贴
+// 板图片类型 Chromium 只稳定支持 image/png)。其余情况(多选/非图片/无
+// 源文件)一律不拦截,保持 Excalidraw 原生复制行为。
+var ORIGINAL_IMAGE_RE=/\.(?:png|jpe?g|webp|gif|avif|bmp)$/i;
+function blobToPngBlob(blob){
+  return new Promise(function(resolve,reject){
+    var url=URL.createObjectURL(blob),img=new Image();
+    img.onload=function(){
+      try{
+        var canvas=document.createElement("canvas");
+        canvas.width=Math.max(1,img.naturalWidth||1);canvas.height=Math.max(1,img.naturalHeight||1);
+        canvas.getContext("2d").drawImage(img,0,0);
+        canvas.toBlob(function(png){URL.revokeObjectURL(url);png?resolve(png):reject(new Error("PNG 转换失败"));},"image/png");
+      }catch(err){URL.revokeObjectURL(url);reject(err);}
+    };
+    img.onerror=function(){URL.revokeObjectURL(url);reject(new Error("原图解码失败"));};
+    img.src=url;
+  });
+}
+document.addEventListener("copy",function(e){
+  try{
+    if(!api||!e.clipboardData)return;
+    var selectedIds=Object.keys((api.getAppState?api.getAppState():{}).selectedElementIds||{});
+    if(selectedIds.length!==1)return;
+    var el=(api.getSceneElements?api.getSceneElements():[]).find(function(item){return item&&item.id===selectedIds[0]&&item.type==="image"&&!item.isDeleted;});
+    if(!el)return;
+    var path=String((el.customData||{}).dshSourcePath||"");
+    if(!path||!ORIGINAL_IMAGE_RE.test(path.split("?")[0]))return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    // 写入分两级:首选宿主进程直写系统剪贴板(/dsh-canvas/clipboard-image,
+    // macOS osascript / Windows PowerShell——web 的 navigator.clipboard 图片
+    // 写入在这版 Electron 下会被静默丢弃,实测只有文本写得进);路由不可用
+    // 时退回 copy 事件窗口内的 Promise ClipboardItem 写入(同步创建带
+    // Promise 的 ClipboardItem,浏览器保持剪贴板事务直到结算)。
+    var copyFail = function(message){
+      try{post({type:"chat-gen-soft-error",message:"复制原图失败: "+String(message||"未知错误").slice(0,90)});}catch(pe){}
+    };
+    var webFallback = function(){
+      var pngPromise = fetch("/dsh-canvas/image?path="+encodeURIComponent(path),{cache:"no-store"})
+        .then(function(r){if(!r.ok)throw new Error("读取原图失败 HTTP "+r.status);return r.blob();})
+        .then(function(blob){return String(blob.type||"").toLowerCase()==="image/png"?blob:blobToPngBlob(blob);});
+      return navigator.clipboard.write([new ClipboardItem({"image/png":pngPromise})]);
+    };
+    fetch("/dsh-canvas/clipboard-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:path})})
+      .then(function(r){return r.json().then(function(d){return {ok:r.ok&&!!(d&&d.ok),error:(d&&d.error)||("HTTP "+r.status)};});})
+      .then(function(out){
+        if(out.ok)return;
+        return webFallback().catch(function(){copyFail(out.error);});
+      })
+      .catch(function(err){
+        webFallback().catch(function(){copyFail(err&&err.message);});
+      });
+  }catch(err){}
+},true);
 // 聊天/工具结果回板必须复用统一的 Excalidraw 0.17 图片创建逻辑。
 // capture + stopImmediatePropagation 用于拦截下方遗留的旧 add-image 分支，
 // 避免缺少 status/scale/created 等字段的元素进入场景后触发持续重绘。
