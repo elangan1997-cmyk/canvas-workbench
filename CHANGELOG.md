@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.49（2026-09-30）
+
+- **【自查修复】Windows 复制 JPG/GIF/BMP 不再依赖 sips**：1.9.48 的非 PNG 转换分支调用了 macOS 独有的 sips，Windows 上会报"未找到 sips"。现转换仅限 macOS（osascript 只认 PNGf）；Windows 的 System.Drawing `Image::FromFile` 原生支持 jpg/gif/bmp 直接入剪贴板（webp 在 GDI+ 不受支持，走 500→web 回退，属罕见格式）。
+- **【自查修复】画布内 Cmd+C→Cmd+V 复制元素恢复**：1.9.48 的 copy 拦截带 preventDefault+stopImmediatePropagation，把 Excalidraw 自己的 copy 处理一并挡掉——画布内复制粘贴元素会失效（内部剪贴板写不进）。现改为**不阻断**：放行原生复制（剪贴板短暂为渲染图），宿主进程写入约 200ms 后落地覆盖为原图字节；写入失败时保持原生行为（回退语义，不劣于旧版）。实测：复制后 +150ms 原生链路照常、+1.5s 剪贴板为原图字节（md5 与源文件一致）。
+- **【加固】PowerShell 路径改单引号字面量**（`''` 转义）：双引号内 `$`/反引号会被 PS 插值，路径含这些字符时会炸。
+
 ## 1.9.48（2026-09-30）
 
 - **【新】画布复制图片 = 原图字节**（用户实测：Cmd+C 复制 PNG，贴出来的是带白色边框的画布渲染图而非原图）：在画布 copy 事件捕获阶段接管——选中恰好一张带本地源文件的图片时，取源文件原始字节写入剪贴板（PNG 原字节直写；JPEG/WebP 先转 PNG），多选/非图片/无源文件不拦截、保持 Excalidraw 原生行为。

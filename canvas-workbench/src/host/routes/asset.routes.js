@@ -221,7 +221,10 @@ export function register(router, h) {
             if (!info.isFile() || info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new Error('invalid image file');
             let pngPath = target;
             let tempPng = '';
-            if (extname(target).toLowerCase() !== '.png') {
+            if (isMac && extname(target).toLowerCase() !== '.png') {
+              // macOS 的 osascript 只认 «class PNGf»;System.Drawing(Windows)
+              // 直接支持 jpg/gif/bmp,无需转换。webp 在 Windows GDI+ 不受支持,
+              // FromFile 会抛错走 500→web 回退,可接受(罕见格式)。
               const sips = await resolveFirst(ctx, ['sips']);
               if (!sips) throw new Error('未找到 sips，无法转换 PNG');
               tempPng = join(tmpdir(), 'dsh-canvas-clipboard-' + Date.now().toString(36) + '.png');
@@ -238,7 +241,9 @@ export function register(router, h) {
             } else if (isWindows) {
               const powershell = await resolveFirst(ctx, ['powershell.exe', 'powershell']);
               if (!powershell) throw new Error('未找到 Windows PowerShell');
-              const script = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile(' + JSON.stringify(pngPath) + '); [System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose()';
+              // 路径用 PS 单引号字面量('' 转义),避免双引号内 $/反引号插值。
+              const psLiteral = "'" + String(pngPath).replace(/'/g, "''") + "'";
+              const script = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile(' + psLiteral + '); [System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose()';
               const encoded = Buffer.from(script, 'utf16le').toString('base64');
               result = await runProcess(powershell, ['-NoLogo', '-NoProfile', '-STA', '-EncodedCommand', encoded], dirname(pngPath));
             } else {

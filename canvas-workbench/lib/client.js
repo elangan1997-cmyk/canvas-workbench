@@ -3015,13 +3015,11 @@ document.addEventListener("copy",function(e){
     if(!el)return;
     var path=String((el.customData||{}).dshSourcePath||"");
     if(!path||!ORIGINAL_IMAGE_RE.test(path.split("?")[0]))return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    // 写入分两级:首选宿主进程直写系统剪贴板(/dsh-canvas/clipboard-image,
-    // macOS osascript / Windows PowerShell——web 的 navigator.clipboard 图片
-    // 写入在这版 Electron 下会被静默丢弃,实测只有文本写得进);路由不可用
-    // 时退回 copy 事件窗口内的 Promise ClipboardItem 写入(同步创建带
-    // Promise 的 ClipboardItem,浏览器保持剪贴板事务直到结算)。
+    // 只"附加"写原图,不 preventDefault/stopImmediatePropagation——阻断会把
+    // Excalidraw 的 copy 处理一并挡掉,画布内 Cmd+C→Cmd+V 复制元素就失效了
+    // (它的内部剪贴板写不进)。放行原生复制(系统剪贴板短暂出现渲染图),
+    // 宿主进程的 osascript/PowerShell 写入约 200ms 后落地覆盖为原图字节;
+    // 写入失败时系统剪贴板保持原生行为(带回退语义,不劣于旧版)。
     var copyFail = function(message){
       try{post({type:"chat-gen-soft-error",message:"复制原图失败: "+String(message||"未知错误").slice(0,90)});}catch(pe){}
     };
