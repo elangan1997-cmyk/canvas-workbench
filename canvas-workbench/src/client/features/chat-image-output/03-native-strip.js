@@ -89,8 +89,15 @@
       };
       const decorateMenu = (menu) => {
         if (!menu || !menu.isConnected) return;
+        const chevron = document.querySelector('[data-open-path-more][aria-expanded="true"]');
+        // 菜单节点若被 React 复用(极端情况),残留的解析结果属于上一张
+        // 卡片——锚点变化时强制重新解析,防止点到错误的图。
+        if (!chevron || menu.__dshCanvasAnchor !== chevron) {
+          menu.dataset.dshCanvasResolve = '';
+          menu.__dshCanvasAnchor = chevron || null;
+          menu.__dshCanvasImage = null;
+        }
         if (!menu.dataset.dshCanvasResolve) {
-          const chevron = document.querySelector('[data-open-path-more][aria-expanded="true"]');
           const resolved = chevron && resolveCardImage(fileCardOf(chevron));
           if (!resolved) { menu.dataset.dshCanvasResolve = 'no'; return; }
           menu.dataset.dshCanvasResolve = 'yes';

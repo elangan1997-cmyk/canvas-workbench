@@ -1622,8 +1622,15 @@ window.__ModuleLoader__.load({
       };
       const decorateMenu = (menu) => {
         if (!menu || !menu.isConnected) return;
+        const chevron = document.querySelector('[data-open-path-more][aria-expanded="true"]');
+        // 菜单节点若被 React 复用(极端情况),残留的解析结果属于上一张
+        // 卡片——锚点变化时强制重新解析,防止点到错误的图。
+        if (!chevron || menu.__dshCanvasAnchor !== chevron) {
+          menu.dataset.dshCanvasResolve = '';
+          menu.__dshCanvasAnchor = chevron || null;
+          menu.__dshCanvasImage = null;
+        }
         if (!menu.dataset.dshCanvasResolve) {
-          const chevron = document.querySelector('[data-open-path-more][aria-expanded="true"]');
           const resolved = chevron && resolveCardImage(fileCardOf(chevron));
           if (!resolved) { menu.dataset.dshCanvasResolve = 'no'; return; }
           menu.dataset.dshCanvasResolve = 'yes';
@@ -2985,11 +2992,11 @@ window.addEventListener("paste",function(e){
 },true);
 // ---- 复制画布图片 = 原图字节 ----
 // Excalidraw 自带的 Cmd+C/右键复制写进剪贴板的是"画布渲染导出图"——带
-// 元素边框/画布背景样式,与原图不一致(设计交付贴进微信/PS 会多出白边)。
-// 这里在 copy 事件捕获阶段接管:选中恰好一张带本地源文件的图片时,取源
-// 文件原始字节写入剪贴板(PNG 原字节直写,JPEG/WebP 经画布转 PNG——剪贴
-// 板图片类型 Chromium 只稳定支持 image/png)。其余情况(多选/非图片/无
-// 源文件)一律不拦截,保持 Excalidraw 原生复制行为。
+// 元素边框/画布背景样式,与原图不一致(设计交付贴到微信/PS 会多出白边)。
+// 这里在 copy 事件捕获阶段**附加**写原图(不阻断原生链路,画布内 Cmd+C/V
+// 复制元素不受影响):选中恰好一张带本地源文件的图片时,取源文件原始字节
+// 写入剪贴板(PNG 原字节直写,JPEG/WebP 经画布转 PNG)。其余情况(多选/
+// 非图片/无源文件)完全不动作,保持 Excalidraw 原生复制行为。
 var ORIGINAL_IMAGE_RE=/\.(?:png|jpe?g|webp|gif|avif|bmp)$/i;
 function blobToPngBlob(blob){
   return new Promise(function(resolve,reject){
@@ -3428,6 +3435,9 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
               for (const item of data.completed) {
                 if (item && item.path) chatHandledRef.current.add(String(item.path));
               }
+              // 手动模式下其他渠道队列同样作废——否则用户点了「本次手动加入」
+              // 后再绑定项目,积压的队列会把整批图倒进画布,违背用户选择。
+              if (otherChannelImageQueue.length) otherChannelImageQueue.splice(0, otherChannelImageQueue.length);
               return;
             }
             if (canvasAutoAddEnabled()) {
@@ -3497,7 +3507,10 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 try {
                   const stat = await fetch('/dsh-canvas/image-status?path=' + encodeURIComponent(path), { cache: 'no-store' });
                   const data = await stat.json();
-                  fresh = !!(data && data.ok && typeof data.mtime === 'number' && (!entry.startTime || data.mtime >= entry.startTime - 2000));
+                  // startTime 缺失时以页面加载时间为基线:绝不让"无轮次时间戳"
+                  // 的条目旁路新鲜度检查(历史回放无时间戳时会把全部旧图灌上画布)。
+                  const baseline = entry.startTime || clientLoadedAt;
+                  fresh = !!(data && data.ok && typeof data.mtime === 'number' && data.mtime >= baseline - 2000);
                 } catch (err) {}
                 if (!fresh) continue;
                 const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');

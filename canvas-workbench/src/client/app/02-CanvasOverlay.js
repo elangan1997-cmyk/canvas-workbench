@@ -95,6 +95,9 @@
               for (const item of data.completed) {
                 if (item && item.path) chatHandledRef.current.add(String(item.path));
               }
+              // 手动模式下其他渠道队列同样作废——否则用户点了「本次手动加入」
+              // 后再绑定项目,积压的队列会把整批图倒进画布,违背用户选择。
+              if (otherChannelImageQueue.length) otherChannelImageQueue.splice(0, otherChannelImageQueue.length);
               return;
             }
             if (canvasAutoAddEnabled()) {
@@ -164,7 +167,10 @@
                 try {
                   const stat = await fetch('/dsh-canvas/image-status?path=' + encodeURIComponent(path), { cache: 'no-store' });
                   const data = await stat.json();
-                  fresh = !!(data && data.ok && typeof data.mtime === 'number' && (!entry.startTime || data.mtime >= entry.startTime - 2000));
+                  // startTime 缺失时以页面加载时间为基线:绝不让"无轮次时间戳"
+                  // 的条目旁路新鲜度检查(历史回放无时间戳时会把全部旧图灌上画布)。
+                  const baseline = entry.startTime || clientLoadedAt;
+                  fresh = !!(data && data.ok && typeof data.mtime === 'number' && data.mtime >= baseline - 2000);
                 } catch (err) {}
                 if (!fresh) continue;
                 const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');

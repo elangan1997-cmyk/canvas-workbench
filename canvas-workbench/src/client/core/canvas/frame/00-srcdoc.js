@@ -496,11 +496,11 @@ window.addEventListener("paste",function(e){
 },true);
 // ---- 复制画布图片 = 原图字节 ----
 // Excalidraw 自带的 Cmd+C/右键复制写进剪贴板的是"画布渲染导出图"——带
-// 元素边框/画布背景样式,与原图不一致(设计交付贴进微信/PS 会多出白边)。
-// 这里在 copy 事件捕获阶段接管:选中恰好一张带本地源文件的图片时,取源
-// 文件原始字节写入剪贴板(PNG 原字节直写,JPEG/WebP 经画布转 PNG——剪贴
-// 板图片类型 Chromium 只稳定支持 image/png)。其余情况(多选/非图片/无
-// 源文件)一律不拦截,保持 Excalidraw 原生复制行为。
+// 元素边框/画布背景样式,与原图不一致(设计交付贴到微信/PS 会多出白边)。
+// 这里在 copy 事件捕获阶段**附加**写原图(不阻断原生链路,画布内 Cmd+C/V
+// 复制元素不受影响):选中恰好一张带本地源文件的图片时,取源文件原始字节
+// 写入剪贴板(PNG 原字节直写,JPEG/WebP 经画布转 PNG)。其余情况(多选/
+// 非图片/无源文件)完全不动作,保持 Excalidraw 原生复制行为。
 var ORIGINAL_IMAGE_RE=/\.(?:png|jpe?g|webp|gif|avif|bmp)$/i;
 function blobToPngBlob(blob){
   return new Promise(function(resolve,reject){
