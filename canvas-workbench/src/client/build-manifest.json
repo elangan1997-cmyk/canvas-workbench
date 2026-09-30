@@ -148,7 +148,7 @@
     },
     {
       "file": "features/chat-image-output/03-native-strip.js",
-      "note": "原生缩略图带双入口:悬停「加入画布」按钮 + 打开方式菜单项"
+      "note": "文件卡片「打开方式」菜单内注入「加入画布」行"
     },
     {
       "file": "features/text-edit/01-TextRebuildPanel.js",
