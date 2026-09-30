@@ -1073,6 +1073,8 @@ window.__ModuleLoader__.load({
         return { turn: match.event.data.turn, images: [], finalImagesSeen: false, startTime: match.event.time || 0 };
       },
       update(context, match) {
+        // 登记表先于 imagegen-final 过滤:参考图/其他渠道产出也要进表。
+        registerNativeImageRefs(match.event);
         const found = extractGeneratedImagePaths(match.event);
         if (!found.length) return context.state;
         const images = [...context.state.images];
@@ -1120,6 +1122,31 @@ window.__ModuleLoader__.load({
         detail: { path, url: url || displaySourceUrl(path), explicit: true, token: CANVAS_ADD_TOKEN }
       }));
     }
+    // ---- 会话级「文件名 → 可派发引用」登记表 ----
+    // 不区分 producer:任何在事件流里出现过的图片路径/附件引用都按文件名
+    // 登记,供原生文件卡片「打开方式」菜单把文件名解析回可上画布的引用。
+    // 其他渠道的产出常常只有文件卡片、页面上没有任何缩略图,alt/blob 匹配
+    // 无从下手;事件流里的路径(工具结果)或附件 sha256 才是稳定锚点。
+    const nativeImageRefs = new Map();
+    function registerNativeImageRefs(event) {
+      try {
+        const candidates = extractImagePaths(event).map((entry) => entry.path)
+          .concat(extractAssistantVisibleImages(event) || []);
+        for (const path of candidates) {
+          const name = imageName(path).toLowerCase();
+          if (!name || name === '生成图片') continue;
+          // 绝对路径最稳(插件自己的图片路由可取字节);附件 sha256 次之
+          // (经会话服务换 Blob);相对/裸名兜底(渲染时按 cwd/归档目录解析)。
+          const rank = (p) => (attachmentFromPath(p) ? 1 : (isLocalAbsolutePath(p) ? 2 : 0));
+          const prev = nativeImageRefs.get(name);
+          if (!prev || rank(path) >= rank(prev)) nativeImageRefs.set(name, path);
+        }
+      } catch (err) {}
+    }
+    // 会话切换清表:不同会话常有同名产出,旧引用跨会话派发会加错图。
+    try {
+      window.addEventListener('dsh-canvas:project-context', () => { nativeImageRefs.clear(); }, { passive: true });
+    } catch (err) {}
     // ---- 聊天生图自动上画布(1.9)----
     // 开关默认开启;批量生图或大量抽卡重跑时建议关闭,改回卡片上的手动「加入画布」。
     // 自动上画布只认宿主 /dsh-canvas/generation-status 登记的本轮产出路径,
@@ -1497,7 +1524,11 @@ window.__ModuleLoader__.load({
         try { dispatchAddImage(attachmentPathOf(name), url); } catch (err) {}
       };
 
-      // 菜单锚点(展开的 chevron)→ 文件卡片 → 文件名 → 同名缩略图的 blob 字节。
+      // 菜单锚点(展开的 chevron)→ 文件卡片 → 文件名 → 可派发引用。
+      // 解析三级:①会话级登记表(事件流里的路径/附件,覆盖"只有文件卡片、
+      // 没有缩略图"的其他渠道产出)→ 走 dispatchResolvedImage;②同域缩略
+      // 图按 alt 精确同名匹配(alt 自带完整文件名)→ 取已加载 blob 字节;
+      // ③都没有则不注入,不给用户一个点了没反应的行。
       const fileCardOf = (chevron) => {
         const ctrl = chevron.closest('[data-open-target="file"]');
         if (!ctrl) return null;
@@ -1508,12 +1539,14 @@ window.__ModuleLoader__.load({
         const m = String(card.textContent || '').match(NAME_IN_TEXT);
         if (!m) return null;
         const name = m[0];
+        const ref = nativeImageRefs.get(name.toLowerCase());
+        if (ref) return { name, ref, url: '' };
         const scope = card.closest('[data-presented-files-row]') || document;
         const img = [...scope.querySelectorAll('img')].find((im) => im.getAttribute('alt') === name)
           || [...document.querySelectorAll('img')].find((im) => im.getAttribute('alt') === name);
         if (!img) return null;
         const url = srcOf(img);
-        return /^(?:blob:|https?:|\/|data:)/i.test(url) ? { name, url } : null;
+        return /^(?:blob:|https?:|\/|data:)/i.test(url) ? { name, ref: '', url } : null;
       };
       const buildMenuRow = (menu, resolved) => {
         if (menu.querySelector('button[data-dsh-canvas-add]')) return true;
@@ -1547,7 +1580,9 @@ window.__ModuleLoader__.load({
         btn.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          dispatchStripImage(resolved.name, resolved.url);
+          // 登记表引用(绝对路径/附件)走完整解析派发;否则直接用缩略图字节。
+          if (resolved.ref) dispatchResolvedImage(resolved.ref);
+          else dispatchStripImage(resolved.name, resolved.url);
           try {
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
           } catch (err) {}

@@ -22,7 +22,11 @@
         try { dispatchAddImage(attachmentPathOf(name), url); } catch (err) {}
       };
 
-      // 菜单锚点(展开的 chevron)→ 文件卡片 → 文件名 → 同名缩略图的 blob 字节。
+      // 菜单锚点(展开的 chevron)→ 文件卡片 → 文件名 → 可派发引用。
+      // 解析三级:①会话级登记表(事件流里的路径/附件,覆盖"只有文件卡片、
+      // 没有缩略图"的其他渠道产出)→ 走 dispatchResolvedImage;②同域缩略
+      // 图按 alt 精确同名匹配(alt 自带完整文件名)→ 取已加载 blob 字节;
+      // ③都没有则不注入,不给用户一个点了没反应的行。
       const fileCardOf = (chevron) => {
         const ctrl = chevron.closest('[data-open-target="file"]');
         if (!ctrl) return null;
@@ -33,12 +37,14 @@
         const m = String(card.textContent || '').match(NAME_IN_TEXT);
         if (!m) return null;
         const name = m[0];
+        const ref = nativeImageRefs.get(name.toLowerCase());
+        if (ref) return { name, ref, url: '' };
         const scope = card.closest('[data-presented-files-row]') || document;
         const img = [...scope.querySelectorAll('img')].find((im) => im.getAttribute('alt') === name)
           || [...document.querySelectorAll('img')].find((im) => im.getAttribute('alt') === name);
         if (!img) return null;
         const url = srcOf(img);
-        return /^(?:blob:|https?:|\/|data:)/i.test(url) ? { name, url } : null;
+        return /^(?:blob:|https?:|\/|data:)/i.test(url) ? { name, ref: '', url } : null;
       };
       const buildMenuRow = (menu, resolved) => {
         if (menu.querySelector('button[data-dsh-canvas-add]')) return true;
@@ -72,7 +78,9 @@
         btn.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          dispatchStripImage(resolved.name, resolved.url);
+          // 登记表引用(绝对路径/附件)走完整解析派发;否则直接用缩略图字节。
+          if (resolved.ref) dispatchResolvedImage(resolved.ref);
+          else dispatchStripImage(resolved.name, resolved.url);
           try {
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
           } catch (err) {}
