@@ -163,10 +163,6 @@
           });
         return () => { cancelled = true; };
       }, [key, activeChatSessionId, contextRevision]);
-      // 自动上画布开启且当前聊天已绑定项目：最终产物会自动进入画布，
-      // 聊天尾部不再重复展示一套“加入画布”卡片。未绑定项目时仍保留，
-      // 让用户能看到并手动处理生成结果。
-      if (!visibleImages.length || (canvasAutoAddEnabled() && activeCanvasProjectPath)) return null;
       // 附件条目的可操作文件路径：优先条目自带 sourcePath（归档真实文件），
       // 其次当前画布项目拼接路径，最后退回附件引用本身（交给附件解析）。
       const actionPathOf = (img) => {
@@ -242,6 +238,14 @@
         });
         return () => { timers.forEach((t) => clearTimeout(t)); };
       }, [failed, fallbackStep, remap, resolvedSources, key]);
+      // 自动上画布开启且当前聊天已绑定项目：最终产物会自动进入画布，
+      // 聊天尾部不再重复展示一套“加入画布”卡片。未绑定项目时仍保留，
+      // 让用户能看到并手动处理生成结果。
+      // 注意:此判空必须放在全部 hooks 之后——此前它夹在两个 useEffect 之间,
+      // 同一实例在"绑定项目前后/自动开关切换"时 hooks 数量随渲染变化,
+      // 触发 React #300(Minified React error #300)整个槽位崩溃(实测
+      // imagegen 轮一挂载即崩,连累事件管线与自动上画布)。
+      if (!visibleImages.length || (canvasAutoAddEnabled() && activeCanvasProjectPath)) return null;
       const send = (path) => dispatchResolvedImage(canonicalOutputPath(path));
       const rows = visibleImages.map((img) => {
         // 旧会话的 attachmentId 可能随 DSH 更新或会话回放失效，附件记录的 sourcePath 也可能事后被移走；

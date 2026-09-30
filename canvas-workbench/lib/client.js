@@ -1073,8 +1073,10 @@ window.__ModuleLoader__.load({
         return { turn: match.event.data.turn, images: [], finalImagesSeen: false, startTime: match.event.time || 0 };
       },
       update(context, match) {
-        // 登记表先于 imagegen-final 过滤:参考图/其他渠道产出也要进表。
-        registerNativeImageRefs(match.event);
+        // 登记表先于 imagegen-final 过滤:参考图/其他渠道产出也要进表;
+        // 实时轮次里新出现的绝对路径同时进自动上画布候选队列。
+        const candidates = registerNativeImageRefs(match.event);
+        queueOtherChannelImages(candidates, match.event && match.event.time, context.state && context.state.startTime);
         const found = extractGeneratedImagePaths(match.event);
         if (!found.length) return context.state;
         const images = [...context.state.images];
@@ -1128,10 +1130,13 @@ window.__ModuleLoader__.load({
     // 其他渠道的产出常常只有文件卡片、页面上没有任何缩略图,alt/blob 匹配
     // 无从下手;事件流里的路径(工具结果)或附件 sha256 才是稳定锚点。
     const nativeImageRefs = new Map();
+    const clientLoadedAt = Date.now();
     function registerNativeImageRefs(event) {
+      const candidates = [];
       try {
-        const candidates = extractImagePaths(event).map((entry) => entry.path)
-          .concat(extractAssistantVisibleImages(event) || []);
+        candidates.push(...extractImagePaths(event).map((entry) => entry.path));
+        const visible = extractAssistantVisibleImages(event);
+        if (Array.isArray(visible)) candidates.push(...visible);
         for (const path of candidates) {
           const name = imageName(path).toLowerCase();
           if (!name || name === '生成图片') continue;
@@ -1142,11 +1147,33 @@ window.__ModuleLoader__.load({
           if (!prev || rank(path) >= rank(prev)) nativeImageRefs.set(name, path);
         }
       } catch (err) {}
+      return candidates;
     }
     // 会话切换清表:不同会话常有同名产出,旧引用跨会话派发会加错图。
     try {
       window.addEventListener('dsh-canvas:project-context', () => { nativeImageRefs.clear(); }, { passive: true });
     } catch (err) {}
+    // ---- 其他渠道产出 → 自动上画布候选队列 ----
+    // 首次出图失败后 agent 换工具/换渠道重试成功的图,不走宿主 generation-status
+    // 登记,原有自动上画布管线看不见它们(用户实测:重试图一张也上不去)。
+    // 这里把实时轮次里新出现的绝对路径推进队列,由 CanvasOverlay 的轮询
+    // 统一消费:mtime 新鲜度过滤(旧图引用不自动上)→ 槽位/判重管线与
+    // generation-status 完全同款。只收"页面加载后发生的实时轮次"——历史
+    // 回放的事件时间戳早于 clientLoadedAt,不进队列,否则重开会话就会把
+    // 全部历史图灌上画布。附件引用没有文件 mtime 可判,不自动加(菜单手动加)。
+    const otherChannelImageQueue = [];
+    const otherChannelQueued = new Set();
+    function queueOtherChannelImages(candidates, eventTime, startTime) {
+      if (!Array.isArray(candidates)) return;
+      const live = Number(eventTime || 0) === 0 || Number(eventTime || 0) >= clientLoadedAt - 5000;
+      if (!live || !canvasAutoAddEnabled()) return;
+      for (const path of candidates) {
+        if (!path || !isLocalAbsolutePath(path) || attachmentFromPath(path)) continue;
+        if (otherChannelQueued.has(path)) continue;
+        otherChannelQueued.add(path);
+        otherChannelImageQueue.push({ path: String(path), startTime: Number(startTime) || 0 });
+      }
+    }
     // ---- 聊天生图自动上画布(1.9)----
     // 开关默认开启;批量生图或大量抽卡重跑时建议关闭,改回卡片上的手动「加入画布」。
     // 自动上画布只认宿主 /dsh-canvas/generation-status 登记的本轮产出路径,
@@ -1352,10 +1379,6 @@ window.__ModuleLoader__.load({
           });
         return () => { cancelled = true; };
       }, [key, activeChatSessionId, contextRevision]);
-      // 自动上画布开启且当前聊天已绑定项目：最终产物会自动进入画布，
-      // 聊天尾部不再重复展示一套“加入画布”卡片。未绑定项目时仍保留，
-      // 让用户能看到并手动处理生成结果。
-      if (!visibleImages.length || (canvasAutoAddEnabled() && activeCanvasProjectPath)) return null;
       // 附件条目的可操作文件路径：优先条目自带 sourcePath（归档真实文件），
       // 其次当前画布项目拼接路径，最后退回附件引用本身（交给附件解析）。
       const actionPathOf = (img) => {
@@ -1431,6 +1454,14 @@ window.__ModuleLoader__.load({
         });
         return () => { timers.forEach((t) => clearTimeout(t)); };
       }, [failed, fallbackStep, remap, resolvedSources, key]);
+      // 自动上画布开启且当前聊天已绑定项目：最终产物会自动进入画布，
+      // 聊天尾部不再重复展示一套“加入画布”卡片。未绑定项目时仍保留，
+      // 让用户能看到并手动处理生成结果。
+      // 注意:此判空必须放在全部 hooks 之后——此前它夹在两个 useEffect 之间,
+      // 同一实例在"绑定项目前后/自动开关切换"时 hooks 数量随渲染变化,
+      // 触发 React #300(Minified React error #300)整个槽位崩溃(实测
+      // imagegen 轮一挂载即崩,连累事件管线与自动上画布)。
+      if (!visibleImages.length || (canvasAutoAddEnabled() && activeCanvasProjectPath)) return null;
       const send = (path) => dispatchResolvedImage(canonicalOutputPath(path));
       const rows = visibleImages.map((img) => {
         // 旧会话的 attachmentId 可能随 DSH 更新或会话回放失效，附件记录的 sourcePath 也可能事后被移走；
@@ -2627,6 +2658,20 @@ function dims2(d){return new Promise(function(res){var i=new Image();i.onload=fu
     api.addFiles([{id:fileId,dataURL:dataURL,mimeType:"image/svg+xml",created:now,lastRetrieved:now}]);
     api.updateScene({elements:(api.getSceneElements()||[]).map(function(item){return item&&item.id===placeholder.id?Object.assign({},item,{fileId:fileId,version:Number(item.version||0)+1,versionNonce:Math.floor(Math.random()*1e9),updated:now,customData:Object.assign({},item.customData||{},{dshFileName:"聊天生图失败",dshChatGenState:"failed",dshEditState:"failed",dshManaged:false})}):item;}),appState:Object.assign({},api.getAppState()||empty)});
   }
+  // 换渠道重试成功后清掉残留的失败占位:新图一旦真正上画布,旧的
+  // "生成失败"卡就没有存在意义了(用户实测:失败后换渠道成功,失败卡
+  // 一直挂着要手动删)。只清 failed,processing/complete 一律不动。
+  function clearFailedChatPlaceholders(){
+    if(!api||typeof api.getSceneElements!=="function")return;
+    var all=api.getSceneElements()||[],kept=all.filter(function(item){
+      if(!item||item.type!=="image"||item.isDeleted)return true;
+      var c=item.customData||{};
+      return String(c.dshChatGenState||"")!=="failed";
+    });
+    if(kept.length===all.length)return;
+    api.updateScene({elements:kept,appState:Object.assign({},api.getAppState()||empty)});
+    post({type:"chat-gen-failed-cleared",count:all.length-kept.length});
+  }
   var STALE_EDIT_MS = 25 * 60 * 1000;
   function failStaleEditPlaceholders(){
     if(!api||typeof api.getSceneElements!=="function")return;
@@ -3061,7 +3106,7 @@ window.addEventListener("message",function(e){
     return dims2(dataURL).then(function(dm){addImageDataURL(dataURL,dm,{name:d.name||baseName2(d.path||""),path:d.path||"",mtime:d.mtime||0,size:d.size||0,kind:d.kind||"image",managed:d.managed,batchIndex:d.batchIndex,batchTotal:d.batchTotal,batchColumns:d.batchColumns,customData:d.customData||null,openEditor:d.openEditor===true,editorMode:"edit"});});
   });}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)});});
 },true);
-var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"chat-gen-soft-error",message:"生成占位未创建: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"chat-gen-resolve-failed",id:d.id,url:d.url,path:d.path||"",name:d.name||"",message:String(err&&err.message||err)});post({type:"chat-gen-soft-error",message:"生成图未上画布: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if(d.type==="export"&&api){var elements=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted&&item.id!=="dsh_theme_backdrop";});if(!elements.length){post({type:"exported",error:"empty"});return;}var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;if(typeof exporter!=="function"){post({type:"error",message:"导出失败: 当前 Excalidraw 未提供 PNG 导出器"});return;}var state=Object.assign({},api.getAppState()||empty,{exportBackground:true,exportWithDarkMode:false,exportScale:1});Promise.resolve(exporter({elements:elements,appState:state,files:fileObject(api.getFiles?api.getFiles():{}),mimeType:"image/png"})).then(function(blob){var fr=new FileReader();fr.onloadend=function(){post({type:"exported",dataUrl:fr.result})};fr.onerror=function(){post({type:"error",message:"导出失败: 无法读取 PNG 数据"})};fr.readAsDataURL(blob)}).catch(function(err){post({type:"error",message:"导出失败: "+String(err&&err.message||err)})})}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;
+var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"chat-gen-soft-error",message:"生成占位未创建: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"chat-gen-resolve-failed",id:d.id,url:d.url,path:d.path||"",name:d.name||"",message:String(err&&err.message||err)});post({type:"chat-gen-soft-error",message:"生成图未上画布: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="chat-gen-clear-failed"&&api){try{clearFailedChatPlaceholders()}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if(d.type==="export"&&api){var elements=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted&&item.id!=="dsh_theme_backdrop";});if(!elements.length){post({type:"exported",error:"empty"});return;}var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;if(typeof exporter!=="function"){post({type:"error",message:"导出失败: 当前 Excalidraw 未提供 PNG 导出器"});return;}var state=Object.assign({},api.getAppState()||empty,{exportBackground:true,exportWithDarkMode:false,exportScale:1});Promise.resolve(exporter({elements:elements,appState:state,files:fileObject(api.getFiles?api.getFiles():{}),mimeType:"image/png"})).then(function(blob){var fr=new FileReader();fr.onloadend=function(){post({type:"exported",dataUrl:fr.result})};fr.onerror=function(){post({type:"error",message:"导出失败: 无法读取 PNG 数据"})};fr.readAsDataURL(blob)}).catch(function(err){post({type:"error",message:"导出失败: "+String(err&&err.message||err)})})}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;
     // Excalidraw/React are pinned vendor assets served by the plugin host.
     // Keeping these scripts off a public CDN prevents DSH srcdoc/CSP changes
     // or domestic-network failures from leaving the canvas at "loading".
@@ -3374,9 +3419,51 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 } else {
                   dispatchGeneratedToCanvas(path);
                 }
+                clearFailedChatPlaceholders();
               }
               if (chatHandledRef.current.size > 500) {
                 chatHandledRef.current = new Set([...chatHandledRef.current].slice(-500));
+              }
+            }
+            // 其他渠道产出(agent 换工具/换通道重试成功的图):事件流登记的
+            // 绝对路径按 mtime 新鲜度过滤后,走与 generation-status 完全相同
+            // 的槽位/判重管线——失败后换渠道重试的图此前一张也上不了画布。
+            if (canvasAutoAddEnabled() && otherChannelImageQueue.length) {
+              const batch = otherChannelImageQueue.splice(0, otherChannelImageQueue.length);
+              for (const entry of batch) {
+                const path = String(entry.path || '');
+                if (!path || chatHandledRef.current.has(path) || autoAddDispatched.has(path)) continue;
+                chatHandledRef.current.add(path);
+                // 文件必须真实存在,且 mtime 不早于本轮开始(留 2 秒文件系统
+                // 容差):read_image 读旧图、回复里提旧路径都不自动上画布。
+                let fresh = false;
+                try {
+                  const stat = await fetch('/dsh-canvas/image-status?path=' + encodeURIComponent(path), { cache: 'no-store' });
+                  const data = await stat.json();
+                  fresh = !!(data && data.ok && typeof data.mtime === 'number' && (!entry.startTime || data.mtime >= entry.startTime - 2000));
+                } catch (err) {}
+                if (!fresh) continue;
+                const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                let alreadyOnCanvas = false;
+                for (const item of (latestSnapshot.current || {}).elements || []) {
+                  if (!item || item.type !== 'image' || item.isDeleted || !item.customData) continue;
+                  const elPath = String(item.customData.dshSourcePath || '');
+                  if (elPath === path) { alreadyOnCanvas = true; break; }
+                  const elName = String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                  if (dispatchName && elName === dispatchName) {
+                    const digests = await Promise.all([fileDigestOf(path), elPath ? fileDigestOf(elPath) : Promise.resolve('')]);
+                    if (digests[0] && digests[0] === digests[1]) { alreadyOnCanvas = true; break; }
+                  }
+                }
+                if (alreadyOnCanvas) continue;
+                const name = imageName(path) || '聊天生成.png';
+                const slotId = pending.shift();
+                if (slotId) {
+                  post({ type: 'chat-gen-resolve', id: slotId, url: '/dsh-canvas/image?path=' + encodeURIComponent(path), path, name });
+                } else {
+                  dispatchGeneratedToCanvas(path);
+                }
+                clearFailedChatPlaceholders();
               }
             }
             // 生成全部结束但仍有占位:完成环里还有未处理路径说明结果正在归档/在途,
@@ -3900,6 +3987,9 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
         const w = frameRef.current && frameRef.current.contentWindow;
         if (w) w.postMessage(msg, '*');
       };
+      // 新图真正上画布后清掉残留的失败占位:换渠道重试成功时,旧的
+      // "生成失败"卡已无意义(此前要用户手动删)。iframe 侧只清 failed 态。
+      const clearFailedChatPlaceholders = () => { try { post({ type: 'chat-gen-clear-failed' }); } catch (err) {} };
       // —— DSH 主题同步到画布 ——
       // iframe 是独立文档，DSH 的 CSS 变量进不去；画布背景原跟 prefers-color-scheme，
       // DSH 切浅色而系统深色时整块画布仍是黑的。这里读取 DSH 令牌的实时值推给 iframe。
@@ -4962,6 +5052,9 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           }
           pendingRef.current.push(detail);
           flushPending();
+          // 手动/菜单加入成功进入队列时同样清一次失败占位(自动上画布关闭时,
+          // 换渠道重试的图靠菜单手动加入,失败卡此时也应退场)。
+          clearFailedChatPlaceholders();
         };
         window.addEventListener('dsh-canvas:add-image', onAdd);
         const openProjectListRef = { current: null };

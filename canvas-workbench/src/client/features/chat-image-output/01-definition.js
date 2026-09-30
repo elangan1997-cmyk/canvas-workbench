@@ -22,8 +22,10 @@
         return { turn: match.event.data.turn, images: [], finalImagesSeen: false, startTime: match.event.time || 0 };
       },
       update(context, match) {
-        // 登记表先于 imagegen-final 过滤:参考图/其他渠道产出也要进表。
-        registerNativeImageRefs(match.event);
+        // 登记表先于 imagegen-final 过滤:参考图/其他渠道产出也要进表;
+        // 实时轮次里新出现的绝对路径同时进自动上画布候选队列。
+        const candidates = registerNativeImageRefs(match.event);
+        queueOtherChannelImages(candidates, match.event && match.event.time, context.state && context.state.startTime);
         const found = extractGeneratedImagePaths(match.event);
         if (!found.length) return context.state;
         const images = [...context.state.images];
@@ -77,10 +79,13 @@
     // 其他渠道的产出常常只有文件卡片、页面上没有任何缩略图,alt/blob 匹配
     // 无从下手;事件流里的路径(工具结果)或附件 sha256 才是稳定锚点。
     const nativeImageRefs = new Map();
+    const clientLoadedAt = Date.now();
     function registerNativeImageRefs(event) {
+      const candidates = [];
       try {
-        const candidates = extractImagePaths(event).map((entry) => entry.path)
-          .concat(extractAssistantVisibleImages(event) || []);
+        candidates.push(...extractImagePaths(event).map((entry) => entry.path));
+        const visible = extractAssistantVisibleImages(event);
+        if (Array.isArray(visible)) candidates.push(...visible);
         for (const path of candidates) {
           const name = imageName(path).toLowerCase();
           if (!name || name === '生成图片') continue;
@@ -91,11 +96,33 @@
           if (!prev || rank(path) >= rank(prev)) nativeImageRefs.set(name, path);
         }
       } catch (err) {}
+      return candidates;
     }
     // 会话切换清表:不同会话常有同名产出,旧引用跨会话派发会加错图。
     try {
       window.addEventListener('dsh-canvas:project-context', () => { nativeImageRefs.clear(); }, { passive: true });
     } catch (err) {}
+    // ---- 其他渠道产出 → 自动上画布候选队列 ----
+    // 首次出图失败后 agent 换工具/换渠道重试成功的图,不走宿主 generation-status
+    // 登记,原有自动上画布管线看不见它们(用户实测:重试图一张也上不去)。
+    // 这里把实时轮次里新出现的绝对路径推进队列,由 CanvasOverlay 的轮询
+    // 统一消费:mtime 新鲜度过滤(旧图引用不自动上)→ 槽位/判重管线与
+    // generation-status 完全同款。只收"页面加载后发生的实时轮次"——历史
+    // 回放的事件时间戳早于 clientLoadedAt,不进队列,否则重开会话就会把
+    // 全部历史图灌上画布。附件引用没有文件 mtime 可判,不自动加(菜单手动加)。
+    const otherChannelImageQueue = [];
+    const otherChannelQueued = new Set();
+    function queueOtherChannelImages(candidates, eventTime, startTime) {
+      if (!Array.isArray(candidates)) return;
+      const live = Number(eventTime || 0) === 0 || Number(eventTime || 0) >= clientLoadedAt - 5000;
+      if (!live || !canvasAutoAddEnabled()) return;
+      for (const path of candidates) {
+        if (!path || !isLocalAbsolutePath(path) || attachmentFromPath(path)) continue;
+        if (otherChannelQueued.has(path)) continue;
+        otherChannelQueued.add(path);
+        otherChannelImageQueue.push({ path: String(path), startTime: Number(startTime) || 0 });
+      }
+    }
     // ---- 聊天生图自动上画布(1.9)----
     // 开关默认开启;批量生图或大量抽卡重跑时建议关闭,改回卡片上的手动「加入画布」。
     // 自动上画布只认宿主 /dsh-canvas/generation-status 登记的本轮产出路径,

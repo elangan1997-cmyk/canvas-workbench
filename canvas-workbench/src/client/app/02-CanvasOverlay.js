@@ -143,9 +143,51 @@
                 } else {
                   dispatchGeneratedToCanvas(path);
                 }
+                clearFailedChatPlaceholders();
               }
               if (chatHandledRef.current.size > 500) {
                 chatHandledRef.current = new Set([...chatHandledRef.current].slice(-500));
+              }
+            }
+            // 其他渠道产出(agent 换工具/换通道重试成功的图):事件流登记的
+            // 绝对路径按 mtime 新鲜度过滤后,走与 generation-status 完全相同
+            // 的槽位/判重管线——失败后换渠道重试的图此前一张也上不了画布。
+            if (canvasAutoAddEnabled() && otherChannelImageQueue.length) {
+              const batch = otherChannelImageQueue.splice(0, otherChannelImageQueue.length);
+              for (const entry of batch) {
+                const path = String(entry.path || '');
+                if (!path || chatHandledRef.current.has(path) || autoAddDispatched.has(path)) continue;
+                chatHandledRef.current.add(path);
+                // 文件必须真实存在,且 mtime 不早于本轮开始(留 2 秒文件系统
+                // 容差):read_image 读旧图、回复里提旧路径都不自动上画布。
+                let fresh = false;
+                try {
+                  const stat = await fetch('/dsh-canvas/image-status?path=' + encodeURIComponent(path), { cache: 'no-store' });
+                  const data = await stat.json();
+                  fresh = !!(data && data.ok && typeof data.mtime === 'number' && (!entry.startTime || data.mtime >= entry.startTime - 2000));
+                } catch (err) {}
+                if (!fresh) continue;
+                const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                let alreadyOnCanvas = false;
+                for (const item of (latestSnapshot.current || {}).elements || []) {
+                  if (!item || item.type !== 'image' || item.isDeleted || !item.customData) continue;
+                  const elPath = String(item.customData.dshSourcePath || '');
+                  if (elPath === path) { alreadyOnCanvas = true; break; }
+                  const elName = String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                  if (dispatchName && elName === dispatchName) {
+                    const digests = await Promise.all([fileDigestOf(path), elPath ? fileDigestOf(elPath) : Promise.resolve('')]);
+                    if (digests[0] && digests[0] === digests[1]) { alreadyOnCanvas = true; break; }
+                  }
+                }
+                if (alreadyOnCanvas) continue;
+                const name = imageName(path) || '聊天生成.png';
+                const slotId = pending.shift();
+                if (slotId) {
+                  post({ type: 'chat-gen-resolve', id: slotId, url: '/dsh-canvas/image?path=' + encodeURIComponent(path), path, name });
+                } else {
+                  dispatchGeneratedToCanvas(path);
+                }
+                clearFailedChatPlaceholders();
               }
             }
             // 生成全部结束但仍有占位:完成环里还有未处理路径说明结果正在归档/在途,
@@ -669,6 +711,9 @@
         const w = frameRef.current && frameRef.current.contentWindow;
         if (w) w.postMessage(msg, '*');
       };
+      // 新图真正上画布后清掉残留的失败占位:换渠道重试成功时,旧的
+      // "生成失败"卡已无意义(此前要用户手动删)。iframe 侧只清 failed 态。
+      const clearFailedChatPlaceholders = () => { try { post({ type: 'chat-gen-clear-failed' }); } catch (err) {} };
       // —— DSH 主题同步到画布 ——
       // iframe 是独立文档，DSH 的 CSS 变量进不去；画布背景原跟 prefers-color-scheme，
       // DSH 切浅色而系统深色时整块画布仍是黑的。这里读取 DSH 令牌的实时值推给 iframe。
@@ -1731,6 +1776,9 @@
           }
           pendingRef.current.push(detail);
           flushPending();
+          // 手动/菜单加入成功进入队列时同样清一次失败占位(自动上画布关闭时,
+          // 换渠道重试的图靠菜单手动加入,失败卡此时也应退场)。
+          clearFailedChatPlaceholders();
         };
         window.addEventListener('dsh-canvas:add-image', onAdd);
         const openProjectListRef = { current: null };
