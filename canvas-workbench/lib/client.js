@@ -3120,6 +3120,11 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
         if (!on) { chatPendingRef.current = []; return; }
         let stopped = false;
         const tokenOf = () => Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
+        // 判重用文件指纹:失败返回 ''(视为无法确认,不拦截,宁可多上不漏图)。
+        const fileDigestOf = (p) => fetch('/dsh-canvas/file-digest?path=' + encodeURIComponent(p), { cache: 'no-store' })
+          .then((r) => r.json())
+          .then((d) => (d && d.ok && d.md5) ? String(d.md5) : '')
+          .catch(() => '');
         const tick = async () => {
           try {
             const res = await fetch('/dsh-canvas/generation-status', { headers: { accept: 'application/json' } });
@@ -3173,11 +3178,21 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 // 之外再按「剥掉末尾 -数字 后缀的归一化文件名」比对，两个维度
                 // 任一命中即视为已在画布，阻断重放链路的重复加入。
                 const dispatchName = String(imageName(path) || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
-                const alreadyOnCanvas = ((latestSnapshot.current || {}).elements || [])
-                  .some((item) => item && item.type === 'image' && !item.isDeleted && item.customData && (
-                    String(item.customData.dshSourcePath || '') === path ||
-                    (dispatchName && String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '') === dispatchName)
-                  ));
+                // 主干同名只是「疑似重复」:重新生成的图(Z01-2.png)与已有(Z01.png)
+                // 同主干但内容全新,只按名字跳过会漏图(实测误伤整轮重新生成)。
+                // 路径相同 → 已在画布;主干相同时再按文件 md5 字节级确认——一致
+                // (物化缓存副本)才跳过,不一致(重新生成)放行。md5 取不到时不拦。
+                let alreadyOnCanvas = false;
+                for (const item of (latestSnapshot.current || {}).elements || []) {
+                  if (!item || item.type !== 'image' || item.isDeleted || !item.customData) continue;
+                  const elPath = String(item.customData.dshSourcePath || '');
+                  if (elPath === path) { alreadyOnCanvas = true; break; }
+                  const elName = String(item.customData.dshFileName || '').toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                  if (dispatchName && elName === dispatchName) {
+                    const digests = await Promise.all([fileDigestOf(path), elPath ? fileDigestOf(elPath) : Promise.resolve('')]);
+                    if (digests[0] && digests[0] === digests[1]) { alreadyOnCanvas = true; break; }
+                  }
+                }
                 if (alreadyOnCanvas) continue;
                 const name = imageName(path) || '聊天生成.png';
                 const slotId = pending.shift();
@@ -4908,7 +4923,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           };
           fetch('/dsh-canvas/project-files', requestInit)
             .then((r) => r.json())
-            .then((result) => {
+            .then(async (result) => {
               if (disposed || !result || !result.ok || !Array.isArray(result.images)) return;
               const filesByPath = new Map(result.images.map((item) => [item.path, item]));
               const diskPaths = new Set(filesByPath.keys());
@@ -4961,10 +4976,16 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                 // 画布把元素图像缓存进 assets（materialize-image），文件名取自元素的
                 // dshFileName；这些缓存副本的路径不等于元素源路径，仅按路径判会漏。
                 // 按文件名一并排除，避免缓存副本被当成"项目新增文件"重复上画布。
-                const linkedNames = new Set();
+                // 主干同名 → 元素源路径的映射:主干命中只算「疑似重复」,随后按
+                // 文件 md5 字节级确认——重新生成的图(Z01-2.png)与已有(Z01.png)
+                // 同主干但内容全新,必须放行;只有同字节的物化缓存副本才拦。
+                const linkedStemPaths = new Map();
                 for (const el of (latestSnapshot.current || {}).elements || []) {
                   if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshSourcePath) linked.add(el.customData.dshSourcePath);
-                  if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshFileName) linkedNames.add(String(el.customData.dshFileName).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, ''));
+                  if (el && el.type === 'image' && !el.isDeleted && el.customData && el.customData.dshFileName && el.customData.dshSourcePath) {
+                    const stem = String(el.customData.dshFileName).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                    if (stem && !linkedStemPaths.has(stem)) linkedStemPaths.set(stem, String(el.customData.dshSourcePath));
+                  }
                 }
                 if (!autoAddBaseline.current) {
                   try {
@@ -4973,13 +4994,23 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                   } catch (errBase) { autoAddBaseline.current = new Set(diskPaths); }
                 } else {
                   const fresh = [];
+                  const verifyQueue = [];
                   for (const item of result.images || []) {
                     if (!item || !item.path) continue;
                     // ADOBE桥接/ 下的文件由桥接轮询器按清单上画布（要打出处印、要 ack），这里跳过以免重复添加。
                     if (isAdobeBridgePath(item.path)) continue;
-                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path) || linkedNames.has(String(item.name || imageName(item.path)).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, ''))) continue;
+                    if (autoAddBaseline.current.has(item.path) || linked.has(item.path) || queuedDiskPaths.current.has(item.path)) continue;
+                    const stem = String(item.name || imageName(item.path)).toLowerCase().replace(/(-\d+)+(?=\.[a-z]+$)/i, '').replace(/\.[a-z0-9]+$/i, '');
+                    const stemPath = linkedStemPaths.get(stem);
+                    if (stemPath) { verifyQueue.push({ item, stemPath }); continue; }
                     autoAddBaseline.current.add(item.path);
                     if (Number(item.mtime || 0) > Date.now() - 15 * 60 * 1000) fresh.push(item);
+                  }
+                  for (const { item, stemPath } of verifyQueue) {
+                    const digests = await Promise.all([fileDigestOf(item.path), fileDigestOf(stemPath)]);
+                    autoAddBaseline.current.add(item.path);
+                    if (digests[0] && digests[0] === digests[1]) continue; // 字节一致:物化缓存副本,真重复
+                    if (Number(item.mtime || 0) > Date.now() - 15 * 60 * 1000) fresh.push(item); // 内容全新:重新生成的图,放行
                   }
                   try { localStorage.setItem('dsh-canvas-autoadd-baseline:' + currentProjectPath(), JSON.stringify([...autoAddBaseline.current])); } catch (errSave) {}
                   if (fresh.length) {

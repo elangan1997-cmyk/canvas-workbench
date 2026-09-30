@@ -4,7 +4,8 @@ import { imageEngineHealth, readImageEngineSettings, testImageApiConnection, wri
 import { readToolchainStatus, runToolchainProvisioning } from '../services/local-toolchain.js';
 import { checkUpdate, performSelfUpdate } from '../services/self-update.js';
 import { isAbsolutePath } from '../../../lib/platform.js';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { parseQuery, readBody, respond } from '../server/http.js';
 import { expandHome, normalizeLocalPath } from '../../shared/utils/paths.js';
 import { MAX_IMAGE_BYTES, MAX_SOURCE_BYTES, isSourceImagePath, sourceKindOf } from '../../shared/utils/image-types.js';
@@ -180,6 +181,26 @@ export function register(router, h) {
             respond(res, 400, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: '未知配置操作' }));
           } catch (err) {
             respond(res, 400, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
+          }
+          return;
+  });
+
+  // 文件内容指纹(md5):客户端判重用——同名主干命中只是「疑似重复」(重新生成的
+  // Z01-2.png 与画布已有的 Z01.png 同主干但内容全新),必须字节级一致(物化缓存
+  // 副本)才判真重复,否则重新生成的图会被误拦、永不上画布。
+  router.add({ method: 'GET', path: '/dsh-canvas/file-digest', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
+          const path = normalizeLocalPath(parseQuery(query).path || '');
+          if (!isSourceImagePath(path) || !isAbsolutePath(path)) {
+            respond(res, 400, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: false, error: 'bad image path' }));
+            return;
+          }
+          try {
+            const info = await stat(path);
+            if (!info.isFile() || info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new Error('invalid image file');
+            const md5 = createHash('md5').update(await readFile(path)).digest('hex');
+            respond(res, 200, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: true, md5, size: info.size, mtime: Math.round(info.mtimeMs) }));
+          } catch {
+            respond(res, 200, { ...CORS, 'content-type': 'application/json', 'cache-control': 'no-store' }, JSON.stringify({ ok: false, exists: false }));
           }
           return;
   });
