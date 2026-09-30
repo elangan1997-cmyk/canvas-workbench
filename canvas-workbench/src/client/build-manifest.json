@@ -147,6 +147,14 @@
       ]
     },
     {
+      "file": "features/chat-image-output/03-native-strip.js",
+      "note": "聊天图片输出组件（时间过滤、三级回退、灯箱）",
+      "lines": [
+        1134,
+        1430
+      ]
+    },
+    {
       "file": "features/text-edit/01-TextRebuildPanel.js",
       "note": "文字重建面板组件",
       "lines": [
