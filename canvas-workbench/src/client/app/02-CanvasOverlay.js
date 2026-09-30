@@ -220,6 +220,19 @@
       const newLoadToken = () => 'lt' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
       const postSceneLoad = (snapshot) => {
         canvasLoadToken.current = newLoadToken();
+        // 加载侧清扫(与落盘侧剥离同一原则,1.9.2「瞬时态绝不随快照复活」的补全):
+        // 历史快照里存活的聊天生图「生成中/失败」占位卡是上一会话的瞬时态——
+        // 用户删除失败卡后切换/重启,删除在保存竞赛中丢失会致其整批还魂。加载时
+        // 直接滤除(存量文件因此自愈);完成态 complete 是真实图片,保留。
+        let elements = snapshot && Array.isArray(snapshot.elements) ? snapshot.elements : null;
+        if (elements) {
+          const live = elements.filter((item) => {
+            if (!item || item.type !== 'image') return true;
+            const genState = item.customData && item.customData.dshChatGenState;
+            return genState !== 'processing' && genState !== 'failed';
+          });
+          if (live.length !== elements.length) snapshot = { ...snapshot, elements: live };
+        }
         post({ type: 'load', snapshot: JSON.stringify(snapshot), token: canvasLoadToken.current });
       };
       const switchingProject = React.useRef(false);

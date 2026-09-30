@@ -30,14 +30,27 @@
       const existingRevision = Number(existingMeta.revision || existingMeta.savedAt || 0);
       const savedAt = existingRevision > 0 ? existingRevision : Math.max(Date.now(), lastCanvasSaveAt + 1);
       lastCanvasSaveAt = savedAt;
+      // 瞬时态绝不随快照复活(与 1.9.2 加载时清扫同一原则,这里在落盘侧根治):
+      // 聊天生图的「生成中/失败」占位卡是会话内 UI 状态——曾出现用户删除失败卡
+      // 后切换画布/重启,删除在保存竞赛中丢失、失败卡随旧快照整批复活。落盘时
+      // 直接剥离(生成中 processing / 失败 failed);完成态 complete 是真实图片,
+      // 保留。图片编辑失败卡(无 dshChatGenState 标记)不受影响。
+      const elements = Array.isArray(snapshot.elements) ? snapshot.elements : [];
+      const liveElements = elements.filter((item) => {
+        if (!item || item.type !== 'image') return true;
+        const cd = item.customData;
+        const genState = cd && cd.dshChatGenState;
+        return genState !== 'processing' && genState !== 'failed';
+      });
       return {
         ...snapshot,
+        elements: liveElements,
         // 性能 v3（治本）：磁盘快照不再内嵌图片 base64。凡 fileId 能映射到
         // 元素 customData.dshSourcePath 的文件，落盘时只存 dshPath 引用；
         // 运行时快照（latestSnapshot）保持完整 dataURL，行为与归档/发送
         // 到聊天等管线无关。iframe 在 load 时按需还原（见 load 分支）。
         // 无磁盘路径的文件（如刚粘贴、尚未归档）继续内嵌，后续保存自愈。
-        files: stripInlineFileData(snapshot),
+        files: stripInlineFileData({ ...snapshot, elements: liveElements }),
         dshMeta: {
           ...existingMeta,
           revision: existingRevision > 0 ? existingRevision : savedAt,
