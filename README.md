@@ -1,10 +1,17 @@
 # Canvas Workbench · DSH 画布工作台
 
+**简体中文** | [English](README.en.md)
+
 > A local-first AI image workstation inside DeepSeek Harness — zero subscription, bring your own API: generate, edit, and deliver from your own machine, with layer-level Photoshop/Illustrator round-trip as the premium edge.
 
 **开自己的 API 生图,不交订阅费**——在 DSH 里完成「生成 → 编辑 → 交付」整条链路:聊天生图**自动上画布**、画布排版、修图擦除、可编辑 PSD/AI 交付,文件全程在你自己的磁盘上。可视为**零订阅的本地 AI 设计工作台**:核心链路对齐,成本是你自己的 API 用量;再叠加两个云端产品给不了的溢价点——**PS/AI 图层级双向联动**与**可编辑文件交付**。
 
-**最新版本 [`v1.9.41`](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.9.41)**:智能擦除体验大修——蒙版精确送达模型(无 mask 参数的引擎自动烘焙选区标记,擦除不再"原样返回")、邻近元素防误伤(安全膨胀减半 + 边界元素延续补齐);dsh-codex 后台预置改为**动态安装与当前内核兼容的最新版**(0.2.0 正式桌面直接可用);画布 dsh-codex 生图走系统代理(国内网络不再必挂);用户引擎配置防重置(原子写 + 自动备份);聊天生图重复上画布三链路根治。更早的 1.9.0 底座:聊天生图全自动上画布(生成中占位 → 原位替换)、**比例 13 档 + 数量 ×1~×8**、两引擎统一生效、新版官方桌面全面适配、Windows 分支全量并入。
+**最新版本 [`v1.9.51`](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.9.51)(文档版,中英 README 重写)**。近期功能看点:
+
+- **安装通道全面修复(1.9.42)**:插件市场 / npm 安装即全功能可用(依赖自动装齐,不再出现"装好了入口却消失");画布内「检查更新」一键自升级,当天发布的新版也能立即装;
+- **「加入画布」全入口(1.9.43~1.9.47)**:新版 DSH 桌面的原生缩略图带、文件卡片「打开方式」菜单里都能一键上画布;**任何渠道**产出的图——包括 agent 换工具、换通道重试成功的——都会自动上画布;失败占位卡在新图上画布后自动清除、且不再复活;判重升级到**字节级(md5)**,重新生成的图不再被误拦;
+- **复制即原图(1.9.48~1.9.49)**:画布上复制图片得到的是**原图字节**(宿主进程直写系统剪贴板,macOS / Windows 均可用),不是带白边的渲染图;
+- 更早底座:聊天生图全自动上画布(生成中占位 → 原位替换)、比例 13 档 + 数量 ×1~×8、智能擦除蒙版精确送达模型、dsh-codex 按内核动态配对(0.2.0 正式桌面直接可用)、Windows 分支全量并入。
 
 ---
 
@@ -30,7 +37,7 @@
 2. 输入区选好**比例**(比如 9:16)和**数量**(比如 ×4),直接在聊天里说"生成一张……";
 3. 画布上先出现 ×4 个**生成中占位**(和智能擦除同款动画),每张生成完**原位替换**成图;
 4. 原图同步归档到项目 `DSH聊天生成图片/会话/日期/`,永不丢;
-5. 选中图直接**改图/擦除/去背景/重建文字**,需要精修就**一键送进 PS/AI**,改完**像素级归位**。
+5. 选中图直接**改图/擦除/去背景/重建文字**,**复制拿到的就是原图**;需要精修就**一键送进 PS/AI**,改完**像素级归位**。
 
 ---
 
@@ -46,8 +53,9 @@
 设计模式开启时,聊天里每一次生图都会:
 - **先占位**:画布立即出现"生成中"占位卡(智能擦除同款动画,跟随系统深浅主题),批量时标注 ×N;
 - **完成即替换**:每张成图**原位替换**对应占位,同一批生成的图尺寸规格完全一致,不会一大一小;
-- **失败有兜底**:占位替换万一失败,成图立即按当前视野放置并提示,不会"生成了却找不到";
-- **绝不重复**:完成记录重放、文件扫描、缓存物化三条链路全部按源路径 + 文件名主干双重判重,刷新/切会话/重装都不会出现两张一样的图;
+- **任何渠道都认**:不只本插件管线——agent 换工具、换通道(包括首次失败后重试成功)写出的图,同样自动归档上画布;
+- **失败有兜底**:占位替换万一失败,成图立即按当前视野放置并提示;新图上画布后,残留的"生成失败"占位卡**自动清除**;删除过的失败占位**不会复活**;
+- **绝不重复**:判重按源路径 + 文件名主干**疑似比对 + md5 字节级确认**——同名重新生成的新图放行,同一张图绝不重复上画布;
 - **可关可调**:不想要自动上画布时在「更多 → 图像引擎设置」关闭,回到卡片上手动「加入画布」。
 
 ### 📐 生图比例与数量
@@ -59,7 +67,8 @@
 
 ### 📥 生成图不丢、随手可用
 - 聊天生成的每张图**自动归档**到 `DSH聊天生成图片/<会话标题>/<日期>/<时段>/`,文件夹名跟随会话标题自动同步;
-- 聊天里的**图片输出卡**逐轮聚合,支持「加入画布」「在文件夹中显示」;
+- **「加入画布」入口全覆盖**:聊天图片输出卡、新版桌面的**原生缩略图带**、文件卡片**「打开方式」菜单**里都有;聊天里的其他附件图同样一键上画布;
+- **复制即原图**:画布上选中单张图复制,得到的是**原图字节**(PNG 直写,JPEG/WebP 自动转换),贴进微信/文档/PPT 不降质、不带画布白边;
 - 历史会话里的图按文件名全局找回,旧图引用不再裂图。
 
 ### ✏️ 画布内直接改图
@@ -89,8 +98,9 @@
 - Windows 同样支持:远程驱动走 COM 自动化,自定义安装路径也能从注册表定位;
 - PS 2025+ 无旧扩展面板?画布按钮和「文件 → 脚本」一键脚本都可用。协议与排障见 [`canvas-workbench/adobe-bridge/PROTOCOL.md`](canvas-workbench/adobe-bridge/PROTOCOL.md)。
 
-### 🧾 操作日志
-「更多 → 操作日志」记录项目加载、文件刷新、图片落盘、模型请求、响应解析、预览转换、PSD 生成和失败原因。反馈问题时复制日志步骤即可,不含账号与 Key。
+### 🧾 操作日志与检查更新
+- 「更多 → 操作日志」记录项目加载、文件刷新、图片落盘、模型请求、响应解析、预览转换、PSD 生成和失败原因。反馈问题时复制日志步骤即可,不含账号与 Key。
+- 「更多 → **检查更新**」一键升级到最新版——自更新走完整依赖解析(装后自动自检补齐),当天发布的新版也能立即装,不受插件市场 24 小时新包保护限制。
 
 ---
 
@@ -105,6 +115,8 @@ dsh plugin --profile web add canvas-workbench
 ```
 
 中国大陆网络会自动回退 registry.npmmirror.com 镜像,无需额外配置。
+
+1.9.42 起,市场 / npm 安装即全功能可用(依赖自动装齐,PSD 导出对缺依赖做了优雅降级);后续升级用画布内「检查更新」即可。
 
 ### 方式二:源码同步(要最新 main / 参与开发)
 
@@ -127,12 +139,11 @@ cd canvas-workbench
 
 安装后完全退出并重启 DSH Desktop 生效。
 
-### 方式三:完整安装包(新电脑 / 没有 DSH)
+### 方式三:新电脑(还没有 DSH)
 
-| 情况 | 推荐 |
-|---|---|
-| macOS 新电脑 | [`v1.5.9` Release](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.5.9) 的 `macOS-Complete` DMG/PKG(整机重装验收基线),装好后按方式一/二升级画布到最新版 |
-| Windows 新电脑 | 源码安装(方式二,全量 Win 兼容修复已并入 main);或已实机验证的 `v1.4.0-windows-preview.4` 整包后升级 |
+先从官方渠道安装 DSH Desktop(DeepSeek Harness),再用方式一安装画布插件——这是当前推荐的完整路径,插件跟随官方正式版桌面(0.2.0 系)运行。
+
+仓库历史完整安装包([`v1.5.9` macOS](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.5.9) 的 `macOS-Complete` DMG/PKG 等)仅作离线重装基线保留,内置画布版本较旧,装好后请用方式一/「检查更新」升级。
 
 npm 包与源码包都不含 DSH 本体、Python 运行时、模型文件、账号或 API Key。
 
@@ -145,9 +156,9 @@ npm 包与源码包都不含 DSH 本体、Python 运行时、模型文件、账�
 | 引擎 | 适合 | 说明 |
 |---|---|---|
 | `API`(推荐起点) | **任何 OpenAI 兼容图片接口** | 国内大模型 API、企业网关、自建服务均可直连——不需要 ChatGPT 订阅;密钥只存本机(0600) |
-| `dsh-codex` | 已有 ChatGPT 订阅 | 与 [dsh-codex](https://www.npmjs.com/package/dsh-codex) 插件共用 OAuth 与订阅额度;未安装时画布会**自动装与当前内核兼容的最新版**;走 dsh-codex 自身的代理设置,国内网络可用 |
+| `dsh-codex` | 已有 ChatGPT 订阅 | 与 [dsh-codex](https://www.npmjs.com/package/dsh-codex) 插件共用 OAuth 与订阅额度;未安装时画布会**自动装与当前内核兼容的最新版**(0.2.0 正式桌面 → 0.3.2);走 dsh-codex 自身的代理设置,国内网络可用 |
 
-比例与数量对两个引擎**统一生效**。另有**本地工具链完全不依赖任何 API**:去背景、OCR、转矢量、PSD 导出、文字重建全部在本机 Python 环境运行,断网可用、零调用成本。引擎不会静默切换,状态面板实时显示安装/登录/凭据状态;你选的引擎/比例/数量**升级也不丢**(配置只补缺失字段,覆盖前自动留备份)。
+比例与数量对两个引擎**统一生效**。另有**本地工具链完全不依赖任何 API**:去背景、OCR、转矢量、PSD 导出、文字重建全部在本机 Python 环境运行,断网可用、零调用成本(Python 缺库时自动自举隔离环境)。引擎不会静默切换,状态面板实时显示安装/登录/凭据状态;你选的引擎/比例/数量**升级也不丢**(配置只补缺失字段,覆盖前自动留备份)。
 
 ---
 
@@ -180,9 +191,9 @@ npm 包与源码包都不含 DSH 本体、Python 运行时、模型文件、账�
 
 ## 系统要求
 
-- DeepSeek Harness(DSH),内核 0.1.7-rc 系 / 0.2.0 正式桌面均可(新版桌面的会话 v4 格式与附件 API 已适配);dsh-codex 引擎会按内核自动配对兼容版本。
-- 去背景 / OCR / 转矢量 / PSD 导出 / Windows 真实预览(PyMuPDF/psd-tools)依赖本机 Python 3.11;缺 Python 时画布仍可用,仅对应本地图片处理停用。
-- Adobe 桥接需已安装 Photoshop / Illustrator(macOS 与 Windows 均支持,真机验收见 [WINDOWS-TEST-CHECKLIST](WINDOWS-TEST-CHECKLIST.md))。
+- DeepSeek Harness(DSH)**0.2.0 系正式桌面(推荐)或 0.1.7-rc 系内核**;新版会话 v4 格式、附件 API 与原生图片展示带均已适配;dsh-codex 引擎按当前内核自动配对兼容版本,无需手动管理。
+- 去背景 / OCR / 转矢量 / PSD 导出 / `.ai`/`.pdf` 预览依赖本机 Python 3.11(缺失时自动自举隔离运行时);完全没有 Python 时画布仍可用,仅对应本地图片处理停用。
+- Adobe 桥接需已安装 Photoshop / Illustrator;**macOS 与 Windows 均已实机验收**(PS 2025 / AI 2026,见 [WINDOWS-TEST-CHECKLIST](WINDOWS-TEST-CHECKLIST.md))。
 
 ## 数据与隐私
 
@@ -202,10 +213,11 @@ npm 包与源码包都不含 DSH 本体、Python 运行时、模型文件、账�
 |---|---|
 | 安装后仍是旧版本 | 完全退出 DSH(含托盘)重跑安装脚本,再 `-CheckOnly` 检查;或用画布「更多 → 检查更新」一键升级 |
 | 当天发布的新版装不到 | DSH 市场有 24 小时新包保护;用画布「检查更新」可立即装当天新版 |
+| 装完看不到设计模式入口 | 1.9.42 已根治(依赖自动装齐);仍遇到请完全重启 DSH 并附操作日志反馈 |
 | API 连不上/超时 | 「图像引擎设置」核对路由、地址、超时;操作日志里有精确失败阶段 |
 | dsh-codex 生图报请求失败 | 引擎设置里确认 dsh-codex 已登录;国内网络走其代理设置(画布会自动透传) |
 | 擦除后图没变化 | 已在 1.9.41 修复(蒙版现在必然送达模型);仍遇到请附操作日志反馈 |
-| PDF/AI 无预览 | 文件仍可上画布;装 Poppler 或用 Illustrator 打开(macOS);Windows 已内置 PyMuPDF 预览 |
+| PDF/AI 无预览 | 文件仍可上画布;macOS 装 Poppler 或用 Illustrator 打开;Windows 已内置 PyMuPDF 预览(自动自举) |
 
 **报告问题**请附:操作步骤、系统版本、插件版本、操作日志失败步骤、Codex 或 API 路由。请勿粘贴 API Key、OAuth Token 或个人项目文件。
 
@@ -234,9 +246,3 @@ npm run package:npm  # 生成 dist-npm/canvas-workbench 发布变体
 ## License
 
 MIT
-
----
-
-# Canvas Workbench (English)
-
-A design-focused canvas plugin for DeepSeek Harness (DSH) Desktop. It brings chat-driven image generation (auto-placed onto the canvas with in-place placeholder replacement), aspect-ratio & batch-count controls (13 presets, ×1–×8), an infinite canvas with project persistence, in-canvas image editing / smart erase (mask is always delivered to the model — baked as a visible marker on engines without a mask parameter) / background removal (BiRefNet) / OCR / vectorize / layered PSD export, and a layer-level Photoshop/Illustrator round-trip bridge — all local-first, bring-your-own-API. The bundled dsh-codex route auto-installs the latest version compatible with your DSH core and honours its proxy settings. Latest: [v1.9.41](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.9.41). Install via `dsh plugin add canvas-workbench` (npmmirror fallback for mainland China) or from source (`./sync-local-plugins.sh` on macOS, `install-windows.cmd` on Windows). MIT licensed.
