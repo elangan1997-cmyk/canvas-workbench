@@ -84,15 +84,11 @@ const publishPkg = {
     bundle: { patch: './cordis.patch.yml' },
     client: devPkg.dsh?.client ?? { platform: 'web', inject: [] },
   },
-  peerDependencies: {
-    // 运行时由 DSH 宿主提供（内核 bundle），声明仅用于版本约束说明；
-    // profile 安装时 pnpm 对未满足 peer 只告警，与 dsh-codex 生态行为一致。
-    // 范围含显式预发布分支：node-semver 规定带预发布标签的版本只有在该元组
-    // 也有带预发布标签的比较符时才被范围放行（见 awesome-dsh-plugin
-    // contributing.md 的说明），单写 ^0.1.0-rc.7 会静默排除 0.1.7-rc.2。
-    '@deepseek-ai/dsh-tools': '0.1.0-rc.7 || >=0.1.0 <0.2.0 || >=0.1.7-rc.1 <0.2.0',
-    '@deepseek-ai/dsh-llm': '0.1.0-rc.7 || >=0.1.0 <0.2.0 || >=0.1.7-rc.1 <0.2.0',
-  },
+  // 宿主提供 DSH 服务；可选 peer 避免包管理器自动安装另一套内核。
+  // 开发与发布共用一份范围，防止发布变体遗留旧版本上限。
+  peerDependencies: devPkg.peerDependencies,
+  peerDependenciesMeta: devPkg.peerDependenciesMeta,
+  dshCanvasCompatibility: devPkg.dshCanvasCompatibility,
   dependencies: {
     'ag-psd': '^31.0.2',
   },

@@ -6,7 +6,7 @@
 
 **Generate with your own API, pay no subscription** — the full 「generate → edit → deliver」 chain inside DSH: chat-generated images **land on the canvas automatically**, layout on an infinite canvas, retouch/erase/deliver as editable PSD/AI, with every file staying on your own disk. Think of it as a **zero-subscription local AI design workstation**: the core pipeline without the platform fee — your cost is your own API usage — plus two things cloud products cannot offer: **layer-level PS/AI round-trip** and **editable file delivery**.
 
-**Latest: [`v1.9.51`](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.9.51) (docs release — bilingual README rewrite)**. Recent highlights:
+**Latest: [`v1.9.52`](https://github.com/elangan1997-cmyk/canvas-workbench/releases/tag/v1.9.52) (DSH 0.2.1-rc.2 compatibility)**. Recent highlights:
 
 - **Install channel fully fixed (1.9.42)**: market / npm installs now work out of the box (dependencies are auto-installed — no more "installed but the entry never shows up"); in-canvas **Check for Updates** upgrades in one click, even for same-day releases;
 - **"Add to canvas" everywhere (1.9.43–1.9.47)**: the native thumbnail strip and the file-card "Open with" menu in the new DSH desktop both offer one-click add-to-canvas; images produced through **any channel** — including retried generations where the agent switched tools or gateways — land on the canvas automatically; stale "failed" placeholders are cleared automatically once the image arrives and never resurrect; de-duplication now verifies **bytes (md5)**, so regenerated images are never wrongly blocked;
