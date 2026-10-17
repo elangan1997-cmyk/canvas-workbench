@@ -26,7 +26,18 @@ export async function buildClient() {
       parts.push(`    // ---- 内联自 src/${entry.inline}（构建期去 import/export；请改源文件） ----\n` + stripped.replace(/^/gm, '    ').replace(/^ {4}$/gm, '') + '\n');
       continue;
     }
-    parts.push(await readFile(join(pluginRoot, 'src', 'client', entry.file), 'utf8'));
+    let source = await readFile(join(pluginRoot, 'src', 'client', entry.file), 'utf8');
+    if (entry.file === 'core/canvas/frame/01-variants.js') {
+      // Base64 keeps vendor HTML-like sequences out of the srcdoc tokenizer.
+      const vendors = [];
+      for (const file of ['react-18.3.1.production.min.js', 'react-dom-18.3.1.production.min.js', 'excalidraw-0.17.6.production.min.js']) {
+        vendors.push((await readFile(join(pluginRoot, 'vendor', file))).toString('base64'));
+      }
+      const marker = '__DSH_CANVAS_VENDOR_BASE64__';
+      if (source.split(marker).length !== 2) throw new Error('Canvas vendor placeholder must occur exactly once');
+      source = source.replace(marker, JSON.stringify(vendors));
+    }
+    parts.push(source);
   }
   const output = parts.join('');
   return { output, manifest, sha256: createHash('sha256').update(output).digest('hex'), bytes: Buffer.byteLength(output) };
