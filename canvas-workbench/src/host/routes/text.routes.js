@@ -9,12 +9,43 @@ import { readBody, respond } from '../server/http.js';
 import { runPythonSpec } from '../services/python-launch.js';
 import { decodeImageData, normalizeTextLayerText, safeImageName } from '../../shared/utils/data-url.js';
 import { analyzeTextWithCurrentModel, visionBlocks } from '../services/text-analysis.js';
-import { buildNativeTextPsd } from '../services/native-text-psd.js';
+import { buildNativeTextPsd, textLayerGeometry } from '../services/native-text-psd.js';
+import { buildIllustratorTextJsx } from '../services/illustrator-text.js';
+import { refineTextGeometry } from '../services/text-geometry.js';
 import { PLUGIN_ROOT } from '../vendor-assets.js';
 import { name } from '../plugin-meta.js';
 
 export function register(router, h) {
   const { ctx, previewUrl, projectDirectory, runProcess, runProcessWithTimeout, writeManagedSource } = h;
+  const calibrateTextStyles = async (input, blocks, selections = null) => {
+    const python = await resolvePythonWithDeps(ctx);
+    let geometryRefinedCount = 0;
+    let geometryWarning = '';
+    if (selections) {
+      try {
+        const ocr = await runPythonSpec(
+          (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+          python, join(PLUGIN_ROOT, 'scripts', 'ocr_image.py'),
+          { input, lang: 'chi_sim+eng', psm: '11' }, { cwd: PLUGIN_ROOT, timeoutMs: 120000 });
+        const lines = String(ocr.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+        const local = lines.length ? JSON.parse(lines[lines.length - 1]) : null;
+        if (ocr.exitCode !== 0 || !local || local.success !== true) throw new Error(local && local.error || '本地定位失败');
+        const refined = refineTextGeometry(blocks, local.blocks, selections);
+        blocks = refined.blocks;
+        geometryRefinedCount = refined.refinedCount;
+      } catch (err) { geometryWarning = '本地文字定位未完成，沿用模型位置：' + String(err.message || err); }
+    }
+    const styled = await runPythonSpec(
+      (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
+      python, join(PLUGIN_ROOT, 'scripts', 'infer_text_style.py'),
+      { input, blocks: JSON.stringify(blocks) }, { cwd: PLUGIN_ROOT, timeoutMs: 120000 });
+    const lines = String(styled.stdout || '').trim().split(/\r?\n/).filter(Boolean);
+    const payload = lines.length ? JSON.parse(lines[lines.length - 1]) : null;
+    if (styled.exitCode !== 0 || !payload || payload.success !== true || !Array.isArray(payload.blocks)) {
+      throw new Error(payload && payload.error || '原图文字样式校准失败');
+    }
+    return { ...payload, geometryRefinedCount, geometryWarning };
+  };
   router.add({ method: 'POST', path: '/dsh-canvas/ocr-image', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
           let tempInput = '';
           try {
@@ -39,16 +70,32 @@ export function register(router, h) {
                 const intersects = (block, region) => Math.max(0, Math.min(block.x + block.width, region.x + region.width) - Math.max(block.x, region.x))
                   * Math.max(0, Math.min(block.y + block.height, region.y + region.height) - Math.max(block.y, region.y)) > 0;
                 const allBlocks = visionBlocks(analyzed.value, analyzed.width, analyzed.height);
-                const blocks = allBlocks.filter((block) => requestedCrops.some((region) => intersects(block, region)));
+                let blocks = allBlocks.filter((block) => requestedCrops.some((region) => intersects(block, region)));
                 let cropWarning = '';
                 if (!blocks.length) {
                   // 模型识别到了文字但坐标与选区不重叠：返回全部结果由用户逐条排除
                   cropWarning = '模型返回的 ' + allBlocks.length + ' 个文字块与选区坐标不重叠，已列出全部结果，请排除选区外的项';
                 }
+                // The model reads content/structure; measure typography on
+                // the untouched source, never the generated clean background.
+                let styleEngine = 'current-chat-model';
+                blocks = blocks.length ? blocks : allBlocks;
+                try {
+                  const outputDir = join(tmpdir(), 'dsh-canvas-text-rebuild');
+                  await mkdir(outputDir, { recursive: true });
+                  tempInput = join(outputDir, '.style-input-' + Date.now() + '-' + Math.random().toString(16).slice(2) + '.' + uploaded.ext);
+                  await writeFile(tempInput, uploaded.bytes);
+                  const measured = await calibrateTextStyles(tempInput, blocks, requestedCrops);
+                  blocks = measured.blocks;
+                  styleEngine = measured.engine;
+                  cropWarning = [cropWarning, measured.geometryWarning].filter(Boolean).join('；');
+                } catch (err) {
+                  cropWarning = [cropWarning, '原图样式校准未完成，保留模型估计：' + String(err.message || err)].filter(Boolean).join('；');
+                }
                 respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({
-                  ok: true, width: analyzed.width, height: analyzed.height, blocks: blocks.length ? blocks : allBlocks, crops: requestedCrops,
+                  ok: true, width: analyzed.width, height: analyzed.height, blocks, crops: requestedCrops,
                   erasePrompt: String(analyzed.value.erasePrompt || '').slice(0, 1200),
-                  engine: 'current-chat-model', provider: analyzed.provider, model: analyzed.model, styleEngine: 'current-chat-model',
+                  engine: 'current-chat-model', provider: analyzed.provider, model: analyzed.model, styleEngine,
                   warning: cropWarning
                 }));
                 return;
@@ -97,21 +144,10 @@ export function register(router, h) {
             // starts with usable values instead of an unavailable font name.
             let styleEngine = 'unavailable';
             try {
-              const styleScript = join(pluginRoot, 'scripts', 'infer_text_style.py');
-              await access(styleScript);
-              const styled = await runPythonSpec(
-                (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
-                python, styleScript,
-                { input: tempInput, blocks: JSON.stringify(blocks) },
-                { cwd: pluginRoot, timeoutMs: 120000 });
-              const styleLines = String(styled.stdout || '').trim().split(/\r?\n/).filter(Boolean);
-              let stylePayload = null;
-              try { stylePayload = styleLines.length ? JSON.parse(styleLines[styleLines.length - 1]) : null; } catch (err) { stylePayload = null; }
-              if (styled.exitCode === 0 && stylePayload && stylePayload.success === true && Array.isArray(stylePayload.blocks)) {
-                blocks = stylePayload.blocks;
-                styleEngine = stylePayload.engine || 'local-font-heuristic';
-              }
-            } catch (err) {}
+              const stylePayload = await calibrateTextStyles(tempInput, blocks);
+              blocks = stylePayload.blocks;
+              styleEngine = stylePayload.engine;
+            } catch (err) { visionWarning = [visionWarning, '原图样式校准未完成：' + String(err.message || err)].filter(Boolean).join('；'); }
             respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, width: payload.width, height: payload.height, blocks, crops: requestedCrops, engine: 'tesseract', styleEngine, warning: visionWarning }));
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
@@ -260,12 +296,13 @@ export function register(router, h) {
               await access(svgScript);
               tempSvg = join(outputDir, 'text-svg-' + token + '.svg');
               tempAi = join(outputDir, 'text-ai-' + token + '.ai');
-              const svgArgs = [svgScript, '--input', tempInput, '--output', tempSvg, '--blocks', JSON.stringify(exportBlocks)];
-              if (cleanInput) svgArgs.push('--clean-input', cleanInput);
+              const svgSpec = { input: tempInput, output: tempSvg,
+                blocks: JSON.stringify(exportBlocks.map((block) => block && ({ ...block, geometry: textLayerGeometry(block) }))) };
+              if (cleanInput) svgSpec.clean_input = cleanInput;
               const svgRun = await runPythonSpec(
                 (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs),
                 python, svgScript,
-                { input: tempInput, output: tempSvg, blocks: JSON.stringify(exportBlocks) },
+                svgSpec,
                 { cwd: pluginRoot, timeoutMs: 120000 });
               const svgLines = String(svgRun.stdout || '').trim().split(/\r?\n/).filter(Boolean);
               let svgPayload = null;
@@ -279,78 +316,21 @@ export function register(router, h) {
               let aiWarning = '';
               let deliverablePath = tempSvg;
               let deliverableKind = 'svg';
-              const jsxBlocks = exportBlocks
-                .filter((item) => item && typeof item === 'object' && item.enabled !== false && String(item.text || '').trim())
-                .slice(0, 200)
-                .map((item) => ({
-                  t: String(item.text || ''),
-                  x: Math.max(0, Number(item.x || 0)),
-                  y: Math.max(0, Number(item.y || 0)),
-                  w: Math.max(2, Number(item.width || 240)),
-                  h: Math.max(2, Number(item.height || 48)),
-                  s: Math.max(8, Math.min(220, Number(item.fontSize || Number(item.height || 48) * 0.92 || 24))),
-                  c: /^#[0-9a-fA-F]{6}$/.test(String(item.color || '')) ? String(item.color) : '#111827',
-                  f: String(item.fontPostScript || ''),
-                  a: String(item.textAlign || 'left').toLowerCase(),
-                  r: Number(item.rotation || 0)
-                }));
               if (body.format === 'ai') {
-                // 原生文字层那段 JSX 与平台无关（纯文本）。macOS 走 osascript 执行，
-                // Windows 走 COM DoJavaScriptFile 执行 —— 两处共用这里构造的同一份脚本。
-                const buildAiJsx = () => {
-                  const jsxPayload = JSON.stringify({ background: cleanInput || tempInput, output: tempAi, width: Number(svgPayload.width || 1), height: Number(svgPayload.height || 1), blocks: jsxBlocks });
-                  return '#target illustrator\n(function(){\n'
-                      + 'var cfg=' + jsxPayload + ';\n'
-                      + 'function hex(c){var m=String(c||"#111827").replace("#",""); if(m.length!==6){m="111827";} var col=new RGBColor(); col.red=parseInt(m.substr(0,2),16); col.green=parseInt(m.substr(2,2),16); col.blue=parseInt(m.substr(4,2),16); return col;}\n'
-                      + 'try{\n'
-                      + '  var doc=app.documents.add(DocumentColorSpace.RGB, cfg.width, cfg.height);\n'
-                      + '  try{doc.rulerUnits=RulerUnits.Points;}catch(e1){}\n'
-                      // Illustrator 文档坐标 y 向上、原点在左下（实测 artboardRect=[0,H,W,0]）。
-                      // 画板左上角 = (ab[0], ab[1])；块内 y 是“距画板顶的像素”，换算成文档坐标要相减。
-                      + '  var ab=doc.artboards[0].artboardRect, ax=ab[0], ay=ab[1];\n'
-                      + '  try{ doc.layers[0].name="背景与文字"; }catch(eL){}\n'
-                      + '  var pi=doc.placedItems.add(); pi.file=new File(cfg.background);\n'
-                      + '  try{ pi.width=cfg.width; pi.height=cfg.height; }catch(e2){}\n'
-                      + '  try{ pi.left=ax; pi.top=ay; }catch(e2b){}\n'
-                      + '  try{ pi.embed(); }catch(e3){}\n'
-                      + '  var list=cfg.blocks||[];\n'
-                      + '  for(var i=0;i<list.length;i++){\n'
-                      + '    var b=list[i]||{}; if(!b.t){continue;}\n'
-                      + '    var tf=doc.textFrames.add(); tf.contents=b.t;\n'
-                      + '    var ca=tf.textRange.characterAttributes;\n'
-                      + '    ca.size=b.s;\n'
-                      + '    try{ ca.textFont=app.textFonts.getByName(b.f); }catch(e4){}\n'
-                      + '    ca.fillColor=hex(b.c);\n'
-                      + '    if(b.a==="center"||b.a==="right"){ try{ tf.textRange.paragraphAttributes.justification=(b.a==="center")?Justification.CENTER:Justification.RIGHT; }catch(e5){} }\n'
-                      + '    tf.left=ax+((b.a==="center")?(b.x+b.w/2):((b.a==="right")?(b.x+b.w-1):(b.x+1)));\n'
-                      + '    tf.top=ay-b.y;\n'
-                      + '    if(Math.abs(b.r||0)>0.05){ try{ tf.rotate(-(b.r)); }catch(e6){} }\n'
-                      + '  }\n'
-                      + '  var opts=new IllustratorSaveOptions(); try{ opts.pdfCompatible=true; }catch(e7){}\n'
-                      + '  doc.saveAs(new File(cfg.output), opts);\n'
-                      + '  try{ doc.close(CloseOptions.DONTSAVECHANGES); }catch(e8){ try{ doc.close(2); }catch(e9){} }\n'
-                      + '  "dsh-ai-done";\n'
-                      + '}catch(err){ throw new Error("illustrator jsx: "+String(err)); }\n'
-                      + '})();\n';
-                };
-                const jsx = buildAiJsx();
+                // Both operating systems execute exactly the same typography
+                // script; only the transport/UTF-8 BOM differs.
+                const jsx = buildIllustratorTextJsx({ background: cleanInput || tempInput, output: tempAi,
+                  width: Number(svgPayload.width || 1), height: Number(svgPayload.height || 1), blocks: exportBlocks });
                 if (isMac) {
                   try {
                     await writeFile(jsxPath, jsx, 'utf8');
-                    const appleScript = 'tell application id "com.adobe.Illustrator"\nactivate\ndo javascript (read POSIX file ' + JSON.stringify(jsxPath) + ' as «class utf8»)\nend tell\n';
+                    const appleScript = 'tell application id "com.adobe.illustrator"\nactivate\n«event miscDjxM» (read POSIX file ' + JSON.stringify(jsxPath) + ' as «class utf8»)\nend tell\n';
                     await writeFile(appleScriptPath, appleScript, 'utf8');
                     const osascript = await ctx.subprocess.resolveExecutable('osascript');
                     const scripted = await runProcessWithTimeout(osascript, [appleScriptPath], outputDir, 300000);
                     try { const info = await stat(tempAi); aiScripted = scripted.exitCode === 0 && info.isFile() && info.size > 1024; } catch (err) { aiScripted = false; }
                     if (aiScripted) { deliverablePath = tempAi; deliverableKind = 'ai'; }
                     else aiWarning = String(scripted.stderr || '').trim() || '未能调用 Illustrator 原生文字层，已退回 SVG 草稿';
-                    // Illustrator 2026 的 ExtendScript 没有 CloseOptions：脚本里 close 不掉临时文档，
-                    // 会留在 AI 里被用户误当成正式文件编辑。先全部关闭（不保存），下面只打开画布正式文件。
-                    try {
-                      // platform-guard-ok: 在外层 if (isMac) 块内（277 行起），Windows 走 SVG 兜底不会到达这里
-                      const osascript2 = await ctx.subprocess.resolveExecutable('osascript');
-                      await runProcessWithTimeout(osascript2, ['-e', 'tell application id "com.adobe.Illustrator"\nclose every document saving no\nend tell'], outputDir, 30000);
-                    } catch (errClose) {}
                   } catch (err) {
                     aiWarning = String((err && err.message) || err);
                   }
@@ -369,8 +349,7 @@ export function register(router, h) {
                     try { const info = await stat(tempAi); aiScripted = scripted.ok === true && info.isFile() && info.size > 1024; } catch (err) { aiScripted = false; }
                     if (aiScripted) { deliverablePath = tempAi; deliverableKind = 'ai'; }
                     else aiWarning = scripted.error || '未能调用 Illustrator 原生文字层，已退回 SVG 草稿';
-                    // ExtendScript 关不掉自己建的文档，临时 .ai 会一直挂在 AI 里（而临时文件
-                    // 马上就被删了）。用 COM 精确关闭「临时目录下」的文档，不动用户自己的文件。
+                    // 仅清理临时目录中可能遗留的文档，不影响用户已打开的文件。
                     try {
                       await closeAdobeDocumentsUnder(ctx, runProcess, { app: 'illustrator', prefix: outputDir, workDir: outputDir, timeoutMs: 60000 });
                     } catch (err) {}
@@ -444,11 +423,11 @@ export function register(router, h) {
             } catch (err) {
               addPhotoshopWarning('直接写入原生文字图层失败，已尝试 Adobe 兼容路径：' + String((err && err.message) || err));
             }
-            const jsxPayload = JSON.stringify({ input: draftPsd, output: finalPsd, blocks: exportBlocks, cleanBackground: Boolean(cleanInput) });
+            const jsxPayload = JSON.stringify({ input: draftPsd, output: finalPsd, blocks: exportBlocks.map((block) => block && ({ ...block, geometry: textLayerGeometry(block) })), cleanBackground: Boolean(cleanInput) });
             const jsx = '#target photoshop\n(function(){\n'
               + 'var cfg=' + jsxPayload + ';\n'
               + 'function rgb(value){var m=String(value||"#111827").replace("#",""); if(m.length!==6)m="111827"; var c=new SolidColor(); c.rgb.red=parseInt(m.substr(0,2),16); c.rgb.green=parseInt(m.substr(2,2),16); c.rgb.blue=parseInt(m.substr(4,2),16); return c;}\n'
-              + 'try{var doc=app.open(new File(cfg.input)); var list=cfg.blocks||[]; for(var i=0;i<list.length;i++){var b=list[i]||{}; if(b.enabled===false||!String(b.text||"").replace(/^[\\s\\r\\n]+|[\\s\\r\\n]+$/g,""))continue; var layer=doc.artLayers.add(); layer.kind=LayerKind.TEXT; layer.name="OCR text "+(i+1)+" (review before enabling)"; var ti=layer.textItem; ti.contents=String(b.text||""); ti.position=[Number(b.x||0),Number(b.y||0)+Math.max(8,Number(b.fontSize||24))]; ti.size=Math.max(8,Number(b.fontSize||24)); try{ti.font=String(b.fontPostScript||b.fontFamily||"AlibabaPuHuiTi_3_55_Regular");}catch(fontErr){try{ti.font="ArialMT";}catch(fontFallbackErr){}} ti.color=rgb(b.color); try{ti.justification=Justification.LEFT;}catch(justErr){} layer.visible=false;} for(var g=0;g<doc.layerSets.length;g++){try{if(String(doc.layerSets[g].name)==="OCR text preview - replace in Photoshop")doc.layerSets[g].visible=false;}catch(groupErr){}} var opts=new PhotoshopSaveOptions(); opts.layers=true; doc.saveAs(new File(cfg.output),opts,true,Extension.LOWERCASE); doc.close(SaveOptions.DONOTSAVECHANGES); }catch(err){try{if(doc)doc.close(SaveOptions.DONOTSAVECHANGES);}catch(closeErr){} throw err;}\n})();\n';
+              + 'try{var doc=app.open(new File(cfg.input)); var list=cfg.blocks||[]; for(var i=0;i<list.length;i++){var b=list[i]||{}; if(b.enabled===false||!String(b.text||"").replace(/^[\\s\\r\\n]+|[\\s\\r\\n]+$/g,""))continue; var layer=doc.artLayers.add(); layer.kind=LayerKind.TEXT; layer.name="OCR text "+(i+1)+" (review before enabling)"; var ti=layer.textItem; ti.contents=String(b.text||""); var geo=b.geometry; ti.position=[new UnitValue(geo.transform[4],"px"),new UnitValue(geo.transform[5],"px")]; ti.size=new UnitValue(geo.fontSize*72/doc.resolution,"pt"); try{ti.tracking=Math.round(Number(b.tracking||0));}catch(trackErr){} try{ti.font=String(b.fontPostScript||b.fontFamily||"AlibabaPuHuiTi_3_55_Regular");}catch(fontErr){try{ti.font="ArialMT";}catch(fontFallbackErr){}} ti.color=rgb(b.color); try{ti.justification=geo.align==="center"?Justification.CENTER:geo.align==="right"?Justification.RIGHT:Justification.LEFT;}catch(justErr){} layer.visible=false;} for(var g=0;g<doc.layerSets.length;g++){try{if(String(doc.layerSets[g].name)==="OCR text preview - replace in Photoshop")doc.layerSets[g].visible=false;}catch(groupErr){}} var opts=new PhotoshopSaveOptions(); opts.layers=true; doc.saveAs(new File(cfg.output),opts,true,Extension.LOWERCASE); doc.close(SaveOptions.DONOTSAVECHANGES); }catch(err){try{if(doc)doc.close(SaveOptions.DONOTSAVECHANGES);}catch(closeErr){} throw err;}\n})();\n';
             // Windows 的 ExtendScript 靠 BOM 判定 UTF-8（否则按系统 ANSI 解码，脚本里的
             // 中文 contents 直接变乱码）；macOS 侧由 AppleScript 显式 `as «class utf8»`
             // 解码，带 BOM 会被当成脚本文本的首字符，所以只在 Windows 加。
@@ -530,7 +509,7 @@ export function register(router, h) {
             }
             const info = await stat(saved.path);
             const warnings = [cleanupWarning, photoshopWarning, openError].filter(Boolean).join('；');
-            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, image: { path: saved.path, name: saved.name, mtime: info.mtimeMs, kind: 'psd', managed: true, url: previewUrl(saved.path, info.mtimeMs) }, photoshop, nativeTextLayers: photoshop, textLayerEngine, opened, openError, cleanedBackground: Boolean(cleanInput), cleanupEngine: cleanupEngine || 'none', styleEngine: 'local-font-heuristic', warning: warnings, blockCount: enabledBlocks.length, selectionCount: selections.length }));
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, image: { path: saved.path, name: saved.name, mtime: info.mtimeMs, kind: 'psd', managed: true, url: previewUrl(saved.path, info.mtimeMs) }, photoshop, nativeTextLayers: photoshop, textLayerEngine, opened, openError, cleanedBackground: Boolean(cleanInput), cleanupEngine: cleanupEngine || 'none', styleEngine: exportBlocks.some((block) => block && block.textFit) ? 'source-pixel-font-fit' : 'reviewed-parameters', warning: warnings, blockCount: enabledBlocks.length, selectionCount: selections.length }));
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
           } finally {

@@ -32,8 +32,25 @@ function color(value) {
   };
 }
 
+export function textLayerGeometry(block) {
+  const fontSize = Math.max(8, Math.min(2000, Number(block.fontSize || block.height || 24)));
+  const align = ['center', 'right'].includes(block.textAlign) ? block.textAlign : 'left';
+  const fit = block.textFit;
+  // A designer may edit a row after analysis. Never apply stale fitted
+  // bearings/advance to different text, font, size or tracking.
+  const fitted = fit && fit.text === block.text && fit.fontPostScript === block.fontPostScript
+    && Math.abs(Number(fit.fontSize) - fontSize) < 0.01
+    && Math.abs(Number(fit.tracking || 0) - Number(block.tracking || 0)) < 0.01;
+  const shift = align === 'center' ? 0.5 : align === 'right' ? 1 : 0;
+  const x = Number(block.x || 0) + (fitted ? Number(fit.originOffsetX) + Number(fit.advance) * shift : Number(block.width || 0) * shift);
+  const y = Number(block.y || 0) + (fitted ? Number(fit.baselineOffset) : fontSize);
+  const angle = Number(block.rotation || 0) * Math.PI / 180;
+  const cos = Math.cos(angle), sin = Math.sin(angle);
+  return { fontSize, align, transform: [cos, sin, sin ? -sin : 0, cos, x, y] };
+}
+
 function nativeTextLayer(block, index) {
-  const fontSize = Math.max(8, Math.min(220, Number(block.fontSize || block.height || 24)));
+  const { fontSize, align, transform } = textLayerGeometry(block);
   return {
     name: `OCR text ${index + 1} (review before enabling)`,
     // The existing Photoshop JSX path also leaves OCR text disabled until the
@@ -41,16 +58,17 @@ function nativeTextLayer(block, index) {
     hidden: true,
     text: {
       text: String(block.text || ''),
-      transform: [1, 0, 0, 1, Math.max(0, Number(block.x || 0)), Math.max(0, Number(block.y || 0)) + fontSize],
+      transform,
       style: {
         font: { name: String(block.fontPostScript || block.fontFamily || 'ArialMT') },
         fontSize,
+        // Photoshop expects an integer Tracking value. A real-valued entry
+        // is interpreted as 16.16 fixed-point (35.5 becomes 2326528).
+        tracking: Math.round(Number(block.tracking || 0)),
         fillColor: color(block.color)
       },
       paragraphStyle: {
-        justification: ['center', 'right'].includes(String(block.textAlign || '').toLowerCase())
-          ? String(block.textAlign).toLowerCase()
-          : 'left'
+        justification: align
       }
     }
   };

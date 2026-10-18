@@ -223,7 +223,7 @@ def main() -> int:
             y = max(0, int(float(raw.get("y", 0) or 0)))
             width = max(2, int(float(raw.get("width", 240) or 240)))
             height = max(2, int(float(raw.get("height", 48) or 48)))
-            size = max(8, min(220, int(float(raw.get("fontSize", height * 0.92) or height * 0.92))))
+            size = max(8, min(2000, int(float(raw.get("fontSize", height * 0.92) or height * 0.92))))
             postscript = str(raw.get("fontPostScript") or "")
             if postscript not in font_cache:
                 font_cache[postscript] = find_font(postscript or None)

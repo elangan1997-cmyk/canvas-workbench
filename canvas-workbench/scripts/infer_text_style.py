@@ -11,6 +11,7 @@ import argparse
 import json
 import math
 import re
+import sys
 from pathlib import Path
 
 try:
@@ -31,80 +32,195 @@ def has_cjk(text: str) -> bool:
     return bool(re.search(r"[\u3400-\u9fff]", text))
 
 
-def estimate_color(image, box: tuple[int, int, int, int]) -> tuple[str, float]:
-    """Return a contrast-weighted foreground color and a confidence hint."""
-    x0, y0, x1, y1 = box
-    crop = image.crop((x0, y0, x1, y1)).convert("RGB")
+from collections import Counter
+from functools import lru_cache
+
+
+@lru_cache(maxsize=32)
+def font_candidates(cjk: bool) -> tuple:
+    names = ([('阿里巴巴普惠体 3.0', 'AlibabaPuHuiTi_3_' + suffix, weight)
+              for suffix, weight in [('55_Regular', 'normal'), ('65_Medium', 'medium'), ('85_Bold', 'bold'), ('95_ExtraBold', 'bold')]]
+             + [('思源黑体', 'SourceHanSansSC-' + suffix, weight)
+                for suffix, weight in [('Regular', 'normal'), ('Medium', 'medium'), ('Bold', 'bold')]]) if cjk else [
+                    (family, family + '-' + suffix, weight)
+                    for family in ('Inter', 'Montserrat', 'SourceSansPro')
+                    for suffix, weight in [('Regular', 'normal'), ('Medium' if family != 'SourceSansPro' else 'Semibold', 'medium'), ('Bold', 'bold')]]
+    # find_font has a fallback for preview rendering; do not present that
+    # fallback under a candidate's name if the requested font is absent.
+    from export_text_psd import _resolve_font_file
+    result = []
+    for family, ps, weight in names:
+        stem = ps.replace('_', '-') if ps.startswith('Alibaba') else ps
+        path = _resolve_font_file(stem, ('.ttf', '.otf'))
+        if path:
+            result.append((family, ps, weight, path))
+    return tuple(result)
+
+
+def pixel_foreground(image, box, suggested=None):
+    """Find the dominant ink cluster, excluding antialias and background.
+
+    Work on a bounded thumbnail. Keep original-image coordinates separately;
+    model box padding must not become font size or baseline padding.
+    """
+    from PIL import Image
+    crop = image.crop(box).convert('RGB')
+    scale = min(1.0, 640 / max(1, crop.width), 180 / max(1, crop.height))
+    crop = crop.resize((max(1, round(crop.width * scale)), max(1, round(crop.height * scale))), Image.Resampling.LANCZOS)
+    sx, sy = crop.width / (box[2] - box[0]), crop.height / (box[3] - box[1])
     pixels = list(crop.getdata())
-    if not pixels:
-        return "#111827", 0.15
-    # Estimate the local background from the crop border, then prefer pixels
-    # furthest from it.  This works for both dark-on-light and light-on-dark
-    # text (a darkness-only heuristic fails on dark posters).
-    crop_width, crop_height = crop.size
-    border = [
-        rgb for idx, rgb in enumerate(pixels)
-        if idx < crop_width or idx >= len(pixels) - crop_width
-        or (idx % max(1, crop_width) < 2)
-        or (idx % max(1, crop_width) >= max(1, crop_width) - 2)
-    ] or pixels
-    background = tuple(median(channel) for channel in zip(*border))
-    scored = []
-    for rgb in pixels:
-        r, g, b = rgb
-        distance = math.sqrt(sum((float(channel) - float(background[index])) ** 2 for index, channel in enumerate(rgb)))
-        sat = max(rgb) - min(rgb)
-        score = distance + sat * 0.12
-        scored.append((score, rgb))
-    scored.sort(key=lambda item: item[0], reverse=True)
-    pool = [rgb for _, rgb in scored[: max(4, min(len(scored), len(scored) // 8 or 1))]]
-    color = tuple(round(median(channel)) for channel in zip(*pool))
-    confidence = clamp((scored[0][0] - scored[-1][0]) / 255.0, 0.18, 0.88)
-    return "#%02x%02x%02x" % color, round(confidence, 2)
+    w, h = crop.size
+    border = [rgb for i, rgb in enumerate(pixels) if i < w or i >= len(pixels)-w or i % w in (0, w-1)]
+    bg = tuple(median(c) for c in zip(*border))
+    def distance(a, b):
+        return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+    bins = Counter(tuple(v // 16 for v in rgb) for rgb in pixels)
+    candidates = []
+    hint = tuple(int(suggested[i:i+2], 16) for i in (1, 3, 5)) if re.fullmatch(r'#[0-9a-fA-F]{6}', str(suggested)) else None
+    for key, count in bins.most_common(32):
+        center = tuple(v * 16 + 8 for v in key)
+        contrast = distance(center, bg)
+        if contrast < 38:
+            continue
+        prior = 1.0 + (0.4 * max(0, 1 - distance(center, hint) / 160) if hint else 0)
+        candidates.append((count * math.sqrt(contrast) * prior, center))
+    if not candidates:
+        return None
+    seed = max(candidates)[1]
+    pool = [p for p in pixels if distance(p, seed) < 28]
+    ink = tuple(round(median(c)) for c in zip(*pool))
+    contrast = distance(ink, bg)
+    radius = max(24, min(70, contrast * 0.32))
+    mask = Image.new('L', crop.size)
+    mask.putdata([255 if distance(p, ink) < radius and distance(p, bg) > contrast * 0.38 else 0 for p in pixels])
+    bbox = mask.getbbox()
+    if not bbox:
+        return None
+    ink_mask = mask.crop(bbox)
+    density = sum(ink_mask.getdata()) / (255 * ink_mask.width * ink_mask.height)
+    if not 0.025 < density < 0.85 or ink_mask.height < 4:
+        return None
+    return {'color': '#%02X%02X%02X' % ink, 'confidence': round(min(0.9, contrast / 180), 2),
+            'threshold': round(255 * (1-radius/max(1, contrast))), 'mask': ink_mask, 'sx': sx, 'sy': sy, 'left': box[0] + bbox[0] / sx, 'top': box[1] + bbox[1] / sy}
+
+
+def render_ink(text, font, tracking=0, threshold=170):
+    from PIL import Image, ImageDraw
+    # Baseline-anchored metrics include ascenders, descenders and CJK bearings.
+    bbox = font.getbbox(text, anchor='ls')
+    advance = font.getlength(text) + max(0, len(text)-1) * tracking
+    width = max(1, math.ceil(bbox[2]-bbox[0] + max(0, len(text)-1)*tracking))
+    canvas = Image.new('L', (width + 4, max(1, bbox[3]-bbox[1]) + 4))
+    draw = ImageDraw.Draw(canvas)
+    if abs(tracking) < 0.01:
+        draw.text((2-bbox[0], 2-bbox[1]), text, font=font, fill=255, anchor='ls')
+    else:
+        for i, char in enumerate(text):
+            draw.text((2-bbox[0] + font.getlength(text[:i]) + i*tracking, 2-bbox[1]), char, font=font, fill=255, anchor='ls')
+    canvas = canvas.point(lambda p: 255 if p >= threshold else 0)
+    actual = canvas.getbbox()
+    if not actual:
+        return canvas, bbox, advance
+    ink_bbox = (bbox[0]+actual[0]-2, bbox[1]+actual[1]-2, bbox[0]+actual[2]-2, bbox[1]+actual[3]-2)
+    return canvas.crop(actual), ink_bbox, advance
+
+
+def fit_font(text, foreground, cjk):
+    from PIL import Image, ImageChops, ImageFilter, ImageFont
+    target = foreground['mask']
+    sx, sy = foreground['sx'], foreground['sy']
+    # Uniform scale for font rendering; source image is never stretched.
+    scale = min(sx, sy)
+    tw, th = target.width / sx * scale, target.height / sy * scale
+    target = target.resize((max(1, round(tw)), max(1, round(th))))
+    best = None
+    alternatives = []
+    for family, ps, weight, path in font_candidates(cjk):
+        reference = ImageFont.truetype(path, 100)
+        _, ref, _ = render_ink(text, reference, threshold=foreground['threshold'])
+        size_h = th * 100 / max(1, ref[3]-ref[1])
+        size_w = tw * 100 / max(1, ref[2]-ref[0])
+        sizes = {max(5, round(s)) for base in (size_h, size_w) for s in (base-2, base-1, base, base+1, base+2)}
+        candidate_best = None
+        for size in sorted(sizes):
+            if size > 1200:
+                continue
+            font = ImageFont.truetype(path, size)
+            base_mask, bbox, _ = render_ink(text, font, threshold=foreground['threshold'])
+            gap = (target.width-base_mask.width) / max(1, len(text)-1)
+            gaps = [0]
+            if len(text) > 1 and abs(gap) <= size * 0.6:
+                gaps.append(gap)
+            for tracking in gaps:
+                rendered, bbox, advance = render_ink(text, font, tracking, foreground['threshold'])
+                dw = abs(rendered.width-target.width)/max(1, target.width)
+                dh = abs(rendered.height-target.height)/max(1, target.height)
+                if dw > 0.3 or dh > 0.3:
+                    continue
+                canvas_size = (max(rendered.width, target.width), max(rendered.height, target.height))
+                a, b = Image.new('L', canvas_size), Image.new('L', canvas_size)
+                a.paste(target, (0, 0)); b.paste(rendered, (0, 0))
+                # Slight blur tolerates rasterizer differences without claiming
+                # exact recovery of the original font.
+                a = a.filter(ImageFilter.GaussianBlur(0.6)); b = b.filter(ImageFilter.GaussianBlur(0.6))
+                overlap = sum(ImageChops.darker(a, b).getdata())
+                dice = 2*overlap / max(1, sum(a.getdata())+sum(b.getdata()))
+                score = dice - (dw+dh)*0.45 - abs(tracking)/size*0.02
+                item = {'score': score, 'fontFamily': family, 'fontPostScript': ps, 'fontWeight': weight,
+                        'fontSize': round(size / scale, 2), 'tracking': round(tracking/size*1000),
+                        'baseline': -bbox[1] / scale, 'bearing': bbox[0]/scale, 'advance': advance/scale,
+                        'widthError': dw, 'heightError': dh}
+                if candidate_best is None or score > candidate_best['score']:
+                    candidate_best = item
+        if candidate_best:
+            alternatives.append({'fontPostScript': ps, 'score': round(candidate_best['score'], 3)})
+            if best is None or candidate_best['score'] > best['score']:
+                best = candidate_best
+    if best:
+        best['candidates'] = sorted(alternatives, key=lambda a: -a['score'])[:3]
+    return best
 
 
 def infer_block(image, raw: dict) -> dict:
     width, height = image.size
-    x = clamp(float(raw.get("x", 0) or 0), 0, width - 1)
-    y = clamp(float(raw.get("y", 0) or 0), 0, height - 1)
-    box_width = clamp(float(raw.get("width", 2) or 2), 2, width - x)
-    box_height = clamp(float(raw.get("height", 2) or 2), 2, height - y)
-    box = (round(x), round(y), round(x + box_width), round(y + box_height))
-    text = str(raw.get("text") or "").strip()
-    cjk = has_cjk(text)
-    color, color_confidence = estimate_color(image, box)
-    weight = "normal"
-    # PostScript names are what Photoshop's textItem.font expects.  CJK
-    # candidates use 阿里巴巴普惠体 3.0 / 思源黑体 (free for commercial use);
-    # PingFang and other system fonts are avoided because their licenses do
-    # not cover commercial artwork.
-    if cjk:
-        family = "阿里巴巴普惠体 3.0"
-        postscript = "AlibabaPuHuiTi_3_55_Regular"
-        if len(text) <= 10 and box_height >= 36:
-            weight = "bold"
-            postscript = "AlibabaPuHuiTi_3_85_Bold"
-    else:
-        family = "Inter"
-        postscript = "Inter-Regular"
-        if box_height >= 32 and len(text) <= 18:
-            weight = "bold"
-            postscript = "Inter-Bold"
-    font_size = max(8, min(220, round(box_height * 0.9)))
-    # A line with little vertical padding is more likely to have a heavy face;
-    # keep the score modest because this is an estimate, not font recovery.
-    style_confidence = clamp(0.48 + min(0.2, color_confidence * 0.22) + (0.08 if cjk else 0), 0.35, 0.82)
     item = dict(raw)
-    item.update({
-        "fontFamily": family,
-        "fontPostScript": postscript,
-        "fontWeight": weight,
-        "fontSize": font_size,
-        "color": color,
-        "textAlign": "left",
-        "styleConfidence": round(style_confidence, 2),
-        "styleNote": "扁平图像推测，原字体不可从像素中完全恢复",
-    })
+    item.pop('textFit', None)
+    item.pop('fontCandidates', None)
+    x = clamp(float(raw.get('x', 0) or 0), 0, width-1)
+    y = clamp(float(raw.get('y', 0) or 0), 0, height-1)
+    w = clamp(float(raw.get('width', 2) or 2), 1, width-x)
+    h = clamp(float(raw.get('height', 2) or 2), 1, height-y)
+    box = (int(x), int(y), min(width, math.ceil(x+w)), min(height, math.ceil(y+h)))
+    text = str(raw.get('text') or '').strip()
+    cjk = has_cjk(text)
+    item.setdefault('fontFamily', '阿里巴巴普惠体 3.0' if cjk else 'Inter')
+    item.setdefault('fontPostScript', 'AlibabaPuHuiTi_3_55_Regular' if cjk else 'Inter-Regular')
+    item.setdefault('fontWeight', 'normal')
+    item.setdefault('fontSize', max(8, round(h)))
+    item.setdefault('textAlign', 'left')
+    item.setdefault('color', '#111827')
+    item['styleConfidence'] = 0.35
+    item['styleNote'] = '复杂背景或旋转文字保留识别估计，需校对'
+    # Axis-aligned pixel fitting must not flatten angled/multiline text.
+    if abs(float(raw.get('rotation') or 0)) > 2 or not text or '\n' in text:
+        return item
+    fg = pixel_foreground(image, box, raw.get('color'))
+    if not fg:
+        return item
+    item['color'] = fg['color']
+    item['colorConfidence'] = fg['confidence']
+    fit = fit_font(text, fg, cjk)
+    if not fit or fit['score'] < 0.55 or fit['widthError'] > 0.16 or fit['heightError'] > 0.16:
+        item['styleNote'] = '已从原图取色；字体匹配不足，保留识别字号并待校对'
+        return item
+    for key in ('fontFamily', 'fontPostScript', 'fontWeight', 'fontSize', 'tracking'):
+        item[key] = fit[key]
+    item['textFit'] = {'text': text, 'fontPostScript': fit['fontPostScript'], 'fontSize': fit['fontSize'],
+                       'tracking': fit['tracking'], 'baselineOffset': fg['top']-y+fit['baseline'],
+                       'originOffsetX': fg['left']-x-fit['bearing'], 'advance': fit['advance']}
+    item['fontCandidates'] = fit['candidates']
+    item['styleConfidence'] = round(min(0.94, fit['score']), 3)
+    item['styleNote'] = '已对照原图像素校准颜色、字体候选、字号、字距与基线；字体为近似匹配'
     return item
 
 
@@ -142,7 +258,11 @@ def main() -> int:
         if not isinstance(blocks, list):
             blocks = []
         inferred = [infer_block(image, raw) for raw in blocks[:200] if isinstance(raw, dict)]
-        print(json.dumps({"success": True, "width": image.width, "height": image.height, "blocks": inferred, "engine": "local-font-heuristic", "note": "字体/字号/颜色为视觉推测，生成前可逐行修改"}, ensure_ascii=False))
+        payload = {"success": True, "width": image.width, "height": image.height, "blocks": inferred, "engine": "source-pixel-font-fit", "note": "已对照原图校准，原字体为近似匹配；生成前可逐行修改"}
+        encoded = json.dumps(payload, ensure_ascii=False)
+        if getattr(args, 'result_output', None):
+            Path(args.result_output).write_text(encoded, encoding='utf-8')
+        print(encoded)
         return 0
     except Exception as exc:  # pragma: no cover
         print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))

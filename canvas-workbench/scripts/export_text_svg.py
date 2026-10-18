@@ -20,6 +20,7 @@ import base64
 import io
 import json
 import re
+import sys
 from pathlib import Path
 
 try:
@@ -31,8 +32,6 @@ except NameError:
     pass
 
 
-import sys
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from export_text_psd import normalize_text, parse_color  # noqa: E402
 
@@ -43,7 +42,7 @@ def font_attributes(postscript: str) -> tuple[str, str, str]:
     weight = "400"
     style = "normal"
     families: list[str] = []
-    m = re.fullmatch(r"AlibabaPuHuiTi_3_(\d{2,3})_(Regular|Bold|Medium|Light|Heavy)", ps)
+    m = re.fullmatch(r"AlibabaPuHuiTi_3_(\d{2,3})_(Regular|Bold|Medium|Light|Heavy|ExtraBold|Black|Thin)", ps)
     if m:
         families = ["Alibaba PuHuiTi 3.0", "阿里巴巴普惠体 3.0"]
         weight = {"35": "250", "45": "300", "55": "400", "65": "500", "85": "700", "95": "800", "105": "900", "115": "900"}.get(m.group(1), "400")
@@ -133,20 +132,33 @@ def main() -> int:
             y = max(0, float(raw.get("y", 0) or 0))
             box_width = max(2, float(raw.get("width", 240) or 240))
             box_height = max(2, float(raw.get("height", 48) or 48))
-            size = max(8, min(220, float(raw.get("fontSize") or box_height * 0.92 or box_height * 0.92)))
+            size = max(8, min(2000, float(raw.get("fontSize") or box_height * 0.92 or box_height * 0.92)))
             family, weight, style = font_attributes(raw.get("fontPostScript") or "")
             r, g, b = parse_color(raw.get("color"))
             align = str(raw.get("textAlign") or "left").lower()
             anchor = {"center": "middle", "right": "end", "end": "end"}.get(align, "start")
-            # 与 PSD 预览层一致：文本框内左上起排（PIL draw.text((1, 0))）。
-            # SVG 用基线定位：ascent ≈ 0.8em，再加少量视觉居中偏移。
-            tx = x + 1 if anchor == "start" else x + box_width / 2 if anchor == "middle" else x + box_width - 1
-            baseline = y + size * 0.82
-            rotation = float(raw.get("rotation") or 0)
-            transform = f' transform="rotate({rotation:.2f} {tx:.1f} {baseline:.1f})"' if abs(rotation) > 0.05 else ""
+            geometry = raw.get('geometry') or {}
+            transform_values = geometry.get('transform')
+            if isinstance(transform_values, list) and len(transform_values) == 6:
+                size = float(geometry.get('fontSize') or size)
+                matrix = ' '.join(f'{float(v):.6f}' for v in transform_values)
+                tx, baseline = 0, 0
+                transform = f' transform="matrix({matrix})"'
+            else:
+                # Standalone callers can supply the same fitted parameters.
+                fit = raw.get('textFit') or {}
+                fitted = (fit.get('text') == text and fit.get('fontPostScript') == raw.get('fontPostScript')
+                          and abs(float(fit.get('fontSize') or 0)-size) < .01
+                          and abs(float(fit.get('tracking') or 0)-float(raw.get('tracking') or 0)) < .01)
+                shift = .5 if anchor == 'middle' else 1 if anchor == 'end' else 0
+                tx = x + (float(fit['originOffsetX']) + float(fit['advance'])*shift if fitted else box_width*shift)
+                baseline = y + (float(fit['baselineOffset']) if fitted else size)
+                rotation = float(raw.get('rotation') or 0)
+                transform = f' transform="rotate({rotation:.6f} {tx:.6f} {baseline:.6f})"' if abs(rotation) > .05 else ''
+            tracking = round(float(raw.get('tracking') or 0)) * size / 1000
             parts.append(
-                f'<text id="dsh-text-{index + 1}" x="{tx:.1f}" y="{baseline:.1f}" '
-                f'font-family="{escape_xml(family)}" font-size="{size:.1f}" font-weight="{weight}" font-style="{style}" '
+                f'<text id="dsh-text-{index + 1}" x="{tx:.6f}" y="{baseline:.6f}" '
+                f'font-family="{escape_xml(family)}" font-size="{size:.6f}" letter-spacing="{tracking:.6f}" font-weight="{weight}" font-style="{style}" '
                 f'fill="#{r:02x}{g:02x}{b:02x}" text-anchor="{anchor}" xml:space="preserve"{transform}>{escape_xml(text)}</text>'
             )
             visible_count += 1
@@ -165,7 +177,11 @@ def main() -> int:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(svg, encoding="utf-8")
-        print(json.dumps({"success": True, "width": width, "height": height, "texts": visible_count, "cleanBackground": has_clean, "output": str(output)}, ensure_ascii=False))
+        payload = {"success": True, "width": width, "height": height, "texts": visible_count, "cleanBackground": has_clean, "output": str(output)}
+        encoded_result = json.dumps(payload, ensure_ascii=False)
+        if getattr(args, 'result_output', None):
+            Path(args.result_output).write_text(encoded_result, encoding='utf-8')
+        print(encoded_result)
         return 0
     except Exception as exc:  # pragma: no cover
         print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))

@@ -222,7 +222,7 @@
                 ),
                 React.createElement('textarea', { value: item.text || '', disabled: !!data.busy, placeholder: '输入要保留或替换的文字', onChange: (event) => update(index, { text: event.target.value }) }),
                 React.createElement('div', { className: 'dsh-text-rebuild-row-controls' },
-                  React.createElement('label', null, '字号', React.createElement('input', { type: 'number', min: 8, max: 220, value: item.fontSize || 24, disabled: !!data.busy, onChange: (event) => update(index, { fontSize: Number(event.target.value) || 24 }) })),
+                  React.createElement('label', null, '字号', React.createElement('input', { type: 'number', min: 8, max: 2000, value: item.fontSize || 24, disabled: !!data.busy, onChange: (event) => update(index, { fontSize: Number(event.target.value) || 24 }) })),
                   React.createElement('label', null, '字体', React.createElement('select', { value: textRebuildFontValue(item), disabled: !!data.busy, onChange: (event) => update(index, { fontPostScript: event.target.value, fontFamily: event.target.value }) },
                     TEXT_REBUILD_FONTS.map((group) => React.createElement('optgroup', { key: group.group, label: group.group },
                       group.items.map((font) => React.createElement('option', { key: font.ps, value: font.ps }, font.label)))
