@@ -7,6 +7,7 @@ import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveBundledPnpm, profileDirectoryFromPluginPath, updaterFailureSummary, updaterFallback } from './self-update-runtime.js';
 import { dshHome } from './image-engine-settings.js';
 
 const SELF_PATH = fileURLToPath(import.meta.url);
@@ -35,7 +36,7 @@ export async function installContext() {
   if (index < 0) return { mode: 'source' };
   const installRoot = self.slice(0, index);
   if (installRoot.endsWith('/@local')) return { mode: 'local' };
-  const derived = dirname(installRoot);
+  const derived = profileDirectoryFromPluginPath(self);
   if (await profileDeclaresPlugin(derived)) return { mode: 'profile', profileDir: derived };
   // 兜底:扫描 profiles 下声明了 canvas-workbench 依赖的目录(可能有多处,取第一个)。
   try {
@@ -130,6 +131,12 @@ export async function performSelfUpdate() {
   if (!check.latest) return { ok: false, error: '读取最新版本失败:' + check.error };
   if (!check.hasUpdate) return { ok: true, upToDate: true, current: check.current };
   const { profileDir } = context;
+  // Resolve before writing profile configuration. Missing runtime tools must
+  // fail without leaving dependency/allowlist edits behind.
+  const exe = process.execPath;
+  let pnpm;
+  try { pnpm = resolveBundledPnpm(); }
+  catch (error) { return { ok: false, error: String(error.message || error) }; }
 
   // 1) 取目标版本的 integrity 与 tarball
   let manifest = null;
@@ -137,7 +144,6 @@ export async function performSelfUpdate() {
     try { manifest = await fetchJson(base + '/' + PACKAGE_NAME + '/' + check.latest); if (manifest && manifest.dist) break; } catch {}
   }
   if (!manifest || !manifest.dist) return { ok: false, error: '读取版本信息失败' };
-  const integrity = String(manifest.dist.integrity || '');
 
   // 2) 两处配置升级(package.json 依赖 / pnpm-workspace 白名单)。
   // 不再手工改写 lockfile:那会把 lock 里 canvas-workbench 的版本条目换字了事,
@@ -166,9 +172,6 @@ export async function performSelfUpdate() {
   }
 
   // 3) 用应用自带 pnpm 正常安装(完整依赖解析)。
-  const exe = process.execPath;
-  const resources = process.resourcesPath || join(dirname(exe), '..', 'resources');
-  const pnpm = join(resources, 'runtime', 'pnpm', 'bin', 'pnpm.mjs');
   const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
   const runPnpm = (args) => runUpdater(exe, [pnpm, ...args, '--dir', profileDir], env);
   let result = await runPnpm(['add', PACKAGE_NAME + '@' + check.latest]);
@@ -180,8 +183,8 @@ export async function performSelfUpdate() {
   }
   const logTail = String(result.log || '').split(/\r?\n/).filter(Boolean).slice(-6).join(' | ');
   if (!result.ok) {
-    const fallback = `操作失败(可能文件被占用)。请完全退出 DSH 后在 PowerShell 运行:\n$env:ELECTRON_RUN_AS_NODE=1\n& "${exe}" "${pnpm}" add ${PACKAGE_NAME}@${check.latest} --dir "${profileDir}"`;
-    return { ok: false, error: (result.error || logTail || '安装器退出码 ' + result.code) + '\n' + fallback, log: result.log };
+    const fallback = updaterFallback({ exe, pnpm, version: check.latest, profileDir });
+    return { ok: false, error: updaterFailureSummary(result) + '\n' + fallback, log: result.log };
   }
 
   // 4) 装后依赖自检:宿主加载插件不装 npm dependencies,任何缺失都会让整个
@@ -197,5 +200,5 @@ export async function performSelfUpdate() {
     }
   } catch {}
   const repairNote = repaired.length ? ';已自动补装缺失依赖: ' + repaired.join(', ') : '';
-  return { ok: true, installed: check.latest, restartRequired: true, log: logTail + repairNote };  return { ok: true, installed: check.latest, restartRequired: true, log: logTail };
+  return { ok: true, installed: check.latest, restartRequired: true, log: logTail + repairNote };
 }
