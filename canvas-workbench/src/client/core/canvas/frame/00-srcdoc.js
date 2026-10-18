@@ -71,7 +71,44 @@ html,body,#ex-root,#ex-root>div,.excalidraw,.excalidraw-container{margin:0;width
 /* 隐藏 Excalidraw 内置素材库入口（默认侧栏触发按钮），改用插件自有素材库 */
 .excalidraw .default-sidebar-trigger{display:none!important}
 .excalidraw .layer-ui__wrapper__footer-left .sidebar-trigger{display:none!important}
-</style></head><body><div id="ex-root"></div><div class="dsh-tip">拖拽=移动 · 滚轮=缩放 · 图片可移动/缩放</div><script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script><script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script><script src="https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.17.6/dist/excalidraw.production.min.js"></script><script>(function(){var lastRuntimeError="";var post=function(m){try{window.parent.postMessage(m,"*")}catch(e){}};window.addEventListener("error",function(ev){lastRuntimeError="画布运行错误: "+String(ev&&ev.message||ev&&ev.error||"未知错误");post({type:"error",message:lastRuntimeError})});window.addEventListener("unhandledrejection",function(ev){lastRuntimeError="画布异步错误: "+String(ev&&ev.reason&&ev.reason.message||"未知错误");post({type:"error",message:lastRuntimeError})});var root=window.ReactDOM.createRoot(document.getElementById("ex-root"));var api=null,ready=false,insertCount=0,insertChain=Promise.resolve(),requestSceneLoad=null,hydrating=false,expectedElements=0;var systemDark=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches;var canvasDefaultBackground=systemDark?"#15171c":"#f7f8fa";var empty={viewBackgroundColor:canvasDefaultBackground};var themeMedia=window.matchMedia?window.matchMedia("(prefers-color-scheme: dark)"):null;var syncSystemTheme=function(ev){var nextDark=!!(ev&&ev.matches);if(nextDark===systemDark)return;var previous=canvasDefaultBackground;systemDark=nextDark;canvasDefaultBackground=systemDark?"#15171c":"#f7f8fa";if(api&&typeof api.getAppState==="function"&&typeof api.updateScene==="function"&&String(api.getAppState().viewBackgroundColor||"")===previous)api.updateScene({appState:Object.assign({},api.getAppState(),{viewBackgroundColor:canvasDefaultBackground}),commitToHistory:false});};if(themeMedia){if(typeof themeMedia.addEventListener==="function")themeMedia.addEventListener("change",syncSystemTheme);else if(typeof themeMedia.addListener==="function")themeMedia.addListener(syncSystemTheme);}function fileObject(fl){var f={};if(fl&&typeof fl.forEach==="function"){fl.forEach(function(v,k){f[k]=v})}else if(fl&&typeof fl==="object"){Object.keys(fl).forEach(function(k){f[k]=fl[k]})}return f}function serialize(el,st,fl){var elements=el||[],used={};elements.forEach(function(item){if(item&&item.type==="image"&&!item.isDeleted&&item.fileId)used[item.fileId]=true;});var f={},src=fileObject(fl);Object.keys(src).forEach(function(k){if(!used[k])return;var v=src[k];if(v&&v.dataURL)f[k]={id:v.id||k,dataURL:v.dataURL,mimeType:v.mimeType,created:v.created||Date.now(),lastRetrieved:v.lastRetrieved};});return {elements:elements,appState:Object.assign({},st||empty),files:f}};function App(){return window.React.createElement(window.ExcalidrawLib.Excalidraw,{excalidrawAPI:function(a){api=a;if(!ready){ready=true;post({type:"ready"})}},initialData:{elements:[],appState:empty,files:{}},onChange:(function(){/* 性能 v2：600ms 防抖 + files 增量——changed 只带 usedFileIds 与新增/变化文件，父层按 previous.files 合并；loaded/snapshot-request 仍发全量 */var t=0,la=null,sent={};function sig(f){return (f&&f.dataURL?f.dataURL.length:0)+':'+String(f&&f.mimeType||'')}function markSent(f){Object.keys(f||{}).forEach(function(k){sent[k]=sig(f[k])})}window.__dshSentFilesReset=function(f){sent={};markSent(f)};window.__dshCancelPendingChanged=function(){if(t){clearTimeout(t);t=0;}la=null};return function(el,st,fl){/* 水合守卫：requestSceneLoad 渐进恢复场景时 onChange 会以"部分场景"触发，若此时发 changed 会把父层完整文件表砍成部分——水合期间一律忽略并取消挂起 */if(hydrating){if(t){clearTimeout(t);t=0;}la=null;return;}la=[el,st,fl];if(!t){t=setTimeout(function(){t=0;var a=la;la=null;if(!a)return;try{var s=serialize(a[0],a[1],api&&api.getFiles?api.getFiles():a[2]);var ids=[],delta={};Object.keys(s.files||{}).forEach(function(k){var v=s.files[k];ids.push(k);if(sent[k]!==sig(v))delta[k]=v});s.usedFileIds=ids;s.files=delta;post({type:"changed",snapshot:s,token:window.__dshSceneToken||""});markSent(delta)}catch(e){}},600)}}})(),viewModeEnabled:false,zenModeEnabled:false,langCode:"zh-CN"})}  var useState=window.React.useState,useEffect=window.React.useEffect;
+</style></head><body><div id="ex-root"></div><div class="dsh-tip">拖拽=移动 · 滚轮=缩放 · 图片可移动/缩放</div><script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script><script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script><script src="https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.17.6/dist/excalidraw.production.min.js"></script><script>(function(){var lastRuntimeError="";var post=function(m){try{window.parent.postMessage(m,"*")}catch(e){}};window.addEventListener("error",function(ev){lastRuntimeError="画布运行错误: "+String(ev&&ev.message||ev&&ev.error||"未知错误");post({type:"error",message:lastRuntimeError})});window.addEventListener("unhandledrejection",function(ev){lastRuntimeError="画布异步错误: "+String(ev&&ev.reason&&ev.reason.message||"未知错误");post({type:"error",message:lastRuntimeError})});var root=window.ReactDOM.createRoot(document.getElementById("ex-root"));var api=null,ready=false,insertCount=0,insertChain=Promise.resolve(),requestSceneLoad=null,hydrating=false,expectedElements=0;var systemDark=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches;var canvasDefaultBackground=systemDark?"#15171c":"#f7f8fa";var empty={viewBackgroundColor:canvasDefaultBackground};var themeMedia=window.matchMedia?window.matchMedia("(prefers-color-scheme: dark)"):null;var syncSystemTheme=function(ev){var nextDark=!!(ev&&ev.matches);if(nextDark===systemDark)return;var previous=canvasDefaultBackground;systemDark=nextDark;canvasDefaultBackground=systemDark?"#15171c":"#f7f8fa";if(api&&typeof api.getAppState==="function"&&typeof api.updateScene==="function"&&String(api.getAppState().viewBackgroundColor||"")===previous)api.updateScene({appState:Object.assign({},api.getAppState(),{viewBackgroundColor:canvasDefaultBackground}),commitToHistory:false});};if(themeMedia){if(typeof themeMedia.addEventListener==="function")themeMedia.addEventListener("change",syncSystemTheme);else if(typeof themeMedia.addListener==="function")themeMedia.addListener(syncSystemTheme);}function fileObject(fl){var f={};if(fl&&typeof fl.forEach==="function"){fl.forEach(function(v,k){f[k]=v})}else if(fl&&typeof fl==="object"){Object.keys(fl).forEach(function(k){f[k]=fl[k]})}return f}function serialize(el,st,fl){var elements=el||[],used={};elements.forEach(function(item){if(item&&item.type==="image"&&!item.isDeleted&&item.fileId)used[item.fileId]=true;});var f={},src=fileObject(fl);Object.keys(src).forEach(function(k){if(!used[k])return;var v=src[k];if(v&&v.dataURL)f[k]={id:v.id||k,dataURL:v.dataURL,mimeType:v.mimeType,created:v.created||Date.now(),lastRetrieved:v.lastRetrieved};});return {elements:elements,appState:Object.assign({},st||empty),files:f}};// Keep the emitter outside Main: overlay label updates re-render Main during a drag.
+  // Recreating its timer or file cache on each render would resend every image.
+
+  var canvasChangeTimer=0,pendingCanvasChange=null,sentCanvasFiles={};
+  function cancelCanvasChange(){
+    if(canvasChangeTimer)clearTimeout(canvasChangeTimer);
+    canvasChangeTimer=0;pendingCanvasChange=null;
+  }
+  function resetSentCanvasFiles(files){
+    sentCanvasFiles={};
+    Object.keys(files||{}).forEach(function(id){var f=files[id];if(f&&f.dataURL)sentCanvasFiles[id]={dataURL:f.dataURL,mimeType:f.mimeType};});
+  }
+  function flushCanvasChange(){
+    if(canvasChangeTimer)clearTimeout(canvasChangeTimer);
+    canvasChangeTimer=0;
+    var change=pendingCanvasChange;pendingCanvasChange=null;
+    if(!change||hydrating||change.token!==(window.__dshSceneToken||""))return;
+    var snapshot=serialize(change.elements,change.appState,api&&api.getFiles?api.getFiles():change.files);
+    var ids=Object.keys(snapshot.files),delta={},nextSent={};
+    ids.forEach(function(id){
+      var file=snapshot.files[id],previous=sentCanvasFiles[id];
+      // Compare content, not just length: same-sized replacements must reach the parent.
+      if(!previous||previous.dataURL!==file.dataURL||previous.mimeType!==file.mimeType)delta[id]=file;
+      nextSent[id]={dataURL:file.dataURL,mimeType:file.mimeType};
+    });
+    snapshot.usedFileIds=ids;snapshot.files=delta;
+    post({type:"changed",snapshot:snapshot,token:change.token});
+    sentCanvasFiles=nextSent;
+  }
+  function scheduleCanvasChange(elements,appState,files){
+    if(hydrating){cancelCanvasChange();return;}
+    pendingCanvasChange={elements:elements,appState:appState,files:files,token:window.__dshSceneToken||""};
+    // At most one lightweight scene update per 160ms; always keep the final position.
+    if(!canvasChangeTimer)canvasChangeTimer=setTimeout(flushCanvasChange,160);
+  }
+  window.__dshSentFilesReset=resetSentCanvasFiles;
+  window.__dshCancelPendingChanged=cancelCanvasChange;
+  var useState=window.React.useState,useEffect=window.React.useEffect;
   var updateImageEditorState=null;
   // 模块级桥接：Main 挂载后回填。add-image 的捕获阶段监听器在 Main 之外，
   // 之前这个变量被 var 声明在 Main 内部，导致外面永远拿到 undefined，
@@ -330,6 +367,8 @@ function Main(){
     window.React.useEffect(function(){setMoreOpen(false);},[toolbar]);
     var lr=window.React.useRef("");
     var tr=window.React.useRef("");
+    var canvasNodeRef=window.React.useRef(null);
+    var canvasChangeHandlerRef=window.React.useRef(null);
     var updateLabels=function(elements,appState){var next=imageNameLabels(elements,appState),signature=next.map(function(item){return [item.id,item.name,item.displayName,item.left,item.top,item.width,item.fontSize,item.height,item.selected].join(":");}).join("|");if(signature!==lr.current){lr.current=signature;setLabels(next);}var pn=pendingOverlays(elements,appState),ps=pn.map(function(p){return [p.id,p.left,p.top,p.width,p.height,p.title,p.subtitle].join(":");}).join("|");if(ps!==pr.current){pr.current=ps;setPending(pn);}};
     var updateToolbar=function(elements,appState){var next=selectionToolbarData(elements,appState),signature=next?[next.ids.join("|"),next.left,next.top,next.singleName].join(":"):"";if(signature!==tr.current){tr.current=signature;setToolbar(next);}};
     requestSceneLoad=function(saved){
@@ -350,7 +389,11 @@ function Main(){
       targetAppState.openDialog=null;
       targetAppState.contextMenu=null;
       targetAppState.showWelcomeScreen=false;
+      // Tool/pan modes are transient interaction state, not project content.
+      targetAppState.activeTool={type:"selection",customType:null,locked:false,lastActiveTool:null};
+      targetAppState.viewModeEnabled=false;
       targetAppState.collaborators=new Map();
+      cancelCanvasChange();
       hydrating=true;expectedElements=elements.filter(function(item){return item&&!item.isDeleted;}).length;
       if(!api)throw new Error("画布尚未就绪");
       if(typeof api.resetScene==="function")api.resetScene();else api.updateScene({elements:[],appState:empty});
@@ -368,10 +411,14 @@ function Main(){
         },80);
       },0);
     };
-    document.addEventListener('click',function(e){
+    // Install once per mount. Registering inside the render body accumulated a
+    // capture handler on every label/selection update and slowed all later clicks.
+    useEffect(function(){
+    var onMaterialMenuClick=function(e){
       try{
         var node=e.target,hit=null;
-        while(node&&node!==document){var t=(node.textContent||'').trim();if(t==='添加到素材库中'||t==='添加到素材库'){hit=node;break;}node=node.parentNode;}
+        // Never read body/html textContent: srcdoc contains the vendor scripts.
+        while(node&&node!==document&&node!==document.body&&node!==document.documentElement){var t=(node.textContent||'').trim();if(t==='添加到素材库中'||t==='添加到素材库'){hit=node;break;}node=node.parentNode;}
         if(!hit)return;
         e.preventDefault();e.stopPropagation();if(typeof e.stopImmediatePropagation==='function')e.stopImmediatePropagation();
         var sel=(api&&api.getSceneElements?api.getSceneElements():[]).filter(function(x){return x&&x.type==='image'&&!x.isDeleted&&api.getAppState&&api.getAppState().selectedElementIds&&api.getAppState().selectedElementIds[x.id];});
@@ -379,11 +426,15 @@ function Main(){
         var payload=sel.map(function(x){var f=files[x.fileId];return f&&f.dataURL?{name:(x.customData&&x.customData.dshFileName)||('素材-'+String(x.id).slice(-6)+'.png'),dataURL:f.dataURL}:null;}).filter(Boolean);
         if(payload.length){post({type:'save-to-materials',items:payload,source:'context-menu'});if(api&&api.updateScene)api.updateScene({appState:Object.assign({},api.getAppState()||empty,{openMenu:null,contextMenu:null})});}
       }catch(err){}
-    },true);
+    };
+    document.addEventListener('click',onMaterialMenuClick,true);
+    return function(){document.removeEventListener('click',onMaterialMenuClick,true);};
+    },[]);
     var onCanvasChange=function(el,st,fl){
-      var snapshot=serialize(el,st,api&&api.getFiles?api.getFiles():fl),live=(el||[]).filter(function(item){return item&&!item.isDeleted;}).length;updateLabels(el,st);updateToolbar(el,st);
-      if(hydrating){if(live<expectedElements)return;hydrating=false;post({type:"loaded",snapshot:snapshot});if(window.__dshSentFilesReset)window.__dshSentFilesReset(snapshot.files||{});}
-      post({type:"changed",snapshot:snapshot,token:window.__dshSceneToken||""});
+      updateLabels(el,st);updateToolbar(el,st);
+      // requestSceneLoad emits loaded only after the complete scene has been restored.
+      // Never serialize or publish a partial scene from an intermediate onChange.
+      scheduleCanvasChange(el,st,fl);
     };
     var commitName=function(){if(!editing)return;var next=renameCanvasImage(editing.id,editing.value);setEditing(null);if(next)post({type:"name-edited",name:next});};
     var openImageEditor=function(mode,id){if(!api)return;var target=(api.getSceneElements()||[]).find(function(item){return item&&item.id===id&&item.type==="image"&&!item.isDeleted;}),files=fileObject(api.getFiles?api.getFiles():{}),file=target&&files[target.fileId];if(!target||!file||!file.dataURL){post({type:"error",message:"当前图片数据不可用"});return;}var custom=target.customData||{},item={mode:mode,id:id,fileId:target.fileId,name:custom.dshFileName||("画布图片-"+String(id).slice(-6)+".png"),dataURL:file.dataURL,width:0,height:0,sourcePath:custom.dshSourcePath||"",editRootPath:custom.dshEditRootPath||"",editHistory:Array.isArray(custom.dshEditHistory)?custom.dshEditHistory:[],editDepth:Number(custom.dshEditDepth||0),busy:false,error:""};setImageEditor(item);var probe=new Image();probe.onload=function(){setImageEditor(function(current){return current&&current.id===id?Object.assign({},current,{width:probe.naturalWidth||1,height:probe.naturalHeight||1}):current;});};probe.src=file.dataURL;};
@@ -401,8 +452,10 @@ function Main(){
     var sendSelectionToChat=function(ids){if(!api)return;var wanted=new Set(Array.isArray(ids)?ids:[]),files=fileObject(api.getFiles?api.getFiles():{}),images=(api.getSceneElements?api.getSceneElements():[]).filter(function(item){return item&&item.type==="image"&&!item.isDeleted&&wanted.has(item.id);}).map(function(item,index){var file=files[item.fileId],custom=item.customData||{};return file&&file.dataURL?{dataURL:file.dataURL,name:custom.dshFileName||("canvas-selection-"+(index+1)+"-"+String(item.id).slice(-6)+".png"),width:Math.max(1,Number(item.width||0)),height:Math.max(1,Number(item.height||0)),sourceKind:String(custom.dshSourceKind||"image")} : null;}).filter(Boolean);if(!images.length){post({type:"error",message:"所选图片暂时无法读取，请稍后重试"});return;}var batchId="chat_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,7);images.forEach(function(image,index){setTimeout(function(){post({type:"request-send-selection-item",batchId:batchId,index:index+1,total:images.length,image:image});},index*90);});};
     var requestBackgroundRemoval=function(id){if(!api)return;var target=(api.getSceneElements()||[]).find(function(item){return item&&item.id===id&&item.type==="image"&&!item.isDeleted;}),files=fileObject(api.getFiles?api.getFiles():{}),file=target&&files[target.fileId];if(!target||!file||!file.dataURL){post({type:"error",message:"当前图片数据不可用"});return;}try{var custom=target.customData||{},job=createEditPlaceholder({id:id},"本地 rembg · birefnet-general-lite · 首次使用自动准备"),name=custom.dshFileName||("画布图片-"+String(id).slice(-6)+".png");post({type:"request-remove-background",requestId:job.requestId,placeholderId:job.placeholderId,elementId:id,fileId:target.fileId,name:name,imageData:file.dataURL,imagePath:custom.dshSourcePath||""});}catch(err){post({type:"error",message:String(err&&err.message||err)});}};
     var submitImageEdit=function(payload){if(!imageEditor||imageEditor.busy)return;try{var job=createEditPlaceholder(imageEditor),request=Object.assign({},imageEditor);setImageEditor(null);var posEl=(api&&api.getSceneElements?api.getSceneElements():[]).find(function(item){return item&&item.id===request.id;})||null;post({type:"request-image-edit",requestId:job.requestId,placeholderId:job.placeholderId,elementId:request.id,fileId:request.fileId,name:request.name,imageData:request.dataURL,imagePath:request.sourcePath,editRootPath:request.editRootPath,editHistory:request.editHistory,editDepth:request.editDepth,mode:request.mode,prompt:payload.prompt,maskData:payload.maskData,width:request.width,height:request.height,atX:posEl?posEl.x:undefined,atY:posEl?posEl.y:undefined});}catch(err){setImageEditor(Object.assign({},imageEditor,{busy:false,error:String(err&&err.message||err)}));}};
+    canvasChangeHandlerRef.current=onCanvasChange;
+    if(!canvasNodeRef.current)canvasNodeRef.current=window.React.createElement(window.ExcalidrawLib.Excalidraw,{excalidrawAPI:function(a){api=a;if(!ready){ready=true;post({type:"ready"})}},initialData:{elements:[],appState:empty,files:{}},onChange:function(el,st,fl){if(canvasChangeHandlerRef.current)canvasChangeHandlerRef.current(el,st,fl);},viewModeEnabled:false,zenModeEnabled:false,langCode:"zh-CN"});
     return window.React.createElement('div',{style:{position:'absolute',inset:0}},
-      window.React.createElement('div',{style:{position:'absolute',inset:0}},window.React.createElement(window.ExcalidrawLib.Excalidraw,{excalidrawAPI:function(a){api=a;if(!ready){ready=true;post({type:"ready"})}},initialData:{elements:[],appState:empty,files:{}},onChange:onCanvasChange,viewModeEnabled:false,zenModeEnabled:false,langCode:"zh-CN"})),
+      window.React.createElement('div',{style:{position:'absolute',inset:0}},canvasNodeRef.current),
       window.React.createElement('div',{className:'dsh-name-layer'},pending.map(function(p){var fs=Math.max(9,Math.min(20,p.width/13)),compact=p.height<fs*7||p.width<fs*9,prog=pendingProgress[p.id]||null,pct=prog&&isFinite(Number(prog.percent))?Math.max(0,Math.min(100,Math.round(Number(prog.percent)))):null,elapsed=p.startedAt?Math.max(0,Math.round((Date.now()-p.startedAt)/1000)):0,mm=Math.floor(elapsed/60),ss=String(elapsed%60).padStart(2,'0'),sub=prog&&prog.message?String(prog.message):p.subtitle;return window.React.createElement('div',{key:'pend_'+p.id,className:'dsh-pending',style:{left:p.left+'px',top:p.top+'px',width:p.width+'px',height:p.height+'px',fontSize:fs+'px'}},compact?null:window.React.createElement('div',{className:'dsh-pending-ring'}),pct!==null&&!compact?window.React.createElement('div',{className:'dsh-pending-percent'},pct+'%'):null,window.React.createElement('div',{className:'dsh-pending-title'},p.title),compact||!sub?null:window.React.createElement('div',{className:'dsh-pending-sub'},sub),compact?null:window.React.createElement('div',{className:'dsh-pending-time'},'已用 '+mm+':'+ss),window.React.createElement('div',{className:'dsh-pending-bar'},pct!==null?window.React.createElement('b',{style:{width:pct+'%'}}):window.React.createElement('i',null)));}),labels.filter(function(item){return (editing&&editing.id===item.id)||item.selected||item.tag||item.fmt;}).map(function(item){var labelStyle={left:item.left+'px',top:item.top+'px',width:item.width+'px',minWidth:item.minWidth+'px',maxWidth:item.maxWidth+'px',height:item.height+'px',padding:'3px '+item.paddingX+'px',fontSize:item.fontSize+'px',lineHeight:Math.max(10,item.height-6)+'px',borderRadius:Math.max(4,Math.round(6*item.fontSize/11))+'px',transform:'translateY(-'+item.offsetY+'px)'};return editing&&editing.id===item.id
         ?window.React.createElement('input',{key:item.id,className:'dsh-image-name-input',style:labelStyle,autoFocus:true,value:editing.value,spellCheck:false,onPointerDown:function(e){e.stopPropagation()},onChange:function(e){setEditing({id:item.id,value:e.target.value})},onBlur:commitName,onKeyDown:function(e){e.stopPropagation();if(e.key==='Enter')commitName();else if(e.key==='Escape')setEditing(null)}})
         :item.selected
@@ -558,6 +611,7 @@ window.addEventListener("message",function(e){
   if(e.source!==window.parent)return;
   var d=e.data||{};
   if(d.type==="snapshot-request"){
+    flushCanvasChange();
     e.stopImmediatePropagation();
     try{post({type:"snapshot-response",requestId:d.requestId,snapshot:api?serialize(api.getSceneElements()||[],api.getAppState()||empty,api.getFiles()||new Map()):null});}
     catch(err){post({type:"snapshot-response",requestId:d.requestId,snapshot:null});}
