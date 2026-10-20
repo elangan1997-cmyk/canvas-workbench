@@ -416,6 +416,7 @@ function Main(){
     useEffect(function(){
     var onMaterialMenuClick=function(e){
       try{
+        if(onObjectPngMenuClick(e))return;
         var node=e.target,hit=null;
         // Never read body/html textContent: srcdoc contains the vendor scripts.
         while(node&&node!==document&&node!==document.body&&node!==document.documentElement){var t=(node.textContent||'').trim();if(t==='添加到素材库中'||t==='添加到素材库'){hit=node;break;}node=node.parentNode;}
@@ -547,63 +548,138 @@ window.addEventListener("paste",function(e){
     for(var i=0;i<files.length;i+=1){var file=files[i],prepared=await prepareExternalImage(file);addImageDataURL(prepared.dataURL,prepared.dm,{name:file.name||("剪贴板图片-"+(i+1)+".png"),path:"",externalDrop:true});}
   }).catch(function(err){post({type:"error",message:"粘贴图片失败: "+String(err&&err.message||err)});});
 },true);
-// ---- 复制画布图片 = 原图字节 ----
-// Excalidraw 自带的 Cmd+C/右键复制写进剪贴板的是"画布渲染导出图"——带
-// 元素边框/画布背景样式,与原图不一致(设计交付贴到微信/PS 会多出白边)。
-// 这里在 copy 事件捕获阶段**附加**写原图(不阻断原生链路,画布内 Cmd+C/V
-// 复制元素不受影响):选中恰好一张带本地源文件的图片时,取源文件原始字节
-// 写入剪贴板(PNG 原字节直写,JPEG/WebP 经画布转 PNG)。其余情况(多选/
-// 非图片/无源文件)完全不动作,保持 Excalidraw 原生复制行为。
-var ORIGINAL_IMAGE_RE=/\.(?:png|jpe?g|webp|gif|avif|bmp)$/i;
-function blobToPngBlob(blob){
+// ---- Object PNG: shared by selected export and clipboard ----
+function selectedPngObjects(){
+  if(!api)return [];
+  var ids=(api.getAppState()||{}).selectedElementIds||{};
+  return (api.getSceneElements()||[]).filter(function(el){return el&&!el.isDeleted&&el.id!=="dsh_theme_backdrop"&&ids[el.id];});
+}
+function pngBlobDataURL(blob){
+  return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(reader.result);};reader.onerror=function(){reject(new Error("读取 PNG 失败"));};reader.readAsDataURL(blob);});
+}
+function svgLengthPixels(value){
+  var match=String(value||"").trim().match(/^([+]?(?:[0-9]+(?:[.][0-9]*)?|[.][0-9]+)(?:e[+-]?[0-9]+)?)(px|pt|pc|mm|cm|in|q)?$/i);
+  if(!match)return 0;
+  var units={px:1,pt:96/72,pc:16,mm:96/25.4,cm:96/2.54,in:96,q:96/101.6};
+  return Number(match[1])*(units[String(match[2]||"px").toLowerCase()]||1);
+}
+async function prepareSvgPng(blob){
+  var doc=new DOMParser().parseFromString(await blob.text(),"image/svg+xml"),root=doc.documentElement;
+  if(!root||root.localName!=="svg"||doc.querySelector("parsererror"))throw new Error("SVG 文件解析失败");
+  var box=String(root.getAttribute("viewBox")||"").trim().split(/[\\s,]+/).map(Number);
+  var hasBox=box.length===4&&box.every(Number.isFinite)&&box[2]>0&&box[3]>0;
+  var w=svgLengthPixels(root.getAttribute("width")),h=svgLengthPixels(root.getAttribute("height"));
+  var ratio=hasBox?box[2]/box[3]:2;
+  if(!(w>0))w=h>0?h*ratio:(hasBox?box[2]:300);
+  if(!(h>0))h=hasBox?w/ratio:150;
+  // Render vector geometry directly at the target resolution. Resizing a PNG
+  // decoded from a viewBox-only SVG would just enlarge its 64x150 thumbnail.
+  var width=Math.max(1,Math.round(w)),height=Math.max(1,Math.round(h));
+  if(!Number.isFinite(width)||!Number.isFinite(height)||width>8192||height>8192||width*height>32000000)throw new Error("SVG 原始画板尺寸超过 PNG 处理上限，请分区导出");
+  if(!hasBox)root.setAttribute("viewBox","0 0 "+w+" "+h);
+  root.setAttribute("width",String(width));root.setAttribute("height",String(height));
+  root.style.setProperty("width",width+"px","important");root.style.setProperty("height",height+"px","important");
+  return {blob:new Blob([new XMLSerializer().serializeToString(doc)],{type:"image/svg+xml"}),width:width,height:height};
+}
+function blobToPngBlob(blob,size){
   return new Promise(function(resolve,reject){
     var url=URL.createObjectURL(blob),img=new Image();
     img.onload=function(){
       try{
         var canvas=document.createElement("canvas");
-        canvas.width=Math.max(1,img.naturalWidth||1);canvas.height=Math.max(1,img.naturalHeight||1);
-        canvas.getContext("2d").drawImage(img,0,0);
+        canvas.width=size?size.width:Math.max(1,img.naturalWidth||1);canvas.height=size?size.height:Math.max(1,img.naturalHeight||1);
+        canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
         canvas.toBlob(function(png){URL.revokeObjectURL(url);png?resolve(png):reject(new Error("PNG 转换失败"));},"image/png");
       }catch(err){URL.revokeObjectURL(url);reject(err);}
     };
-    img.onerror=function(){URL.revokeObjectURL(url);reject(new Error("原图解码失败"));};
+    img.onerror=function(){URL.revokeObjectURL(url);reject(new Error("对象预览解码失败"));};
     img.src=url;
   });
 }
+function renderObjectsPng(elements){
+  var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;
+  if(typeof exporter!=="function")return Promise.reject(new Error("当前画布没有 PNG 导出器"));
+  var ids={};elements.forEach(function(el){ids[el.id]=true;});
+  var withText=elements.concat((api.getSceneElements()||[]).filter(function(el){return el&&!el.isDeleted&&el.type==="text"&&el.containerId&&ids[el.containerId]&&!ids[el.id];}));
+  return Promise.resolve(exporter({elements:withText,appState:Object.assign({},api.getAppState()||empty,{exportBackground:false,exportWithDarkMode:false,exportScale:1}),files:fileObject(api.getFiles()),mimeType:"image/png",exportPadding:0}));
+}
+async function objectPngBlob(el){
+  if(el.type!=="image")return renderObjectsPng([el]);
+  var path=String((el.customData||{}).dshSourcePath||""),file=fileObject(api.getFiles())[el.fileId],blob;
+  var read=async function(url){var r=await fetch(url,{cache:"no-store"});if(!r.ok)throw new Error("读取对象预览失败 HTTP "+r.status);return r.blob();};
+  if(path){try{blob=await read("/dsh-canvas/preview?path="+encodeURIComponent(path));}catch(err){if(!file||!file.dataURL)throw err;}}
+  if(!blob&&file&&file.dataURL)blob=await read(file.dataURL);
+  if(!blob)throw new Error("选中对象没有可用的原图或预览");
+  var isSvg=String(blob.type||"").split(";")[0].toLowerCase()==="image/svg+xml";
+  if(isSvg){var svg=await prepareSvgPng(blob);return blobToPngBlob(svg.blob,svg);}
+  // Preserve PNG bytes and alpha; decode other formats at their natural size.
+  var bytes=new Uint8Array(await blob.slice(0,8).arrayBuffer());
+  var png=bytes.length===8&&bytes[0]===137&&bytes[1]===80&&bytes[2]===78&&bytes[3]===71&&bytes[4]===13&&bytes[5]===10&&bytes[6]===26&&bytes[7]===10;
+  return png?new Blob([blob],{type:"image/png"}):blobToPngBlob(blob);
+}
+async function exportSelectedObjectsPng(){
+  var elements=selectedPngObjects();
+  var usedNames={};
+  if(!elements.length){post({type:"error",message:"请先选中需要导出的对象"});return;}
+  for(var i=0;i<elements.length;i++){
+    try{
+      var el=elements[i],blob=await objectPngBlob(el),dataURL=await pngBlobDataURL(blob);
+      var name=cleanImageName((el.customData||{}).dshFileName||("对象-"+(i+1)),dataURL,"png");
+      var base=name.slice(0,-4),suffix=1;
+      while(usedNames[name])name=base+"-"+(++suffix)+".png";
+      usedNames[name]=true;
+      post({type:"exported",dataUrl:dataURL,name:name,index:i,total:elements.length});
+    }catch(err){post({type:"error",message:"对象导出失败: "+String(err&&err.message||err)});}
+  }
+}
+var objectPngCopyChain=Promise.resolve();
+function copySelectedObjectsPng(elements){
+  elements=elements||selectedPngObjects();
+  if(!elements.length)return;
+  objectPngCopyChain=objectPngCopyChain.catch(function(){}).then(async function(){
+    var blob=elements.length===1?await objectPngBlob(elements[0]):await renderObjectsPng(elements);
+    var imageData=await pngBlobDataURL(blob);
+    var response=await fetch("/dsh-canvas/clipboard-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({imageData:imageData})});
+    var result=await response.json();
+    if(!response.ok||!result.ok)throw new Error(result.error||"系统剪贴板写入失败");
+    post({type:"object-png-copied",message:"已复制对象 PNG 原图"});
+  }).catch(function(err){post({type:"chat-gen-soft-error",message:"复制 PNG 失败: "+String(err&&err.message||err)});});
+}
+function copyingText(target){return !!(target&&typeof target.closest==="function"&&target.closest('input,textarea,[contenteditable="true"]'));}
+// Normal copy also keeps Excalidraw's internal element clipboard. Explicit
+// copy-as-PNG bypasses its padded render and writes the same object PNG.
 document.addEventListener("copy",function(e){
-  try{
-    if(!api||!e.clipboardData)return;
-    var selectedIds=Object.keys((api.getAppState?api.getAppState():{}).selectedElementIds||{});
-    if(selectedIds.length!==1)return;
-    var el=(api.getSceneElements?api.getSceneElements():[]).find(function(item){return item&&item.id===selectedIds[0]&&item.type==="image"&&!item.isDeleted;});
-    if(!el)return;
-    var path=String((el.customData||{}).dshSourcePath||"");
-    if(!path||!ORIGINAL_IMAGE_RE.test(path.split("?")[0]))return;
-    // 只"附加"写原图,不 preventDefault/stopImmediatePropagation——阻断会把
-    // Excalidraw 的 copy 处理一并挡掉,画布内 Cmd+C→Cmd+V 复制元素就失效了
-    // (它的内部剪贴板写不进)。放行原生复制(系统剪贴板短暂出现渲染图),
-    // 宿主进程的 osascript/PowerShell 写入约 200ms 后落地覆盖为原图字节;
-    // 写入失败时系统剪贴板保持原生行为(带回退语义,不劣于旧版)。
-    var copyFail = function(message){
-      try{post({type:"chat-gen-soft-error",message:"复制原图失败: "+String(message||"未知错误").slice(0,90)});}catch(pe){}
-    };
-    var webFallback = function(){
-      var pngPromise = fetch("/dsh-canvas/image?path="+encodeURIComponent(path),{cache:"no-store"})
-        .then(function(r){if(!r.ok)throw new Error("读取原图失败 HTTP "+r.status);return r.blob();})
-        .then(function(blob){return String(blob.type||"").toLowerCase()==="image/png"?blob:blobToPngBlob(blob);});
-      return navigator.clipboard.write([new ClipboardItem({"image/png":pngPromise})]);
-    };
-    fetch("/dsh-canvas/clipboard-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:path})})
-      .then(function(r){return r.json().then(function(d){return {ok:r.ok&&!!(d&&d.ok),error:(d&&d.error)||("HTTP "+r.status)};});})
-      .then(function(out){
-        if(out.ok)return;
-        return webFallback().catch(function(){copyFail(out.error);});
-      })
-      .catch(function(err){
-        webFallback().catch(function(){copyFail(err&&err.message);});
-      });
-  }catch(err){}
+  if(copyingText(e.target))return;
+  var elements=selectedPngObjects();
+  if(elements.length===1&&elements[0].type==="image")copySelectedObjectsPng(elements);
 },true);
+function onObjectPngMenuClick(e){
+  var item=e.target&&typeof e.target.closest==="function"?e.target.closest('[data-testid="copyAsPng"]'):null;
+  if(!item||!selectedPngObjects().length)return false;
+  e.preventDefault();e.stopImmediatePropagation();
+  var elements=selectedPngObjects();
+  api.updateScene({appState:{contextMenu:null}});
+  copySelectedObjectsPng(elements);
+  return true;
+}
+document.addEventListener("keydown",function(e){
+  if((e.ctrlKey||e.metaKey)&&e.shiftKey&&String(e.key||"").toLowerCase()==="c"&&!copyingText(e.target)&&selectedPngObjects().length){
+    e.preventDefault();e.stopImmediatePropagation();copySelectedObjectsPng();
+  }
+},true);
+// Disk snapshots store source references, not necessarily standalone images.
+// SVG links must pass through preview so local background images are inlined.
+async function restoreCanvasSourceFile(file,sourcePath){
+  var path=String(file.dshPath||sourcePath||""),svg=/[.]svg$/i.test(path);
+  if(!path||(file.dataURL&&!svg))return;
+  var preview=/[.](svg|psd|ai|pdf)$/i.test(path);
+  var response=await fetch((preview?"/dsh-canvas/preview?path=":"/dsh-canvas/image?path=")+encodeURIComponent(path),{cache:"no-store"});
+  if(!response.ok)throw new Error("fetch "+response.status);
+  var blob=await response.blob();
+  var url=await new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(reader.result);};reader.onerror=function(){reject(new Error("读取源文件预览失败"));};reader.readAsDataURL(blob);});
+  file.dataURL=url;
+  var mime=String(url).match(/^data:([^;]+)/i);if(mime)file.mimeType=mime[1];
+}
 // 聊天/工具结果回板必须复用统一的 Excalidraw 0.17 图片创建逻辑。
 // capture + stopImmediatePropagation 用于拦截下方遗留的旧 add-image 分支，
 // 避免缺少 status/scale/created 等字段的元素进入场景后触发持续重绘。
@@ -630,23 +706,13 @@ window.addEventListener("message",function(e){
         /* 性能 v3：磁盘快照的 files 只带 dshPath 引用（无 dataURL），这里
            并发还原为 dataURL 后再进 requestSceneLoad；单文件失败静默跳过，
            画布上表现为占位，不影响其余图片与场景结构。 */
-        var jobs=[];
+        var jobs=[],sourcePaths={};
+        saved.elements.forEach(function(item){if(item&&item.type==="image"&&!item.isDeleted&&item.fileId&&item.customData&&item.customData.dshSourcePath)sourcePaths[item.fileId]=item.customData.dshSourcePath;});
         if(saved.files)Object.keys(saved.files).forEach(function(k){
           var v=saved.files[k];
-          if(v&&!v.dataURL&&v.dshPath){
-            jobs.push(fetch("/dsh-canvas/image?path="+encodeURIComponent(v.dshPath)).then(function(r){
-              if(!r.ok)throw new Error("fetch "+r.status);
-              return r.blob();
-            }).then(function(b){
-              return new Promise(function(res){
-                var fr=new FileReader();
-                fr.onload=function(){res(fr.result)};
-                fr.onerror=function(){res(null)};
-                fr.readAsDataURL(b);
-              });
-            }).then(function(url){
-              if(url){v.dataURL=url;var m=String(url).match(/^data:([^;]+)/i);if(m&&!v.mimeType)v.mimeType=m[1];}
-            }).catch(function(err){post({type:"error",message:"画布图片还原失败("+String((err&&err.message)||err).slice(0,80)+")，已保留占位"});}));
+          var path=v&&String(v.dshPath||sourcePaths[k]||"");
+          if(v&&path&&(!v.dataURL||/[.]svg$/i.test(path))){
+            jobs.push(restoreCanvasSourceFile(v,sourcePaths[k]).catch(function(err){post({type:"error",message:"画布图片还原失败("+String((err&&err.message)||err).slice(0,80)+")，已保留占位"});}));
           }
         });
         if(jobs.length)await Promise.all(jobs);
@@ -728,4 +794,4 @@ window.addEventListener("message",function(e){
     return dims2(dataURL).then(function(dm){addImageDataURL(dataURL,dm,{name:d.name||baseName2(d.path||""),path:d.path||"",mtime:d.mtime||0,size:d.size||0,kind:d.kind||"image",managed:d.managed,batchIndex:d.batchIndex,batchTotal:d.batchTotal,batchColumns:d.batchColumns,customData:d.customData||null,openEditor:d.openEditor===true,editorMode:"edit"});});
   });}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)});});
 },true);
-var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"chat-gen-soft-error",message:"生成占位未创建: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"chat-gen-resolve-failed",id:d.id,url:d.url,path:d.path||"",name:d.name||"",message:String(err&&err.message||err)});post({type:"chat-gen-soft-error",message:"生成图未上画布: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="chat-gen-clear-failed"&&api){try{clearFailedChatPlaceholders()}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if(d.type==="export"&&api){var elements=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted&&item.id!=="dsh_theme_backdrop";});if(!elements.length){post({type:"exported",error:"empty"});return;}var exporter=window.ExcalidrawLib&&window.ExcalidrawLib.exportToBlob;if(typeof exporter!=="function"){post({type:"error",message:"导出失败: 当前 Excalidraw 未提供 PNG 导出器"});return;}var state=Object.assign({},api.getAppState()||empty,{exportBackground:true,exportWithDarkMode:false,exportScale:1});Promise.resolve(exporter({elements:elements,appState:state,files:fileObject(api.getFiles?api.getFiles():{}),mimeType:"image/png"})).then(function(blob){var fr=new FileReader();fr.onloadend=function(){post({type:"exported",dataUrl:fr.result})};fr.onerror=function(){post({type:"error",message:"导出失败: 无法读取 PNG 数据"})};fr.readAsDataURL(blob)}).catch(function(err){post({type:"error",message:"导出失败: "+String(err&&err.message||err)})})}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;
+var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).then(function(b){return new Promise(function(res,rej){var fr=new FileReader();fr.onload=function(){res(fr.result)};fr.onerror=rej;fr.readAsDataURL(b)})})};var dims=function(d){return new Promise(function(res){var i=new Image();i.onload=function(){res({w:i.naturalWidth,h:i.naturalHeight})};i.onerror=function(){res({w:200,h:130})};i.src=d})};window.addEventListener("message",function(e){if(e.source!==window.parent)return;var d=e.data||{};try{if(d.type==="chat-gen-placeholder"&&d.id){if(!api){post({type:"chat-gen-placeholder-deferred",id:d.id});return}try{createChatPlaceholder(d)}catch(err){post({type:"chat-gen-soft-error",message:"生成占位未创建: "+String(err&&err.message||err)})}return}if(d.type==="chat-gen-resolve"&&d.id&&d.url&&api){resolveChatPlaceholder(d).catch(function(err){post({type:"chat-gen-resolve-failed",id:d.id,url:d.url,path:d.path||"",name:d.name||"",message:String(err&&err.message||err)});post({type:"chat-gen-soft-error",message:"生成图未上画布: "+String(err&&err.message||err)})});return}if(d.type==="chat-gen-fail"&&d.id&&api){try{failChatPlaceholder(d)}catch(err){}return}if(d.type==="chat-gen-clear-failed"&&api){try{clearFailedChatPlaceholders()}catch(err){}return}if(d.type==="add-image"&&d.url&&api){toDataURL(d.url).then(function(dataURL){return dims(dataURL).then(function(dm){var fileId="f_"+Math.random().toString(36).slice(2,9);var ratio=(dm.w&&dm.h&&dm.h>0)?dm.w/dm.h:1.6;var w=220,h=Math.round(w/ratio);var mime=(String(dataURL).match(/^data:([^;]+)/i)||[])[1]||"image/png";var el={type:"image",id:"e_"+Math.random().toString(36).slice(2,9),fileId:fileId,x:150,y:150,width:w,height:h,angle:0,seed:Math.floor(Math.random()*1e9),version:1,versionNonce:Math.floor(Math.random()*1e9),isDeleted:false,groupIds:[],boundElements:null,updated:Date.now(),link:null,locked:false,customData:d.customData||null,roundness:null,mimeType:mime};var files=(function(){var m=new Map();var b=api.getFiles()||{};if(typeof b.forEach==="function"){b.forEach(function(v,k){m.set(k,v)});}else if(typeof b==="object"){Object.keys(b).forEach(function(k){m.set(k,b[k])});}return m;})();if(typeof api.addFiles==="function"){try{api.addFiles([{id:fileId,dataURL:dataURL,mimeType:mime}])}catch(e){}}api.updateScene({elements:(api.getSceneElements()||[]).concat([el]),appState:Object.assign({},api.getAppState()||empty)});post({type:"added"});if(d.openEditor&&d.customData&&d.customData.dshLayerEdit&&typeof openImageEditorById==="function"){setTimeout(function(){openImageEditorById("edit",el.id);},160);}})}).catch(function(err){post({type:"error",message:"添加图片失败: "+String(err&&err.message||err)})})}else if(d.type==="load"&&api){var s=typeof d.snapshot==="string"?JSON.parse(d.snapshot):d.snapshot;if(s&&s.elements){var files=new Map();if(s.files)Object.keys(s.files).forEach(function(k){var v=s.files[k];files.set(k,{id:k,dataURL:v.dataURL,mimeType:v.mimeType})});api.updateScene({elements:s.elements,appState:Object.assign({},s.appState||empty),files:files})}}else if((d.type==="export"||d.type==="export-selected")&&api){exportSelectedObjectsPng();}else if(d.type==="clear"&&api){api.updateScene({elements:[],appState:empty,files:new Map()});post({type:"changed",snapshot:serialize([],empty,new Map()),token:window.__dshSceneToken||""})}}catch(err){post({type:"error",message:String(err&&err.message||err)})}});})();</script></body></html>`;

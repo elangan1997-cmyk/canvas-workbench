@@ -59,8 +59,8 @@
         }
       };
     }
-    // 与服务端 IMAGE_MIME 白名单一致：只有 /dsh-canvas/image 能取回的
-    // 扩展名才允许剥离（pdf/ai 文档源的预览路径不在其中，保持内嵌）。
+    // 只剥离可恢复的文件；SVG 恢复走 preview，内联本地链接图片。
+    // pdf/ai 文档源保持现有内嵌预览策略。
     function restorablePathExt(path) {
       const m = /\.([a-z0-9]+)$/i.exec(String(path || ''));
       return m && ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg'].indexOf(m[1].toLowerCase()) >= 0;

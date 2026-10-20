@@ -211,13 +211,15 @@
               )
             ),
             React.createElement('div', { className: 'dsh-text-rebuild-info' },
-              data.loading ? React.createElement('div', { className: 'dsh-text-rebuild-empty' }, '当前聊天模型正在理解选区…') : null,
+              data.loading ? React.createElement('div', { className: 'dsh-text-rebuild-empty' }, '正在按原图分块识别并检查遗漏，密集文字需要更长时间…') : null,
+              !data.loading && data.recognitionWarning ? React.createElement('div', { className: 'dsh-text-rebuild-empty' }, data.recognitionWarning) : null,
               !data.loading && !blocks.length ? React.createElement('div', { className: 'dsh-text-rebuild-empty' }, data.hasDetected ? '模型未在选区内找到可用文字，请调整选区后重试。' : '框选后点击“识别选区”，模型只理解选区内文字和背景。') : null,
               blocks.map((item, index) => React.createElement('div', { key: item.id || index, className: 'dsh-text-rebuild-row' },
                 React.createElement('div', { className: 'dsh-text-rebuild-row-top' },
                   React.createElement('input', { type: 'checkbox', checked: item.enabled !== false, disabled: !!data.busy, onChange: (event) => update(index, { enabled: event.target.checked }) }),
                   React.createElement('span', { className: 'dsh-text-rebuild-confidence' }, item.confidence == null ? '手动' : '置信度 ' + item.confidence + '%'),
                   item.styleConfidence != null ? React.createElement('span', { className: 'dsh-text-rebuild-confidence' }, '样式推测 ' + Math.round(Number(item.styleConfidence) * 100) + '%') : null,
+                  item.needsReview ? React.createElement('span', { title: item.reviewReason || '', className: 'dsh-text-rebuild-box' }, '本地补漏 · 待核对') : null,
                   React.createElement('span', { className: 'dsh-text-rebuild-box' }, Math.round(Number(item.x || 0)) + ', ' + Math.round(Number(item.y || 0)) + ' · ' + Math.round(Number(item.width || 0)) + '×' + Math.round(Number(item.height || 0)))
                 ),
                 React.createElement('textarea', { value: item.text || '', disabled: !!data.busy, placeholder: '输入要保留或替换的文字', onChange: (event) => update(index, { text: event.target.value }) }),
@@ -235,7 +237,7 @@
             )
           ),
           React.createElement('div', { className: 'dsh-text-rebuild-foot' },
-            React.createElement('div', { className: 'dsh-text-rebuild-note' }, data.error ? data.error : (enabledCount ? ('模型已理解 ' + enabledCount + ' 个文字对象；框外文字与图像保持不变。') : '先框选，再让当前聊天模型理解选区，确认后由工具执行清理。')),
+            React.createElement('div', { className: 'dsh-text-rebuild-note' }, data.error ? data.error : (enabledCount ? ('已选 ' + enabledCount + ' 个文字对象' + (data.tileCount ? ' · 分块识别 ' + data.tileCount + ' 块' : '') + (data.supplementedCount ? ' · 本地补漏 ' + data.supplementedCount + ' 项待核对' : '') + '；请对照原图确认。') : '先框选，再让当前聊天模型理解选区，确认后由工具执行清理。')),
             React.createElement('div', { className: 'dsh-text-rebuild-actions' },
               React.createElement('button', { className: 'dsh-text-rebuild-cancel', disabled: !!data.busy, onClick: props.onClose }, '取消'),
               React.createElement('button', { className: 'dsh-text-rebuild-export', disabled: !!data.busy || data.loading || enabledCount === 0, onClick: () => props.onExport(blocks, true, selections) }, data.busy ? '正在清理并生成…' : '清理背景并生成 PSD'),

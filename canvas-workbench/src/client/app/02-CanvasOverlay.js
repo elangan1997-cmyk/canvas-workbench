@@ -1281,7 +1281,7 @@
         }
         const current = projectRef.current;
         setTextRebuild((prev) => prev && prev.elementId === active.elementId
-          ? { ...prev, loading: true, hasDetected: false, error: '', blocks: [], erasePrompt: '' }
+          ? { ...prev, loading: true, hasDetected: false, error: '', recognitionWarning: '', blocks: [], erasePrompt: '' }
           : prev);
         setFeedback('正在让当前聊天模型理解 ' + regions.length + ' 个文字选区…');
         const requestBody = { ...current, imageData: active.dataURL, name: active.name, crops: regions, ...(activeChatModelSelection || {}) };
@@ -1294,7 +1294,7 @@
           .then((result) => {
             if (!result.ok || !result.data || !result.data.ok) throw new Error(result.data && result.data.error || 'OCR 识别失败');
             setTextRebuild((prev) => prev && prev.elementId === active.elementId
-              ? { ...prev, loading: false, hasDetected: true, blocks: Array.isArray(result.data.blocks) ? result.data.blocks : [], erasePrompt: result.data.erasePrompt || '', engine: result.data.engine || 'tesseract', width: Number(result.data.width || prev.width || 0), height: Number(result.data.height || prev.height || 0) }
+              ? { ...prev, loading: false, hasDetected: true, recognitionWarning: result.data.warning || '', tileCount: result.data.tileCount || 0, supplementedCount: result.data.supplementedCount || 0, blocks: Array.isArray(result.data.blocks) ? result.data.blocks : [], erasePrompt: result.data.erasePrompt || '', engine: result.data.engine || 'tesseract', width: Number(result.data.width || prev.width || 0), height: Number(result.data.height || prev.height || 0) }
               : prev);
             const engineLabel = result.data.engine === 'current-chat-model' ? ('当前聊天模型 ' + (result.data.model || '')) : '本地 OCR 兜底';
             setFeedback('✓ ' + engineLabel + ' 已理解选区内 ' + Number((result.data.blocks || []).length) + ' 个文字对象，请确认后执行' + (result.data.warning ? '；' + result.data.warning : ''));
@@ -1674,6 +1674,8 @@
           // (视口锚点 + 240 盒装,与其它生成图同规格),不再等文件扫描慢半拍地救回。
           dispatchGeneratedToCanvas(String(d.path));
           setFeedback('⚠ ' + (d.message || '占位替换失败') + '，成图已放到画布当前视野');
+        } else if (d.type === 'object-png-copied') {
+          setFeedback('✓ ' + (d.message || '已复制对象 PNG 原图'));
         } else if (d.type === 'chat-gen-soft-error') {
           // 聊天生图占位/上画布的可恢复失败:只提示,不打成全局「加载失败」
           setFeedback('⚠ ' + (d.message || '聊天生图未能上画布'));
@@ -1761,7 +1763,7 @@
           if (d.dataUrl) {
             const a = document.createElement('a');
             a.href = d.dataUrl;
-            a.download = 'canvas.png';
+            a.download = d.name || '对象.png';
             document.body.appendChild(a);
             a.click();
             a.remove();
@@ -2228,7 +2230,7 @@
               React.createElement('button', { onClick: () => setCanvasArrangeOpen(false) }, '取消')
             ) : null
           ),
-          React.createElement('button', { className: 'dsh-canvas-tb', onClick: () => post({ type: 'export' }) }, '导出 PNG'),
+          React.createElement('button', { className: 'dsh-canvas-tb', title: '将选中的对象分别导出为 PNG；图片使用原图像素，SVG 按文件画板原尺寸渲染，PSD/AI/PDF 使用文件预览', onClick: () => post({ type: 'export-selected' }) }, '导出选中 PNG'),
           React.createElement('button', { className: 'dsh-canvas-tb', title: '本地素材库：常用图片发送到画布或聊天', onClick: () => openMaterials() }, '素材库'),
           React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-tb-adobe', title: '把 Photoshop 里当前选中的图层拉到画布（PS 需已打开文档并选中图层；不用在 PS 里点任何面板）', disabled: !projectInfo.project, onClick: () => { void pullFromAdobe(projectRef.current, 'photoshop', setFeedback); } }, '取 Ps 图层'),
           React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-tb-adobe', title: '把 Illustrator 里当前选中的对象拉到画布（AI 需已打开文档并选中对象；150 dpi 透明 PNG）', disabled: !projectInfo.project, onClick: () => { void pullFromAdobe(projectRef.current, 'illustrator', setFeedback, { dpi: 150 }); } }, '取 Ai 对象'),

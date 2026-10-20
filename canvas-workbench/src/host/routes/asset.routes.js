@@ -1,13 +1,13 @@
 // 自 lib/index.js apply() 机械迁移（v1.8 Phase 2）：每个 handler 体逐字未改，
 // 原来的 `if (pathname === … && req.method === …) { … }` 外壳由 router 负责。
 import { isAbsolutePath, isMac, isWindows, revealFile, resolveFirst } from '../../../lib/platform.js';
-import { access, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { expandHome, isPathWithin, normalizeLocalPath, pathComparable } from '../../shared/utils/paths.js';
 import { parseQuery, readBody, respond } from '../server/http.js';
 import { MAX_IMAGE_BYTES, MAX_SOURCE_BYTES, extOf, isImagePath, isSourceImagePath, mimeOf, sourceKindOf } from '../../shared/utils/image-types.js';
-import { decodeSourceData, safeImageName } from '../../shared/utils/data-url.js';
+import { decodeImageData, decodeSourceData, safeImageName } from '../../shared/utils/data-url.js';
 import { name } from '../plugin-meta.js';
 
 export function register(router, h) {
@@ -212,19 +212,27 @@ export function register(router, h) {
           // 画布"复制原图":web 侧 navigator.clipboard 的图片写入在这版 Electron
           // 里会被静默丢弃(实测 write 正常返回、系统剪贴板不变,只有文本写得进),
           // 由宿主进程直写系统剪贴板绕开全部 web 剪贴板权限。macOS 走
-          // osascript 读 PNG 字节入剪贴板;Windows 走 PowerShell STA SetImage。
+          // osascript 读 PNG 字节入剪贴板;Windows 写 PNG 和 Bitmap 两种格式。
+          let clipboardWork = '', tempPng = '';
           try {
             const body = JSON.parse(await readBody(req) || '{}');
-            const target = normalizeLocalPath(String(body.path || ''));
+            let target = normalizeLocalPath(String(body.path || ''));
+            if (body.imageData) {
+              const image = decodeImageData(body.imageData);
+              const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+              if (!image || image.bytes.length > MAX_IMAGE_BYTES || !image.bytes.subarray(0, 8).equals(signature)) throw new Error('invalid PNG preview');
+              clipboardWork = await mkdtemp(join(tmpdir(), 'dsh-object-clipboard-'));
+              target = join(clipboardWork, 'object.png');
+              await writeFile(target, image.bytes);
+            }
             if (!isAbsolutePath(target) || !isImagePath(target)) throw new Error('bad image path');
             const info = await stat(target);
             if (!info.isFile() || info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new Error('invalid image file');
             let pngPath = target;
-            let tempPng = '';
             if (isMac && extname(target).toLowerCase() !== '.png') {
               // macOS 的 osascript 只认 «class PNGf»;System.Drawing(Windows)
-              // 直接支持 jpg/gif/bmp,无需转换。webp 在 Windows GDI+ 不受支持,
-              // FromFile 会抛错走 500→web 回退,可接受(罕见格式)。
+              // 直接支持 jpg/gif/bmp。新客户端先将各种源预览转换成 PNG，
+              // 也覆盖了 Windows GDI+ 不能直接读取 WebP 的情况。
               const sips = await resolveFirst(ctx, ['sips']);
               if (!sips) throw new Error('未找到 sips，无法转换 PNG');
               tempPng = join(tmpdir(), 'dsh-canvas-clipboard-' + Date.now().toString(36) + '.png');
@@ -243,17 +251,19 @@ export function register(router, h) {
               if (!powershell) throw new Error('未找到 Windows PowerShell');
               // 路径用 PS 单引号字面量('' 转义),避免双引号内 $/反引号插值。
               const psLiteral = "'" + String(pngPath).replace(/'/g, "''") + "'";
-              const script = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile(' + psLiteral + '); [System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose()';
+              const script = 'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img = [System.Drawing.Image]::FromFile(' + psLiteral + '); $stream = [System.IO.MemoryStream]::new(); try { $img.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png); $stream.Position = 0; $data = New-Object System.Windows.Forms.DataObject; $data.SetImage($img); $data.SetData("PNG", $false, $stream); [System.Windows.Forms.Clipboard]::SetDataObject($data, $true, 5, 100) } finally { $img.Dispose(); $stream.Dispose() }';
               const encoded = Buffer.from(script, 'utf16le').toString('base64');
               result = await runProcess(powershell, ['-NoLogo', '-NoProfile', '-STA', '-EncodedCommand', encoded], dirname(pngPath));
             } else {
               throw new Error('当前平台不支持系统级剪贴板写入');
             }
-            if (tempPng) { await rm(tempPng, { force: true }).catch(() => {}); }
             if (result.exitCode !== 0) throw new Error('写入剪贴板失败：' + String(result.stderr || '').trim());
-            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, path: target }));
+            respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true, path: body.imageData ? '' : target, mimeType: 'image/png' }));
           } catch (err) {
             respond(res, 500, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));
+          } finally {
+            if (tempPng) await rm(tempPng, { force: true }).catch(() => {});
+            if (clipboardWork) await rm(clipboardWork, { recursive: true, force: true }).catch(() => {});
           }
           return;
   });

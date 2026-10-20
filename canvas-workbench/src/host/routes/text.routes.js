@@ -8,7 +8,8 @@ import { generateImage, readImageEngineSettings } from '../../../lib/image-engin
 import { readBody, respond } from '../server/http.js';
 import { runPythonSpec } from '../services/python-launch.js';
 import { decodeImageData, normalizeTextLayerText, safeImageName } from '../../shared/utils/data-url.js';
-import { analyzeTextWithCurrentModel, visionBlocks } from '../services/text-analysis.js';
+import { analyzeSelectedText } from '../services/text-analysis.js';
+import { supplementTextCoverage } from '../services/text-coverage.js';
 import { buildNativeTextPsd, textLayerGeometry } from '../services/native-text-psd.js';
 import { buildIllustratorTextJsx } from '../services/illustrator-text.js';
 import { refineTextGeometry } from '../services/text-geometry.js';
@@ -20,6 +21,7 @@ export function register(router, h) {
   const calibrateTextStyles = async (input, blocks, selections = null) => {
     const python = await resolvePythonWithDeps(ctx);
     let geometryRefinedCount = 0;
+    let supplementedCount = 0;
     let geometryWarning = '';
     if (selections) {
       try {
@@ -31,7 +33,9 @@ export function register(router, h) {
         const local = lines.length ? JSON.parse(lines[lines.length - 1]) : null;
         if (ocr.exitCode !== 0 || !local || local.success !== true) throw new Error(local && local.error || '本地定位失败');
         const refined = refineTextGeometry(blocks, local.blocks, selections);
-        blocks = refined.blocks;
+        const coverage = supplementTextCoverage(refined.blocks, local.blocks, selections);
+        blocks = coverage.blocks;
+        supplementedCount = coverage.supplementedCount;
         geometryRefinedCount = refined.refinedCount;
       } catch (err) { geometryWarning = '本地文字定位未完成，沿用模型位置：' + String(err.message || err); }
     }
@@ -44,7 +48,7 @@ export function register(router, h) {
     if (styled.exitCode !== 0 || !payload || payload.success !== true || !Array.isArray(payload.blocks)) {
       throw new Error(payload && payload.error || '原图文字样式校准失败');
     }
-    return { ...payload, geometryRefinedCount, geometryWarning };
+    return { ...payload, geometryRefinedCount, supplementedCount, geometryWarning };
   };
   router.add({ method: 'POST', path: '/dsh-canvas/ocr-image', prefix: false }, async (req, res, { pathname, query, CORS, sameOriginRequest }) => {
           let tempInput = '';
@@ -58,28 +62,22 @@ export function register(router, h) {
             // 用户先框选，再由聊天输入框当前模型理解选区内文字与背景。
             if (requestedCrops.length && body.provider && body.model) {
               let analyzed = null, visionErr = '';
-              // 两次尝试：第一次按选区任务；空结果/失败后自动换简化指令重试一次
-              for (let attempt = 0; attempt < 2 && !analyzed; attempt++) {
-                try {
-                  analyzed = await analyzeTextWithCurrentModel(ctx, uploaded, body, attempt === 1);
-                } catch (err) { visionErr = String((err && err.message) || err); }
-              }
+              try {
+                analyzed = await analyzeSelectedText(ctx, uploaded, { ...body, crops: requestedCrops },
+                  (executable, args, cwd, timeoutMs) => runProcessWithTimeout(executable, args, cwd, timeoutMs));
+              } catch (err) { visionErr = String((err && err.message) || err); }
               if (!analyzed) {
                 visionWarning = '当前聊天模型(' + String(body.provider || '') + '/' + String(body.model || '') + ')识别失败，已自动切换本地 OCR：' + visionErr;
               } else {
                 const intersects = (block, region) => Math.max(0, Math.min(block.x + block.width, region.x + region.width) - Math.max(block.x, region.x))
                   * Math.max(0, Math.min(block.y + block.height, region.y + region.height) - Math.max(block.y, region.y)) > 0;
-                const allBlocks = visionBlocks(analyzed.value, analyzed.width, analyzed.height);
+                const allBlocks = analyzed.blocks;
                 let blocks = allBlocks.filter((block) => requestedCrops.some((region) => intersects(block, region)));
-                let cropWarning = '';
-                if (!blocks.length) {
-                  // 模型识别到了文字但坐标与选区不重叠：返回全部结果由用户逐条排除
-                  cropWarning = '模型返回的 ' + allBlocks.length + ' 个文字块与选区坐标不重叠，已列出全部结果，请排除选区外的项';
-                }
+                let cropWarning = analyzed.warning || '';
+                let supplementedCount = 0;
                 // The model reads content/structure; measure typography on
                 // the untouched source, never the generated clean background.
                 let styleEngine = 'current-chat-model';
-                blocks = blocks.length ? blocks : allBlocks;
                 try {
                   const outputDir = join(tmpdir(), 'dsh-canvas-text-rebuild');
                   await mkdir(outputDir, { recursive: true });
@@ -87,6 +85,7 @@ export function register(router, h) {
                   await writeFile(tempInput, uploaded.bytes);
                   const measured = await calibrateTextStyles(tempInput, blocks, requestedCrops);
                   blocks = measured.blocks;
+                  supplementedCount = measured.supplementedCount;
                   styleEngine = measured.engine;
                   cropWarning = [cropWarning, measured.geometryWarning].filter(Boolean).join('；');
                 } catch (err) {
@@ -96,6 +95,7 @@ export function register(router, h) {
                   ok: true, width: analyzed.width, height: analyzed.height, blocks, crops: requestedCrops,
                   erasePrompt: String(analyzed.value.erasePrompt || '').slice(0, 1200),
                   engine: 'current-chat-model', provider: analyzed.provider, model: analyzed.model, styleEngine,
+                  tileCount: analyzed.tileCount, completedTileCount: analyzed.completedTileCount, supplementedCount,
                   warning: cropWarning
                 }));
                 return;
