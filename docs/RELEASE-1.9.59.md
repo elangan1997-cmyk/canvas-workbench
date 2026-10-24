@@ -13,3 +13,5 @@ Windows仍为代码和分支模拟验证，没有Windows Adobe实机。既有Mac
 - npm 官方 latest=1.9.59，精确版本与下载tarball的SHA1均为 `bfc83acf5dbefb6a7944e688d71dba610e9d06c0`；SHA256 `0fd8b0c73cbc2ac9edb27daba4a1455d1f3c49d4c5afcb976242ef9db416114f`。
 - 直接从官方registry全新安装1.9.59，再次完成宿主加载、正式聊天工具注册、真实后台PSD转换和尺寸读回，0次模型请求。
 - GitHub main与v1.9.59已推送，代码提交2bf47e9；v1.9.58为3ad5698。
+
+本机再通过插件正式自更新流程从1.9.56升级至1.9.59，其他插件依赖均保留。冷启动健康检查返回1.9.59，设计模式与画布已挂载，原14层拆层任务仍为ready，PSD/AI及累计额度保留，没有新增图像请求。
