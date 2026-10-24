@@ -283,6 +283,11 @@ window.__ModuleLoader__.load({
         { ps: 'SourceHanSansSC-Bold', label: '思源黑体 Bold 粗体' },
         { ps: 'SourceHanSansSC-Heavy', label: '思源黑体 Heavy 重磅' }
       ] },
+      { group: '思源宋体（需安装对应字体）', items: [
+        { ps: 'SourceHanSerifSC-Regular', label: '思源宋体 Regular 常规' },
+        { ps: 'SourceHanSerifSC-Bold', label: '思源宋体 Bold 粗体' },
+        { ps: 'SourceHanSerifSC-Heavy', label: '思源宋体 Heavy 重磅' }
+      ] },
       { group: 'Inter（免费商用·现代无衬线）', items: [
         { ps: 'Inter-Thin', label: 'Inter Thin' },
         { ps: 'Inter-ExtraLight', label: 'Inter ExtraLight' },
@@ -2016,6 +2021,353 @@ window.__ModuleLoader__.load({
       }
       dispatchAddImage(path, displaySourceUrl(path));
     }
+    async function layeredImageSourceHash(data) {
+      const match = /^data:image\/[^;,]+;base64,([\s\S]+)$/.exec(String(data || ''));
+      if (!match || !globalThis.crypto?.subtle) return '';
+      const binary = atob(match[1]), bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(v => v.toString(16).padStart(2, '0')).join('');
+    }
+    function layeredTaskStatusLabel(status) {
+      return ({ running: '处理中', failed: '失败，可继续', cancelled: '已停止，可继续', review: '待提取', ready: '已完成', needs_review: '待核对' })[status] || '已保存';
+    }
+    function LayeredImagePanel(props) {
+      const [task, setTask] = React.useState(null);
+      const [draft, setDraft] = React.useState([]);
+      const [recent, setRecent] = React.useState([]);
+      const [restoring, setRestoring] = React.useState(true);
+      const [historyVersion, setHistoryVersion] = React.useState(0);
+      const [posting, setPosting] = React.useState(false);
+      const [error, setError] = React.useState('');
+      const [format, setFormat] = React.useState('psd');
+      const [hidden, setHidden] = React.useState({});
+      const [original, setOriginal] = React.useState(true);
+      const [dirty, setDirty] = React.useState(false);
+      const [retryUnknown, setRetryUnknown] = React.useState(false);
+      const [localOnly, setLocalOnly] = React.useState(props.automationLimits ? !props.automationLimits.generationAllowed : false);
+      const [autoExport, setAutoExport] = React.useState(!props.automationLimits);
+      const [autoOpen, setAutoOpen] = React.useState(!props.automationLimits);
+      const [editableText, setEditableText] = React.useState(true);
+      const [acceptQuality, setAcceptQuality] = React.useState(false);
+      const [maxImageRequests, setMaxImageRequests] = React.useState(40);
+      const [mergeUndo, setMergeUndo] = React.useState([]);
+      const alive = React.useRef(true);
+      const sending = React.useRef(false);
+      const ownExports = React.useRef(false);
+      const delivered = React.useRef(new Set());
+      const receivedTaskId = React.useRef('');
+      const taskProject = React.useRef('');
+      const recoveryKey = React.useRef('');
+      const liveProps = React.useRef(props);
+      liveProps.current = props;
+      const projectKey = JSON.stringify(props.project || {});
+      const busy = restoring || posting || (task && task.status === 'running');
+      const receive = (next) => {
+        if (!alive.current || !next) return;
+        if (receivedTaskId.current !== next.id) {
+          setAcceptQuality(false); receivedTaskId.current = next.id;
+          if (next.autoExportFormat !== undefined) {
+            setAutoExport(!!next.autoExportFormat);
+            if (['ai', 'psd', 'svg'].includes(next.autoExportFormat)) setFormat(next.autoExportFormat);
+            setAutoOpen(next.openAfterExport === true);
+          }
+        }
+        if (recoveryKey.current && !props.automationLimits) try {
+          window.localStorage.setItem(recoveryKey.current, JSON.stringify({ id: next.id, storageProject: next.storageProject, sourceHash: next.sourceHash }));
+        } catch { /* Disk task records remain recoverable if browser storage is unavailable. */ }
+        setRecent(items => [next, ...items.filter(item => item.id !== next.id)].sort((a,b) => b.createdAt-a.createdAt));
+        taskProject.current = next.storageProject || props.project.project || '';
+        setTask(next); setDraft(next.elements || []); setDirty(false);
+        setLocalOnly(props.automationLimits && !props.automationLimits.generationAllowed ? true : next.localOnly === true);
+        if (props.automationLimits) setMaxImageRequests(props.automationLimits.maxImageRequests || 0);
+        else if (next.maxImageRequests !== undefined) setMaxImageRequests(next.maxImageRequests);
+        if (next.previewUrl && next.status === 'ready') setOriginal(false);
+        if (ownExports.current || next.autoExportFormat) for (const item of next.exports || []) {
+          if (!delivered.current.has(item.path)) { delivered.current.add(item.path); liveProps.current.onFile(item); }
+        }
+      };
+      const endpoint = (suffix, extra) => '/dsh-canvas/layered-image/' + suffix + '?' + new URLSearchParams({ ...(liveProps.current.project || {}),
+        ...(suffix !== 'tasks' && taskProject.current ? { project: taskProject.current } : {}), ...(extra || {}) }).toString();
+      const read = async (url, options) => {
+        const r = await fetch(url, options), value = await r.json();
+        if (!r.ok || !value.ok) throw new Error(typeof value.error === 'string' ? value.error : '图片拆层请求失败');
+        return value;
+      };
+      React.useEffect(() => {
+        alive.current = true;
+        let cancelled = false;
+        setRestoring(true); recoveryKey.current = '';
+        const queries = [read(endpoint('tasks'))];
+        if (!props.automationLimits && (props.project.cwd || props.project.sessionId)) queries.push(read(endpoint('tasks', { storageScope: 'workspace' })));
+        const restoreSaved = async () => {
+          const [results, sourceHash] = await Promise.all([Promise.allSettled(queries), layeredImageSourceHash(props.data.imageData).catch(() => '')]);
+          if (cancelled || !alive.current) return;
+          const items = new Map(); for (const result of results) if (result.status === 'fulfilled') for (const item of result.value.tasks || []) items.set(item.id, item);
+          const history = [...items.values()].sort((a,b) => b.createdAt-a.createdAt);
+          setRecent(history);
+          if (props.initialTaskId) {
+            const value = await read(endpoint('task', { id: props.initialTaskId }));
+            if (!cancelled && alive.current) receive(value.task);
+            return;
+          }
+          if (props.automationLimits) return;
+          const candidates = [];
+          if (sourceHash) {
+            recoveryKey.current = 'dsh-canvas-layered-task:' + JSON.stringify([props.project.sessionId || '', props.project.cwd || '', props.project.project || '', sourceHash]);
+            try {
+              const saved = JSON.parse(window.localStorage.getItem(recoveryKey.current) || 'null');
+              if (saved?.id && saved.storageProject && saved.sourceHash === sourceHash) candidates.push(saved);
+            } catch { /* Fall back to persisted task history. */ }
+            candidates.push(...history.filter(item => item.sourceHash === sourceHash));
+          }
+          let restoreError = '';
+          for (const previous of candidates.filter((item, index, all) => all.findIndex(other => other.id === item.id) === index)) {
+            try {
+              const value = await read(endpoint('task', { id: previous.id, project: previous.storageProject }));
+              if (cancelled || !alive.current) return;
+              if (value.task?.sourceHash !== sourceHash) continue;
+              ownExports.current = false; receive(value.task); setError(''); return;
+            } catch (e) { restoreError = String(e.message || e); }
+          }
+          if (restoreError) setError('历史任务暂时无法恢复，原素材仍保留。请刷新任务记录：' + restoreError);
+          else if (results.every(result => result.status === 'rejected')) setError('任务记录暂时无法读取，请刷新任务记录后继续');
+        };
+        restoreSaved().catch(e => { if (!cancelled && alive.current) setError(String(e.message || e)); })
+          .finally(() => { if (!cancelled && alive.current) setRestoring(false); });
+        return () => { cancelled = true; alive.current = false; };
+      }, [projectKey, props.initialTaskId, historyVersion]);
+      React.useEffect(() => {
+        if (!task || (props.hidden && task.status === 'ready')) return undefined;
+        let stopped = false, timer = null;
+        const controller = new AbortController();
+        const poll = async () => {
+          try {
+            const value = await read(endpoint('task', { id: task.id }), { signal: controller.signal });
+            if (!stopped && alive.current) { receive(value.task); setError(''); }
+          } catch (e) {
+            if (!stopped && alive.current) setError('进度暂时无法连接，任务仍保存在项目中：' + String(e.message || e));
+          }
+          if (!stopped) timer = setTimeout(poll, task.status === 'running' ? 2000 : 8000);
+        };
+        timer = setTimeout(poll, 1000);
+        return () => { stopped = true; controller.abort(); clearTimeout(timer); };
+      }, [task && task.id, task && task.status, projectKey, props.hidden]);
+      const act = async (action, payload) => {
+        if (sending.current) return;
+        sending.current = true; setPosting(true); setError('');
+        try {
+          const value = await read('/dsh-canvas/layered-image/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...(liveProps.current.project || {}),
+              ...(action !== 'analyze' && taskProject.current ? { project: taskProject.current } : {}), ...(payload || {}) }) });
+          receive(value.task);
+        } catch (e) { if (alive.current) setError(String(e.message || e)); }
+        finally { sending.current = false; if (alive.current) setPosting(false); }
+      };
+      const submitAnalysis = automatic => {
+        ownExports.current = automatic && autoExport;
+        return act('analyze', { ...props.data, autoRun: automatic, autoRefine: true, editableText, localOnly, maxImageRequests,
+          autoExportFormat: autoExport ? format : '', openAfterExport: autoOpen, fontPolicy: 'substitute',
+          ...(!props.automationLimits ? { storageScope: 'workspace' } : {}), ...(props.getModel ? props.getModel() : props.model || {}) });
+      };
+      const update = (id, patch) => { setDraft(items => items.map(e => e.id === id ? { ...e, ...patch } : e)); setDirty(true); };
+      const move = (id, step) => {
+        const sorted = draft.filter(e => e.type !== 'background').sort((a, b) => a.z - b.z);
+        const i = sorted.findIndex(e => e.id === id), j = i + step;
+        if (j < 0 || j >= sorted.length) return;
+        const temp = sorted[i]; sorted[i] = sorted[j]; sorted[j] = temp;
+        const positions = new Map(sorted.map((e, i) => [e.id, i]));
+        setDraft(items => items.map(e => e.type === 'background' ? e : { ...e, z: positions.get(e.id) })); setDirty(true);
+      };
+      const mergeBehind = (element) => {
+        const behind = draft.filter(e => e.enabled && e.type === 'image' && e.id !== element.id && e.z < element.z).sort((a, b) => b.z - a.z)[0];
+        if (!behind) return;
+        setMergeUndo(history => [...history, draft]);
+        const x = Math.min(behind.x, element.x), y = Math.min(behind.y, element.y);
+        const mergedIds = [...new Set([...(behind.mergedIds || []), element.id, ...(element.mergedIds || [])])];
+        setDraft(items => items.map(e => e.id === element.id ? { ...e, enabled: false } : e.id === behind.id ? { ...e, mergedIds, x, y,
+          width: Math.max(behind.x + behind.width, element.x + element.width) - x, height: Math.max(behind.y + behind.height, element.y + element.height) - y,
+          name: behind.name + '＋' + element.name, description: '将下述元素作为一个整体提取，保留彼此前后遮挡、位置与细节：' + behind.description + '；' + element.description } : e));
+        setDirty(true);
+      };
+      const restore = async id => {
+        if (!id || busy) return;
+        setError(''); setRestoring(true); ownExports.current = false;
+        try { const previous = recent.find(t => t.id === id); const value = await read(endpoint('task', { id, project: previous?.storageProject || props.project.project })); if (alive.current) receive(value.task); }
+        catch (e) { if (alive.current) setError(String(e.message || e)); }
+        finally { if (alive.current) setRestoring(false); }
+      };
+      const invalidFonts = draft.some(e => e.enabled && e.nativeText && !e.fontAccepted);
+      const canExport = task && !busy && !dirty && task.elements.length && task.elements.filter(e => e.enabled).every(e => e.status === 'complete')
+        && (task.quality?.status !== 'needs_review' || acceptQuality || task.quality?.reviewAcknowledged);
+      const display = [...draft].sort((a, b) => b.z - a.z);
+      const hasAssets = draft.some(e => e.url && e.status === 'complete');
+      const E = React.createElement;
+      return E('aside', { className: 'dsh-layers-panel', 'aria-label': '图片拆层', style: props.hidden ? { display: 'none' } : undefined, onPointerDown: e => e.stopPropagation() },
+        E('header', { className: 'dsh-layers-head' }, E('div', null, E('strong', null, '图片拆层'), E('small', null, '独立图层 · AI / PSD / SVG')),
+          E('button', { type: 'button', onClick: () => props.onClose(busy), 'aria-label': '关闭拆层面板' }, '×')),
+        E('div', { className: 'dsh-layers-scroll' },
+          E('p', { className: 'dsh-layers-note' }, 'AI 中文字可编辑，复杂图像独立嵌入；不会自动变成全矢量。'),
+          !task && !props.automationLimits ? E('p', { className: 'dsh-layers-note', style: { overflowWrap: 'anywhere' } }, '新拆层跟随当前工作区保存：' + (props.project.cwd || '请先选择聊天工作目录')) : null,
+          props.automationLimits ? E('p', { className: 'dsh-layers-note' }, '这是后台任务的图层核对。完成修正后，在后台任务中继续未完成项；任务会复用这里的素材并按整批额度导出。') : null,
+          recent.length ? E('select', { className: 'dsh-layers-recent', value: task ? task.id : '', disabled: busy, onChange: e => restore(e.target.value), 'aria-label': '恢复拆层任务' },
+            E('option', { value: '' }, '历史拆层任务（可继续）…'), ...recent.map(t => E('option', { key: t.id, value: t.id }, t.name + ' · ' + layeredTaskStatusLabel(t.status) + ' · ' + new Date(t.createdAt).toLocaleString()))) : null,
+          restoring ? E('p', { className: 'dsh-layers-note', role: 'status' }, '正在恢复这张图片的拆层进度…') : null,
+          E('button', { type: 'button', disabled: busy, onClick: () => { setError(''); setHistoryVersion(v => v+1); } }, '刷新任务记录'),
+          task && !restoring ? E('p', { className: 'dsh-layers-note', role: 'status' }, '任务已保存 · ' + layeredTaskStatusLabel(task.status) + '；关闭窗口后可继续，已有素材会复用。') : null,
+          E('div', { className: 'dsh-layers-preview', style: { aspectRatio: (task && task.width || 1) + '/' + (task && task.height || 1) } },
+            original || !hasAssets ? E('img', { src: task && task.sourceUrl || props.data.imageData, alt: '拆层原图', draggable: false })
+              : [...draft].filter(e => e.enabled && e.url && !hidden[e.id]).sort((a, b) => a.z - b.z).map(e => E('img', { key: e.id, src: e.url, alt: e.name, draggable: false,
+                style: e.bounds && task ? { left: e.bounds.x / task.width * 100 + '%', top: e.bounds.y / task.height * 100 + '%', right: 'auto', bottom: 'auto', width: e.bounds.width / task.width * 100 + '%', height: e.bounds.height / task.height * 100 + '%' } : undefined }))),
+          E('div', { className: 'dsh-layers-preview-tools' }, E('button', { type: 'button', onClick: () => setOriginal(true), 'aria-pressed': original }, '原图'),
+            E('button', { type: 'button', disabled: !hasAssets, onClick: () => setOriginal(false), 'aria-pressed': !original }, '图层预览'),
+            task ? E('small', null, task.width + '×' + task.height) : null),
+          task && task.status === 'running' ? E('div', { className: 'dsh-layers-progress', role: 'status' }, E('span', { className: 'dsh-layers-spinner' }),
+            E('span', null, task.message || '处理中…'), E('progress', { value: Number(task.progress || 0), max: 100 })) : null,
+          error || task && task.error ? E('p', { className: 'dsh-layers-error', role: 'alert' }, error || task.error) : null,
+          task && task.quality ? E('details', { className: 'dsh-layers-warnings', open: task.quality.status === 'needs_review' },
+            E('summary', null, task.quality.status === 'needs_review' ? '有校准或背景问题待核对' : '清单与文字校准结果'),
+            ...(task.quality.issues || []).map((i, index) => E('p', { key: index }, i.message || i.code))) : null,
+          E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: editableText, disabled: busy || !!task,
+            onChange: e => setEditableText(e.target.checked) }), '自动校准普通文字，生成可编辑文字层'),
+          task && task.quality?.status === 'needs_review' ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: acceptQuality, disabled: busy,
+            onChange: e => setAcceptQuality(e.target.checked) }), '我已核对并接受当前清单中的近似项') : null,
+          task && task.status !== 'running' && task.message !== task.error && task.message !== error ? E('p', { className: 'dsh-layers-note' }, task.message) : null,
+          task && task.warnings && task.warnings.length ? E('details', { className: 'dsh-layers-warnings' }, E('summary', null, '查看 ' + task.warnings.length + ' 项待核对说明'), ...task.warnings.map((w, i) => E('p', { key: i }, w))) : null,
+          task ? E('p', { className: 'dsh-layers-note' }, '已准备 ' + draft.filter(e => e.enabled && e.status === 'complete').length + ' / ' + draft.filter(e => e.enabled).length + ' 个图层；' + draft.filter(e => e.enabled && !e.nativeText && e.status !== 'complete' && e.requestState !== 'returned').length + ' 个图层可能需要生图。装饰文字建议连同底纹一起提取。') : null,
+          !task ? E('p', { className: 'dsh-layers-note' }, '一键执行分析、提取和导出，成功素材会复用；临时本地故障会自动恢复。包装文字随产品保留。') : null,
+          ...display.map(e => E('section', { key: e.id, className: 'dsh-layers-row' },
+            E('div', { className: 'dsh-layers-row-title' },
+              E('input', { type: 'checkbox', checked: e.enabled, disabled: busy || e.type === 'background' || draft.some(b => b.enabled && (b.mergedIds || []).includes(e.id)), onChange: v => update(e.id, { enabled: v.target.checked }), 'aria-label': '输出图层' + e.name }),
+              E('input', { value: e.name, disabled: busy, onChange: v => update(e.id, { name: v.target.value }), 'aria-label': '图层名称' }),
+              e.type !== 'background' ? E('button', { type: 'button', disabled: busy, onClick: () => move(e.id, 1), title: '移到前面' }, '↑') : null,
+              e.type !== 'background' ? E('button', { type: 'button', disabled: busy, onClick: () => move(e.id, -1), title: '移到后面' }, '↓') : null,
+              e.url ? E('button', { type: 'button', title: '仅切换预览；不输出此图层请取消左侧勾选', onClick: () => { setHidden(h => ({ ...h, [e.id]: !h[e.id] })); setOriginal(false); }, 'aria-label': '显示或隐藏' + e.name }, hidden[e.id] ? '显示' : '隐藏') : null),
+            E('small', null, ({ text: '文字', image: e.extractionMode==='photo'?'完整照片':'抠图主体', shape:'图形', background: '完整背景' }[e.type] || '图层') + ' · ' + ({ pending: '待提取', complete: '已完成', failed: '待重试' }[e.status] || '待提取')),
+            ['source-pixel-flat','source-photo-rectangle'].includes(e.extractionEngine) ? E('small', null, ' · 原图像素保留') : null,
+            e.type === 'image' ? E('label',null,'图片类型 ',E('select',{value:e.extractionMode||'',disabled:busy,onChange:v=>update(e.id,{extractionMode:v.target.value,modeLocked:!!v.target.value})},E('option',{value:''},'自动判断'),E('option',{value:'photo'},'完整矩形照片'),E('option',{value:'cutout'},'透明主体'))) : null,
+            e.extractionEngine === 'model-reconstruction' ? E('small', null, ' · 模型重建，请核对细节') : null,
+            e.bounds ? E('small', null, 'PNG ' + e.bounds.width + '×' + e.bounds.height + ' · 原图坐标 (' + e.bounds.x + ', ' + e.bounds.y + ')') : null,
+            e.status === 'complete' || e.status === 'failed' ? E('button', { type: 'button', disabled: busy, onClick: () => update(e.id, { revision: (e.revision || 0) + 1, status: 'pending' }) }, '重新生成此层') : null,
+            e.type === 'image' && e.enabled && draft.some(b => b.enabled && b.type === 'image' && b.z < e.z) ? E('button', { type: 'button', disabled: busy, title: '与后方图像合并提取，适合保留完整产品与装饰组合', onClick: () => mergeBehind(e) }, '并入后层') : null,
+            E('textarea', { value: e.description || '', disabled: busy, onChange: v => update(e.id, { description: v.target.value }), 'aria-label': '元素描述', placeholder: '描述需单独提取的元素和必须保留的细节' }),
+            e.type !== 'background' ? E('div', { className: 'dsh-layers-inline' }, ...[['x','左'],['y','上'],['width','宽'],['height','高']].map(([key,label]) =>
+              E('label', { key }, label, E('input', { type: 'number', min: key === 'x' || key === 'y' ? 0 : 1, value: e[key], disabled: busy,
+                'aria-label': e.name + label, onChange: v => update(e.id, { [key]: Number(v.target.value), geometryIssues: undefined, geometryLocked:true }) })))) : null,
+            e.error ? E('p', { className: 'dsh-layers-error' }, e.error) : null,
+            e.type === 'text' ? E('div', { className: 'dsh-layers-text' },
+              E('textarea', { value: e.text || '', disabled: busy, onChange: v => update(e.id, { text: v.target.value }), 'aria-label': '核对文字内容' }),
+              E('label', null, E('input', { type: 'checkbox', checked: !!e.nativeText, disabled: busy, onChange: v => update(e.id, { nativeText: v.target.checked, fontAccepted: false }) }), '可编辑文字（未勾选时保留原字形图像）'),
+              e.nativeText ? E('div', null,
+                E('select', { value: e.fontPostScript, disabled: busy, onChange: v => update(e.id, { fontPostScript: v.target.value, fontAccepted: false }), 'aria-label': '候选字体' },
+                  ...TEXT_REBUILD_FONTS.map(group => E('optgroup', { key: group.group, label: group.group }, ...group.items.map(f => E('option', { key: f.ps, value: f.ps }, f.label))))),
+                E('div', { className: 'dsh-layers-inline' }, E('label', null, '字号 ', E('input', { type: 'number', min: 8, max: 2000, value: e.fontSize, disabled: busy, onChange: v => update(e.id, { fontSize: Number(v.target.value) }) })),
+                  E('input', { type: 'color', value: e.color || '#111827', disabled: busy, onChange: v => update(e.id, { color: v.target.value }), 'aria-label': '文字颜色' })),
+                E('label', null, E('input', { type: 'checkbox', checked: !!e.fontAccepted, disabled: busy, onChange: v => update(e.id, { fontAccepted: v.target.checked }) }), '接受所选候选字体（不代表已找回原字体）')) : null) : null)),
+          draft.some(e => e.requestState === 'unknown') ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: retryUnknown, onChange: e => setRetryUnknown(e.target.checked) }), '已核对服务记录，接受未知请求重试可能重复消耗额度') : null,
+          E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: localOnly, disabled: busy || props.automationLimits && !props.automationLimits.generationAllowed, onChange: e => setLocalOnly(e.target.checked) }), '仅使用原图提取（不调用生图，复杂遮挡可能无法完成）'),
+          E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: autoExport, disabled: busy, onChange: e => setAutoExport(e.target.checked) }), '拆层完成后自动导出并加入画布'),
+          E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: autoOpen, disabled: busy, onChange: e => setAutoOpen(e.target.checked) }), '导出后自动打开 ' + (format === 'psd' ? 'Photoshop' : 'Illustrator')),
+          mergeUndo.length ? E('button', { type: 'button', disabled: busy, onClick: () => { setDraft(mergeUndo[mergeUndo.length - 1]); setMergeUndo(history => history.slice(0, -1)); setDirty(true); } }, '撤销最近合并') : null,
+          E('p', { className: 'dsh-layers-note' }, '取消勾选的前景不会出现在导出文件中。提取和补背景按元素消耗当前引擎额度，成功素材会复用，请逐层核对生成细节。'),
+          task && (task.exports || []).length ? E('div', { className: 'dsh-layers-exports' }, ...task.exports.map(file => E('div', { key: file.path }, E('strong', null, file.kind.toUpperCase() + ' · ' + file.name),
+            E('button', { type: 'button', onClick: () => props.onFile(file) }, '加入画布'), E('small', { title: file.path }, file.path)))) : null,
+          task && task.outputDirectory ? E('small', { className: 'dsh-layers-path', title: task.outputDirectory }, '本任务工作区：' + task.workspaceRoot + '\n过程文件：' + task.outputDirectory) : null),
+        E('footer', { className: 'dsh-layers-foot' },
+          task && !busy && !props.automationLimits ? E('button', { type: 'button', onClick: () => { ownExports.current = false; taskProject.current = ''; setTask(null); setDraft([]); setMergeUndo([]); setDirty(false); setAcceptQuality(false); setError(''); setOriginal(true); } }, '新分析') : null,
+          !task && !props.automationLimits ? E('button', { className: 'dsh-layers-primary', type: 'button', disabled: busy, onClick: () => submitAnalysis(true) }, posting ? '正在提交…' : '一键拆层' + (autoExport ? '并导出 ' + format.toUpperCase() : '')) : null,
+          !task ? E('button', { type: 'button', disabled: busy, onClick: () => submitAnalysis(false) }, '仅分析，先调整清单') : null,
+          task && !busy ? E('button', { type: 'button', onClick: () => { setAcceptQuality(false); act('refine', { id: task.id, editableText, fontPolicy: 'substitute' }); } }, '重新校准') : null,
+          task && task.status === 'running' ? E('button', { type: 'button', disabled: posting, onClick: () => act('cancel', { id: task.id }) }, '停止后续操作') : null,
+          task && task.status !== 'running' && (task.status !== 'ready' || dirty) ? E('button', { className: 'dsh-layers-primary', type: 'button', disabled: busy || !draft.length || invalidFonts, onClick: () => { ownExports.current = autoExport; for (const f of task.exports || []) delivered.current.add(f.path); act('run', { id: task.id, elements: draft, retryUnknown, localOnly,
+            acceptQualityIssues: acceptQuality, maxImageRequests, autoExportFormat: autoExport ? format : '', openAfterExport: autoOpen }); } }, dirty ? '应用修改并继续' : task.status === 'review' ? '开始拆层' + (autoExport ? '并导出 ' + format.toUpperCase() : '') : '继续／重试缺失图层') : null,
+          E('div', { className: 'dsh-layers-export-tools' }, E('select', { value: format, disabled: busy, onChange: e => setFormat(e.target.value), 'aria-label': '拆层导出格式' }, E('option', { value: 'ai' }, 'AI（需 Illustrator）'), E('option', { value: 'psd' }, 'PSD'), E('option', { value: 'svg' }, 'SVG')),
+            E('button', { type: 'button', disabled: !canExport, onClick: () => { ownExports.current = true; for (const f of task.exports || []) delivered.current.add(f.path); act('export', { id: task.id, format, acceptQualityIssues: acceptQuality, openAfterExport: autoOpen }); } }, '导出 ' + format.toUpperCase())),
+          E('label', null, '图像请求上限 ', E('input', { type: 'number', min: 0, max: 10000, value: maxImageRequests, disabled: busy || !!props.automationLimits,
+            style: { width: 70 }, onChange: e => setMaxImageRequests(Number(e.target.value)) }), E('small', null, ' 已使用 ' + (task?.generationAttempts || 0)))));
+    }
+    function CanvasAutomationPanel(props) {
+      const [folder, setFolder] = React.useState('');
+      const [operation, setOperation] = React.useState('remove_background');
+      const [recursive, setRecursive] = React.useState(false);
+      const [formats, setFormats] = React.useState(['psd']);
+      const [allowGeneration, setAllowGeneration] = React.useState(false);
+      const [maximum, setMaximum] = React.useState(10);
+      const [prompt, setPrompt] = React.useState('');
+      const [jobs, setJobs] = React.useState([]);
+      const [detail, setDetail] = React.useState(null);
+      const [retryUnknown, setRetryUnknown] = React.useState(false);
+      const [busy, setBusy] = React.useState(false);
+      const [error, setError] = React.useState('');
+      const [notice, setNotice] = React.useState('');
+      const alive = React.useRef(true), pending = React.useRef(false);
+      const E = React.createElement;
+      const names = { queued: '排队中', running: '处理中', cancelling: '正在停止', completed: '已完成', partial: '部分完成', failed: '未完成', cancelled: '已停止', interrupted: '可继续', needs_review: '需核对' };
+      const call = async (action, body) => {
+        const response = await fetch('/dsh-canvas/automation/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: props.project.sessionId, ...body }) });
+        const value = await response.json(); if (!response.ok || !value.ok) throw new Error(value.error || '后台任务操作失败'); return value.value;
+      };
+      const refresh = async signal => {
+        const r = await fetch('/dsh-canvas/automation/jobs?' + new URLSearchParams({ sessionId: props.project.sessionId || '', summary: 'true' }), { cache: 'no-store', signal });
+        const value = await r.json(); if (alive.current && value.ok) setJobs(value.value || []);
+      };
+      React.useEffect(() => {
+        alive.current = true; let stopped = false, timer; const controller = new AbortController();
+        const poll = async () => { try { await refresh(controller.signal); } catch (e) { if (!stopped && alive.current) setError('进度暂时无法读取，后台任务会保留'); } if (!stopped) timer = setTimeout(poll, 2500); };
+        poll(); return () => { alive.current = false; stopped = true; clearTimeout(timer); controller.abort(); };
+      }, [props.project.sessionId]);
+      const act = async (action, body) => {
+        if (pending.current) return; pending.current = true; setBusy(true); setError('');
+        try { const result = await call(action, body); if (!alive.current) return; setNotice(result.message || '操作已受理'); await refresh(); }
+        catch (e) { if (alive.current) setError(String(e.message || e)); }
+        finally { pending.current = false; if (alive.current) setBusy(false); }
+      };
+      const showDetail = async job => {
+        try { const r = await fetch('/dsh-canvas/automation/job?' + new URLSearchParams({ id: job.id }), { cache: 'no-store' }); const v = await r.json(); if (!v.ok) throw new Error(v.error); if (alive.current) { setDetail(v.value); setRetryUnknown(false); } }
+        catch (e) { if (alive.current) setError(String(e.message || e)); }
+      };
+      return E('aside', { className: 'dsh-layers-panel dsh-automation-panel', 'aria-label': '后台批处理', onPointerDown: e => e.stopPropagation() },
+        E('header', { className: 'dsh-layers-head' }, E('div', null, E('strong', null, '后台批处理'), E('small', null, '关闭面板后继续处理，原图会保留')),
+          E('button', { type: 'button', onClick: props.onClose, 'aria-label': '关闭后台批处理' }, '×')),
+        E('div', { className: 'dsh-layers-scroll' },
+          E('p', { className: 'dsh-layers-note' }, '可以在聊天中指定文件夹或画布图片，例如“把这个文件夹的图片批量抠图，完成后展示”。'),
+          E('p', { className: 'dsh-layers-note', style: { overflowWrap: 'anywhere' } }, '结果项目跟随当前工作区保存：' + (props.project.cwd || '未设置，使用输入文件夹所在目录')),
+          E('label', null, '输入文件夹', E('input', { type: 'text', value: folder, placeholder: '粘贴文件夹路径；留空则处理画布选中图片', onChange: e => setFolder(e.target.value), style: { width: '100%' }, 'aria-label': '批处理输入文件夹' })),
+          E('button', { type: 'button', disabled: busy, onClick: async () => { try { const value = await call('pick-folder', {}); if (value.path && alive.current) setFolder(value.path); } catch (e) { if (alive.current) setError(String(e.message || e)); } } }, '选择文件夹'),
+          E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: recursive, onChange: e => setRecursive(e.target.checked) }), '包含子文件夹'),
+          E('select', { value: operation, onChange: e => setOperation(e.target.value), 'aria-label': '批处理操作', style: { width: '100%' } },
+            E('option', { value: 'remove_background' }, '批量抠图（本地处理）'), E('option', { value: 'layered_export' }, '图片拆层 · 可编辑 PSD / AI'),
+            E('option', { value: 'flat_psd' }, '普通 PSD 转换（仅封装原图）'), E('option', { value: 'edit_image' }, '批量编辑图片')),
+          operation === 'layered_export' ? E('div', { className: 'dsh-layers-inline' }, ...['psd', 'ai', 'svg'].map(f => E('label', { key: f }, E('input', { type: 'checkbox', checked: formats.includes(f), onChange: e => setFormats(current => e.target.checked ? [...current, f] : current.filter(x => x !== f)) }), f.toUpperCase()))) : null,
+          operation === 'edit_image' ? E('textarea', { value: prompt, onChange: e => setPrompt(e.target.value), placeholder: '对所有图片执行的修改要求', 'aria-label': '批量图片修改要求', style: { width: '100%', minHeight: 70 } }) : null,
+          ['layered_export', 'edit_image'].includes(operation) ? E('div', null,
+            E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: allowGeneration, onChange: e => setAllowGeneration(e.target.checked) }), '允许当前图像引擎重建素材'),
+            allowGeneration ? E('label', null, '整批图像请求上限 ', E('input', { type: 'number', min: 1, max: 10000, value: maximum, onChange: e => setMaximum(Number(e.target.value)), style: { width: 75 } })) : null) : null,
+          E('button', { className: 'dsh-layers-primary', type: 'button', disabled: busy || (operation === 'layered_export' && !formats.length), onClick: () => act('submit', {
+            operation, ...(folder.trim() ? { folder: folder.trim() } : { sourceProject: props.project.project, selectedOnly: true }), recursive,
+            formats, prompt, allowGeneration, maxImageRequests: allowGeneration ? maximum : 0,
+            editableText: true, openCanvas: true }) }, busy ? '正在提交…' : '开始后台处理'),
+          error ? E('p', { className: 'dsh-layers-error', role: 'alert' }, error) : null,
+          notice ? E('p', { className: 'dsh-layers-note', role: 'status' }, notice) : null,
+          E('h4', null, '本聊天的任务'),
+          !jobs.length ? E('p', { className: 'dsh-layers-note' }, '还没有后台任务') : null,
+          ...jobs.slice(0, 30).map(job => E('section', { className: 'dsh-layers-row', key: job.id },
+            E('strong', null, names[job.status] || job.status, ' · ', job.completed + '/' + job.total),
+            ['queued','running','cancelling'].includes(job.status) ? E('span', { className: 'dsh-layers-spinner', style: { display: 'inline-block', marginLeft: 8 } }) : null,
+            E('p', { className: 'dsh-layers-note' }, job.message),
+            E('div', { className: 'dsh-layers-inline' },
+              E('button', { type: 'button', onClick: () => act('open', { id: job.id }) }, '展示项目'),
+              E('button', { type: 'button', onClick: () => showDetail(job) }, '查看明细'),
+              ['queued','running','cancelling'].includes(job.status) ? E('button', { type: 'button', disabled: busy || job.status === 'cancelling', onClick: () => act('cancel', { id: job.id }) }, '停止')
+                : job.status !== 'completed' ? E('button', { type: 'button', disabled: busy, onClick: () => act('resume', { id: job.id }) }, '继续未完成') : null))),
+          detail ? E('section', { className: 'dsh-layers-row' }, E('strong', null, '任务明细'),
+            ...detail.items.slice(0, 20).map(i => E('div', { key: i.id }, E('p', null, i.name, '：', i.error || names[i.status] || i.status),
+              i.layeredTaskId ? E('button', { type: 'button', disabled: busy || ['queued','running','cancelling'].includes(detail.status), onClick: () => act('review', { id: detail.id, itemId: i.id }) }, '核对图层与字体') : null)),
+            E('small', { style: { display: 'block', overflowWrap: 'anywhere' } }, '项目位置：' + detail.project),
+            E('small', { style: { display: 'block' } }, '已使用图像请求：' + detail.imageRequestsUsed + '/' + detail.maxImageRequests),
+            detail.items.some(i => i.requestState === 'unknown') ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: retryUnknown, onChange: e => setRetryUnknown(e.target.checked) }), '已核对未知请求，接受重试可能重复消耗') : null,
+            detail.status !== 'completed' ? E('button', { type: 'button', disabled: busy, onClick: () => act('resume', { id: detail.id, retryUnknown, ...(allowGeneration ? { allowGeneration: true, maxImageRequests: maximum } : {}) }) }, '继续此任务') : null,
+            E('button', { type: 'button', onClick: () => setDetail(null) }, '收起明细')) : null));
+    }
     // 聊天输入区的生图比例选择：值域与宿主 image-engine-settings 白名单一一对应。
     // 编辑/擦除不经过这里（跟随原图尺寸）；生成数量仅 API 引擎生效。
     const IMAGE_RATIO_OPTIONS = [
@@ -2073,7 +2425,10 @@ window.__ModuleLoader__.load({
         const update = () => {
           try {
             const snapshot = directory.store.getSnapshot();
-            if (snapshot && snapshot.current) activeChatModelSelection = { ...snapshot.current };
+            if (snapshot && snapshot.current) {
+              activeChatModelSelection = { ...snapshot.current };
+              window.dispatchEvent(new CustomEvent('dsh-canvas:model-selection', { detail: { sessionId: props.sessionId, selection: activeChatModelSelection } }));
+            }
             // 模型追踪诊断:与标题栏探针同一通道,远程可读(Win 模型识别走不通排查用)。
             reportModelStage('ok', {
               snapshotKeys: snapshot ? Object.keys(snapshot) : null,
@@ -2572,7 +2927,7 @@ html,body,#ex-root,#ex-root>div,.excalidraw,.excalidraw-container{margin:0;width
 </style></head><body><div id="ex-root"></div><div class="dsh-tip">拖拽=移动 · 滚轮=缩放 · 图片可移动/缩放</div><script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script><script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script><script src="https://cdn.jsdelivr.net/npm/@excalidraw/excalidraw@0.17.6/dist/excalidraw.production.min.js"></script><script>(function(){var lastRuntimeError="";var post=function(m){try{window.parent.postMessage(m,"*")}catch(e){}};window.addEventListener("error",function(ev){lastRuntimeError="画布运行错误: "+String(ev&&ev.message||ev&&ev.error||"未知错误");post({type:"error",message:lastRuntimeError})});window.addEventListener("unhandledrejection",function(ev){lastRuntimeError="画布异步错误: "+String(ev&&ev.reason&&ev.reason.message||"未知错误");post({type:"error",message:lastRuntimeError})});var root=window.ReactDOM.createRoot(document.getElementById("ex-root"));var api=null,ready=false,insertCount=0,insertChain=Promise.resolve(),requestSceneLoad=null,hydrating=false,expectedElements=0;var systemDark=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches;var canvasDefaultBackground=systemDark?"#15171c":"#f7f8fa";var empty={viewBackgroundColor:canvasDefaultBackground};var themeMedia=window.matchMedia?window.matchMedia("(prefers-color-scheme: dark)"):null;var syncSystemTheme=function(ev){var nextDark=!!(ev&&ev.matches);if(nextDark===systemDark)return;var previous=canvasDefaultBackground;systemDark=nextDark;canvasDefaultBackground=systemDark?"#15171c":"#f7f8fa";if(api&&typeof api.getAppState==="function"&&typeof api.updateScene==="function"&&String(api.getAppState().viewBackgroundColor||"")===previous)api.updateScene({appState:Object.assign({},api.getAppState(),{viewBackgroundColor:canvasDefaultBackground}),commitToHistory:false});};if(themeMedia){if(typeof themeMedia.addEventListener==="function")themeMedia.addEventListener("change",syncSystemTheme);else if(typeof themeMedia.addListener==="function")themeMedia.addListener(syncSystemTheme);}function fileObject(fl){var f={};if(fl&&typeof fl.forEach==="function"){fl.forEach(function(v,k){f[k]=v})}else if(fl&&typeof fl==="object"){Object.keys(fl).forEach(function(k){f[k]=fl[k]})}return f}function serialize(el,st,fl){var elements=el||[],used={};elements.forEach(function(item){if(item&&item.type==="image"&&!item.isDeleted&&item.fileId)used[item.fileId]=true;});var f={},src=fileObject(fl);Object.keys(src).forEach(function(k){if(!used[k])return;var v=src[k];if(v&&v.dataURL)f[k]={id:v.id||k,dataURL:v.dataURL,mimeType:v.mimeType,created:v.created||Date.now(),lastRetrieved:v.lastRetrieved};});return {elements:elements,appState:Object.assign({},st||empty),files:f}};// Keep the emitter outside Main: overlay label updates re-render Main during a drag.
   // Recreating its timer or file cache on each render would resend every image.
 
-  var canvasChangeTimer=0,pendingCanvasChange=null,sentCanvasFiles={};
+  var canvasChangeTimer=0,pendingCanvasChange=null,sentCanvasFiles={},automationChangeStamp="";
   function cancelCanvasChange(){
     if(canvasChangeTimer)clearTimeout(canvasChangeTimer);
     canvasChangeTimer=0;pendingCanvasChange=null;
@@ -2600,6 +2955,7 @@ html,body,#ex-root,#ex-root>div,.excalidraw,.excalidraw-container{margin:0;width
   }
   function scheduleCanvasChange(elements,appState,files){
     if(hydrating){cancelCanvasChange();return;}
+    if(automationChangeStamp){var expected=automationChangeStamp;automationChangeStamp="";if(JSON.stringify((elements||[]).map(function(item){return[item.id,item.version,item.versionNonce];}))===expected){cancelCanvasChange();return;}}
     pendingCanvasChange={elements:elements,appState:appState,files:files,token:window.__dshSceneToken||""};
     // At most one lightweight scene update per 160ms; always keep the final position.
     if(!canvasChangeTimer)canvasChangeTimer=setTimeout(flushCanvasChange,160);
@@ -2949,6 +3305,7 @@ function Main(){
     var saveSelectionToMaterials=function(ids){var items=materialPayloadForSelection(ids);if(items.length)post({type:"save-to-materials",items:items,source:"selection-toolbar"});else post({type:"error",message:"所选图片暂时无法读取"});};
     var beginMaterialDrag=function(ids,event){var items=materialPayloadForSelection(ids);if(!items.length)return;if(event&&event.dataTransfer){event.dataTransfer.effectAllowed="copy";event.dataTransfer.setData("application/x-dsh-canvas-image",JSON.stringify({count:items.length}));event.dataTransfer.setData("text/plain",items.length===1?items[0].name:(items.length+" 张画布图片"));}post({type:"material-drag-start",items:items});};
     var sendSelectionToChat=function(ids){if(!api)return;var wanted=new Set(Array.isArray(ids)?ids:[]),files=fileObject(api.getFiles?api.getFiles():{}),images=(api.getSceneElements?api.getSceneElements():[]).filter(function(item){return item&&item.type==="image"&&!item.isDeleted&&wanted.has(item.id);}).map(function(item,index){var file=files[item.fileId],custom=item.customData||{};return file&&file.dataURL?{dataURL:file.dataURL,name:custom.dshFileName||("canvas-selection-"+(index+1)+"-"+String(item.id).slice(-6)+".png"),width:Math.max(1,Number(item.width||0)),height:Math.max(1,Number(item.height||0)),sourceKind:String(custom.dshSourceKind||"image")} : null;}).filter(Boolean);if(!images.length){post({type:"error",message:"所选图片暂时无法读取，请稍后重试"});return;}var batchId="chat_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,7);images.forEach(function(image,index){setTimeout(function(){post({type:"request-send-selection-item",batchId:batchId,index:index+1,total:images.length,image:image});},index*90);});};
+    var requestLayeredImage=function(id){if(!api)return;var target=(api.getSceneElements()||[]).find(function(item){return item&&item.id===id&&item.type==="image"&&!item.isDeleted;}),files=fileObject(api.getFiles?api.getFiles():{}),file=target&&files[target.fileId],custom=target&&target.customData||{};if(!target||!file||!file.dataURL){post({type:"error",message:"当前图片数据不可用"});return;}post({type:"request-layered-image",elementId:id,name:custom.dshFileName||"画布图片.png",imageData:file.dataURL,sourcePath:custom.dshSourcePath||""});};
     var requestBackgroundRemoval=function(id){if(!api)return;var target=(api.getSceneElements()||[]).find(function(item){return item&&item.id===id&&item.type==="image"&&!item.isDeleted;}),files=fileObject(api.getFiles?api.getFiles():{}),file=target&&files[target.fileId];if(!target||!file||!file.dataURL){post({type:"error",message:"当前图片数据不可用"});return;}try{var custom=target.customData||{},job=createEditPlaceholder({id:id},"本地 rembg · birefnet-general-lite · 首次使用自动准备"),name=custom.dshFileName||("画布图片-"+String(id).slice(-6)+".png");post({type:"request-remove-background",requestId:job.requestId,placeholderId:job.placeholderId,elementId:id,fileId:target.fileId,name:name,imageData:file.dataURL,imagePath:custom.dshSourcePath||""});}catch(err){post({type:"error",message:String(err&&err.message||err)});}};
     var submitImageEdit=function(payload){if(!imageEditor||imageEditor.busy)return;try{var job=createEditPlaceholder(imageEditor),request=Object.assign({},imageEditor);setImageEditor(null);var posEl=(api&&api.getSceneElements?api.getSceneElements():[]).find(function(item){return item&&item.id===request.id;})||null;post({type:"request-image-edit",requestId:job.requestId,placeholderId:job.placeholderId,elementId:request.id,fileId:request.fileId,name:request.name,imageData:request.dataURL,imagePath:request.sourcePath,editRootPath:request.editRootPath,editHistory:request.editHistory,editDepth:request.editDepth,mode:request.mode,prompt:payload.prompt,maskData:payload.maskData,width:request.width,height:request.height,atX:posEl?posEl.x:undefined,atY:posEl?posEl.y:undefined});}catch(err){setImageEditor(Object.assign({},imageEditor,{busy:false,error:String(err&&err.message||err)}));}};
     canvasChangeHandlerRef.current=onCanvasChange;
@@ -2974,6 +3331,7 @@ function Main(){
         window.React.createElement('button',{className:'dsh-selection-action dsh-bridge-ps',title:'返回 Photoshop：直接送回正在运行的 PS——PSD 按图层并入当前文档（文字层可编辑）、其它格式作为图片置入，来自 PS 的内容回到原位；PS 没开时先留在项目 ADOBE桥接/发件箱，打开后在「DSH画布桥接」面板点「并入图层」',onClick:function(){requestBridgeReturn(toolbar.ids,"photoshop");}},'→Ps'),
         window.React.createElement('button',{className:'dsh-selection-action dsh-bridge-ai',title:'返回 Illustrator：直接送回正在运行的 AI——.ai/.svg 按对象并入当前文档（文字可编辑）、其它格式作为图片置入，来自 AI 的内容回到原位；AI 没开时先留在项目 ADOBE桥接/发件箱',onClick:function(){requestBridgeReturn(toolbar.ids,"illustrator");}},'→Ai'),
         toolbar.count===1&&["image","psd"].indexOf(toolbar.singleKind||"image")>=0?window.React.createElement('button',{className:'dsh-selection-action dsh-text-rebuild-action',title:'框选后由当前聊天模型理解文字，并生成可在 Photoshop 中继续编辑的 PSD',onClick:function(){requestTextRebuild(toolbar.ids[0]);}},'编辑文字'):null,
+        toolbar.count===1&&(toolbar.singleKind||"image")==="image"?window.React.createElement('button',{className:'dsh-selection-action dsh-layered-image-action',title:'拆分图片为独立图层，导出 AI、PSD 或 SVG',onClick:function(){requestLayeredImage(toolbar.ids[0]);}},'图片拆层'):null,
         window.React.createElement('div',{className:'dsh-selection-more'},
           window.React.createElement('button',{className:'dsh-selection-action dsh-more-toggle',title:'更多操作',onClick:function(e){e.stopPropagation();setMoreOpen(!moreOpen);}},'更多 ▾'),
           moreOpen?window.React.createElement('div',{className:'dsh-selection-menu',onClick:function(e){e.stopPropagation();setMoreOpen(false);}},
@@ -3184,6 +3542,26 @@ async function restoreCanvasSourceFile(file,sourcePath){
 window.addEventListener("message",function(e){
   if(e.source!==window.parent)return;
   var d=e.data||{};
+  if(d.type==="automation-context-request"){
+    e.stopImmediatePropagation();if(!api)return;
+    var state=api.getAppState()||{},rows=(api.getSceneElements()||[]).filter(function(item){return item&&!item.isDeleted;}).slice(0,5000).map(function(item){var cd=item.customData||{};return{id:item.id,type:item.type,x:item.x,y:item.y,width:item.width,height:item.height,angle:item.angle||0,opacity:item.opacity==null?100:item.opacity,name:cd.dshFileName||"",path:cd.dshSourcePath||""};});
+    var stamp=JSON.stringify((api.getSceneElements()||[]).map(function(item){return[item.id,item.version,item.versionNonce];}));
+    post({type:"automation-context",selectedIds:Object.keys(state.selectedElementIds||{}),elements:rows,sceneStamp:stamp});return;
+  }
+  if(d.type==="automation-patch"){
+    e.stopImmediatePropagation();
+    try{
+      if(!api||d.token!==window.__dshSceneToken||Date.now()>Number(d.deadline||0))throw new Error("画布场景已切换或请求过期");
+      if(!Array.isArray(d.patches)||!d.patches.length||d.patches.length>500)throw new Error("对象清单无效");
+      var elements=api.getSceneElements(),changes=new Map(),allowed=["x","y","width","height","angle","opacity"];
+      if(d.sceneStamp&&JSON.stringify(elements.map(function(item){return[item.id,item.version,item.versionNonce];}))!==d.sceneStamp)throw new Error("画布内容已变化，请重新读取对象");
+      d.patches.forEach(function(p){if(!p||changes.has(p.id))throw new Error("对象ID无效或重复");var row=elements.find(function(item){return item.id===p.id&&!item.isDeleted;});if(!row)throw new Error("指定对象已不存在");var patch={};allowed.forEach(function(key){if(p[key]===undefined)return;var n=p[key];if(typeof n!=="number"||!Number.isFinite(n)||Math.abs(n)>1e7||((key==="width"||key==="height")&&n<=0)||(key==="opacity"&&(n<0||n>100)))throw new Error("对象位置或尺寸无效");patch[key]=n;});changes.set(p.id,patch);});
+      var adjusted=elements.map(function(item){var patch=changes.get(item.id);return patch?Object.assign({},item,patch,{version:(Number(item.version)||0)+1,versionNonce:Math.floor(Math.random()*2147483647),updated:Date.now()}):item;});
+      automationChangeStamp=JSON.stringify(adjusted.map(function(item){return[item.id,item.version,item.versionNonce];}));
+      api.updateScene({elements:adjusted});
+      post({type:"automation-patch-result",commandId:d.commandId,sceneStamp:JSON.stringify(api.getSceneElements().map(function(item){return[item.id,item.version,item.versionNonce];})),snapshot:serialize(api.getSceneElements(),api.getAppState(),api.getFiles())});
+    }catch(error){post({type:"automation-patch-result",commandId:d.commandId,error:String(error.message||error)});}return;
+  }
   if(d.type==="snapshot-request"){
     flushCanvasChange();
     e.stopImmediatePropagation();
@@ -3489,6 +3867,9 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
 
     function CanvasOverlay() {
       const [on, setOn] = React.useState(getMode());
+      const [automationOpen, setAutomationOpen] = React.useState(false);
+      const [automationActive, setAutomationActive] = React.useState(0);
+      const automationCommandsRef = React.useRef(new Map());
       const minimumChatWidth = 520;
       const clampPanelWidth = React.useCallback((value) => {
         const viewport = Math.max(720, window.innerWidth || 0);
@@ -3721,6 +4102,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
+      const [layeredImage, setLayeredImage] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
       // 场景令牌：每次向 iframe 发 load 都换新值；iframe 回传的 changed 必须携带
@@ -4074,9 +4456,19 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
         fetch('/dsh-canvas/chat-context', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: projectInfo.sessionId, cwd: projectInfo.cwd || '', project: projectInfo.project || '', designMode: !!on })
+          body: JSON.stringify({ sessionId: projectInfo.sessionId, cwd: projectInfo.cwd || '', project: projectInfo.project || '', designMode: !!on, modelSelection: activeChatModelSelection || undefined })
         }).catch(() => {});
       }, [on, projectInfo.cwd, projectInfo.project, projectInfo.sessionId]);
+      React.useEffect(() => {
+        const publish = event => {
+          const current = projectRef.current, selected = event?.detail;
+          if (!current.sessionId || selected?.sessionId && selected.sessionId !== current.sessionId) return;
+          fetch('/dsh-canvas/chat-context', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...current,
+            designMode: getMode(), modelSelection: selected?.selection || activeChatModelSelection || undefined }) }).catch(() => {});
+        };
+        window.addEventListener('dsh-canvas:model-selection', publish); publish();
+        return () => window.removeEventListener('dsh-canvas:model-selection', publish);
+      }, [projectInfo.sessionId, projectInfo.project]);
       React.useEffect(() => {
         try { window.localStorage.setItem(PANEL_WIDTH_KEY, String(width)); } catch (err) {}
       }, [width]);
@@ -4370,6 +4762,62 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           setFeedback('⚠ 加载项目失败，当前画布未改变：' + String((err && err.message) || err));
         });
       };
+      React.useEffect(() => {
+        if (!projectInfo.sessionId) return undefined;
+        let stopped = false, timer; const controller = new AbortController();
+        const json = async (suffix, body) => {
+          const r = await fetch('/dsh-canvas/automation/' + suffix, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
+          const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || '后台结果读取失败'); return d.value;
+        };
+        const poll = async () => {
+          try {
+            const current = projectRef.current;
+            if (!current.sessionId || current.sessionId !== projectInfo.sessionId) return;
+            if (getMode() && frameReady.current && !switchingProject.current) post({ type: 'automation-context-request' });
+            const query = new URLSearchParams({ sessionId: current.sessionId, summary: 'true' });
+            const responses = await Promise.all([fetch('/dsh-canvas/automation/events?' + query, { cache: 'no-store', signal: controller.signal }),
+              fetch('/dsh-canvas/automation/jobs?' + query, { cache: 'no-store', signal: controller.signal })]);
+            const [events, jobs] = await Promise.all(responses.map(r => r.json()));
+            if (stopped || projectRef.current.sessionId !== current.sessionId) return;
+            if (jobs.ok) setAutomationActive((jobs.value || []).filter(j => ['queued','running','cancelling'].includes(j.status)).length);
+            const commands = (events.value || []).filter(e => e.kind === 'patch');
+            for (const command of commands) {
+              if (automationCommandsRef.current.has(command.id)) continue;
+              const revision = Number(latestSnapshot.current?.dshMeta?.revision || 0);
+              if (command.deadline <= Date.now() || projectRef.current.project !== command.project || revision !== command.baseRevision || !frameReady.current || switchingProject.current) {
+                await json('canvas-result', { id: command.id, sessionId: current.sessionId, error: '画布或版本已变化，请重新读取对象后调整' }); continue;
+              }
+              const record = { project: command.project, sessionId: current.sessionId, timer: null };
+              record.timer = setTimeout(() => { automationCommandsRef.current.delete(command.id); }, 11000);
+              automationCommandsRef.current.set(command.id, record);
+              post({ type: 'automation-patch', commandId: command.id, patches: command.patches, deadline: command.deadline, sceneStamp: command.sceneStamp, token: canvasLoadToken.current });
+            }
+            if (automationCommandsRef.current.size) return;
+            const displays = (events.value || []).filter(e => e.kind !== 'patch');
+            if (displays.length) {
+              const event = displays[displays.length - 1]; setMode(true);
+              await loadProject({ cwd: event.cwd || current.cwd, sessionId: current.sessionId, project: event.project }, true);
+              if (!stopped && projectRef.current.project === event.project && projectRef.current.sessionId === current.sessionId) {
+                if (event.kind === 'review' && event.taskId) {
+                  setAutomationOpen(false);
+                  setLayeredImage({ key: 'automation-review-' + event.revision, project: { cwd: event.cwd || current.cwd, project: event.project, sessionId: current.sessionId },
+                    data: {}, initialTaskId: event.taskId, automationLimits: { generationAllowed: event.generationAllowed, maxImageRequests: event.maxImageRequests } });
+                }
+                setFeedback('✓ ' + (event.message || '已展示工作台处理结果'));
+                for (const item of displays) await json('ack', { id: item.id, revision: item.revision });
+              }
+            }
+          } catch (error) { /* A transient UI failure never cancels a host-owned job. */ }
+          finally { if (!stopped) timer = setTimeout(poll, 2000); }
+        };
+        poll(); return () => {
+          stopped = true; controller.abort(); clearTimeout(timer);
+          for (const [id, record] of automationCommandsRef.current) if (record.sessionId === projectInfo.sessionId) {
+            clearTimeout(record.timer); automationCommandsRef.current.delete(id);
+            fetch('/dsh-canvas/automation/canvas-result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, sessionId: record.sessionId, error: '聊天已切换，请重新读取画布核对结果' }) }).catch(() => {});
+          }
+        };
+      }, [projectInfo.sessionId]);
       const openProjectList = () => {
         if (!projectInfo.cwd) { setFeedback('⚠ 当前聊天没有工作目录'); return; }
         setMoreMenuOpen(false);
@@ -4805,6 +5253,23 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
             }
           }
           flushPending();
+        } else if (d.type === 'automation-context') {
+          const current = projectRef.current;
+          if (!current.project || !current.sessionId || switchingProject.current) return;
+          fetch('/dsh-canvas/automation/context', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...current,
+            selectedIds: d.selectedIds || [], elements: d.elements || [], sceneStamp: d.sceneStamp, revision: Number(latestSnapshot.current?.dshMeta?.revision || 0) }) }).catch(() => {});
+        } else if (d.type === 'automation-patch-result') {
+          const record = automationCommandsRef.current.get(d.commandId); if (!record) return;
+          clearTimeout(record.timer); automationCommandsRef.current.delete(d.commandId);
+          const finish = error => fetch('/dsh-canvas/automation/canvas-result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: d.commandId, sessionId: record.sessionId, sceneStamp: d.sceneStamp, ...(error ? { error } : {}) }) }).catch(() => {});
+          if (d.error || projectRef.current.project !== record.project || !Array.isArray(d.snapshot?.elements)) { void finish(d.error || '项目已切换或快照无效，未保存调整'); return; }
+          const snapshot = markCanvasChanged(d.snapshot, latestSnapshot.current || {}); latestSnapshot.current = snapshot;
+          clearTimeout(saveTimer.current);
+          queueStateSave(snapshot, projectRef.current.cwd, record.project).then(async response => {
+            const value = response && await response.json();
+            if (!value || !value.ok || value.stale) throw new Error('另一个窗口已修改画布，请重新读取对象');
+            setFeedback('✓ 已调整指定画布对象'); await finish();
+          }).catch(error => { setFeedback('⚠ ' + String(error.message || error)); void finish(String(error.message || error)); });
         } else if (d.type === 'size') {
           if (d.w < 100 || d.h < 100) console.error('canvas too small — tldraw CSS likely missing');
         } else if (d.type === 'snapshot-response') {
@@ -4930,6 +5395,11 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
         } else if (d.type === 'save-to-materials') {
           saveMaterialItems(d.items || [], d.source === 'context-menu' ? '右键所选图片已加入当前素材库' : '画布所选图片已加入当前素材库')
             .catch((err) => setFeedback('⚠ 加入当前素材库失败：' + String(err.message || err)));
+        } else if (d.type === 'request-layered-image') {
+          if (!projectRef.current.project && !projectRef.current.cwd) { setFeedback('请先打开画布项目'); return; }
+          setLayeredImage(previous => previous && previous.hidden && previous.data.elementId === d.elementId && previous.data.imageData === (d.imageData || '') && previous.project.project === projectRef.current.project && previous.project.cwd === projectRef.current.cwd
+            ? { ...previous, hidden: false }
+            : { key: Date.now(), project: { ...projectRef.current }, data: { elementId: d.elementId, name: d.name || '画布图片.png', imageData: d.imageData || '' } });
         } else if (d.type === 'request-text-rebuild') {
           const base = { elementId: d.elementId, name: d.name || '当前图片', dataURL: d.imageData || '', loading: false, busy: false, hasDetected: false, blocks: [], erasePrompt: '', selection: null, selections: [], width: 0, height: 0, error: '' };
           setTextRebuild(base);
@@ -5340,8 +5810,12 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           const snapshot = latestSnapshot.current || {};
           const liveImages = (snapshot.elements || []).filter((item) => item && item.type === 'image' && !item.isDeleted);
           const projectRoot = currentProjectPath();
-          const sourceElements = liveImages.filter((item) => item.customData && canvasPathWithin(projectRoot, item.customData.dshSourcePath || ''));
-          const externalSourceElements = liveImages.filter((item) => item.customData && item.customData.dshSourcePath && !canvasPathWithin(projectRoot, item.customData.dshSourcePath));
+          // Task assets are intentionally excluded from the project directory scan.
+          // Check explicitly imported layered exports by path, so a missing scan
+          // entry cannot be mistaken for a Finder deletion.
+          const isLayeredOutput = (path) => canvasPathWithin(projectRoot + '/outputs/图片拆层', path || '');
+          const sourceElements = liveImages.filter((item) => item.customData && canvasPathWithin(projectRoot, item.customData.dshSourcePath || '') && !isLayeredOutput(item.customData.dshSourcePath));
+          const externalSourceElements = liveImages.filter((item) => item.customData && item.customData.dshSourcePath && (!canvasPathWithin(projectRoot, item.customData.dshSourcePath) || isLayeredOutput(item.customData.dshSourcePath)));
           const sourcePaths = new Set(sourceElements.map((item) => item.customData.dshSourcePath));
           for (const path of sourcePaths) queuedDiskPaths.current.delete(path);
           projectSyncBusy.current = true;
@@ -5695,6 +6169,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
           ),
           React.createElement('button', { className: 'dsh-canvas-tb', title: '将选中的对象分别导出为 PNG；图片使用原图像素，SVG 按文件画板原尺寸渲染，PSD/AI/PDF 使用文件预览', onClick: () => post({ type: 'export-selected' }) }, '导出选中 PNG'),
           React.createElement('button', { className: 'dsh-canvas-tb', title: '本地素材库：常用图片发送到画布或聊天', onClick: () => openMaterials() }, '素材库'),
+          React.createElement('button', { className: 'dsh-canvas-tb', title: '指定文件夹或选中图片，在后台批量处理', onClick: () => setAutomationOpen(value => !value) }, automationActive ? '后台任务 ' + automationActive : '后台任务'),
           React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-tb-adobe', title: '把 Photoshop 里当前选中的图层拉到画布（PS 需已打开文档并选中图层；不用在 PS 里点任何面板）', disabled: !projectInfo.project, onClick: () => { void pullFromAdobe(projectRef.current, 'photoshop', setFeedback); } }, '取 Ps 图层'),
           React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-tb-adobe', title: '把 Illustrator 里当前选中的对象拉到画布（AI 需已打开文档并选中对象；150 dpi 透明 PNG）', disabled: !projectInfo.project, onClick: () => { void pullFromAdobe(projectRef.current, 'illustrator', setFeedback, { dpi: 150 }); } }, '取 Ai 对象'),
           React.createElement('button', {
@@ -5789,7 +6264,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
                   React.createElement('input', { type: 'radio', name: 'dsh-image-engine', checked: imageSettings.engine === 'dsh-codex', onChange: () => setImageSettings({ ...imageSettings, engine: 'dsh-codex' }) }),
                   React.createElement('span', null,
                     React.createElement('strong', null, 'Codex 统一路由 ', React.createElement('em', { className: 'dsh-canvas-engine-badge ' + (imageSettings.health && imageSettings.health.dshCodex && imageSettings.health.dshCodex.ready ? 'is-ready' : '') }, imageSettings.health && imageSettings.health.dshCodex && imageSettings.health.dshCodex.ready ? '可用' : '待配置')),
-                    React.createElement('small', null, '与当前 DSH 的 dsh-codex 共用 ChatGPT OAuth、订阅额度和 gpt-image-2 图片能力。')
+                    React.createElement('small', null, '与当前 DSH 的 dsh-codex 共用 ChatGPT OAuth 和订阅额度，生图型号：' + (imageSettings.health && imageSettings.health.dshCodex && imageSettings.health.dshCodex.model || 'gpt-image-2.5') + '。')
                   )
                 ),
                 React.createElement('label', { className: 'dsh-canvas-engine-option' },
@@ -6086,6 +6561,27 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
             )
           )
         ) : null,
+        automationOpen ? React.createElement(CanvasAutomationPanel, { project: projectInfo, onClose: () => setAutomationOpen(false) }) : null,
+        layeredImage && layeredImage.project.project === projectRef.current.project && layeredImage.project.cwd === projectRef.current.cwd ? React.createElement(LayeredImagePanel, {
+          key: layeredImage.key,
+          data: layeredImage.data,
+          hidden: !!layeredImage.hidden,
+          project: layeredImage.project,
+          initialTaskId: layeredImage.initialTaskId,
+          automationLimits: layeredImage.automationLimits,
+          model: activeChatModelSelection || {},
+          getModel: () => activeChatModelSelection || {},
+          onClose: () => setLayeredImage(previous => previous ? { ...previous, hidden: true } : null),
+          onFile: (image) => {
+            if (!image || !image.path || layeredImage.project.project !== projectRef.current.project || layeredImage.project.cwd !== projectRef.current.cwd) return;
+            const linked = ((latestSnapshot.current || {}).elements || []).some(e => e && !e.isDeleted && e.customData && e.customData.dshSourcePath === image.path);
+            if (linked || queuedDiskPaths.current.has(image.path) || knownDiskPaths.current && knownDiskPaths.current.has(image.path)) { setFeedback('该文件已在画布中：' + image.name); return; }
+            queuedDiskPaths.current.add(image.path);
+            if (knownDiskPaths.current) knownDiskPaths.current.add(image.path);
+            pendingRef.current.push({ ...image, explicit: true }); flushPending();
+            setFeedback('✓ 拆层文件已加入画布：' + image.name);
+          }
+        }) : null,
         textRebuild ? React.createElement(TextRebuildPanel, {
           data: textRebuild,
           onClose: () => { if (!textRebuild.busy) setTextRebuild(null); },
@@ -6099,6 +6595,7 @@ var toDataURL=function(u){return fetch(u).then(function(r){return r.blob()}).the
 
     // ---- styles ----
     const CSS = [
+      '.dsh-layers-panel{position:absolute;top:68px;right:12px;bottom:12px;z-index:38;width:min(420px,calc(100% - 24px));display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#d7dce2);border-radius:16px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#20252c);box-shadow:0 12px 40px rgba(0,0,0,.16);font-size:12px;line-height:1.55}.dsh-layers-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--dsw-alias-border-l2,#e4e7eb)}.dsh-layers-head strong{display:block;font-size:16px}.dsh-layers-head small{display:block;opacity:.65}.dsh-layers-panel button,.dsh-layers-panel select{border:1px solid var(--dsw-alias-border-l2,#d7dce2);border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f5f7f9);color:inherit;font:inherit;padding:5px 8px;cursor:pointer}.dsh-layers-panel button:disabled{opacity:.45;cursor:default}.dsh-layers-head>button{font-size:20px;border:0;background:transparent}.dsh-layers-scroll{overflow:auto;padding:12px 14px;min-height:0;flex:1}.dsh-layers-note{font-size:11px;color:var(--dsw-alias-label-secondary,#687180);margin:7px 0 12px}.dsh-layers-recent{width:100%;margin-bottom:10px}.dsh-layers-preview{position:relative;width:100%;max-height:280px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,#d7dce2);border-radius:8px;background-color:#eee;background-image:linear-gradient(45deg,#ddd 25%,transparent 25%),linear-gradient(-45deg,#ddd 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ddd 75%),linear-gradient(-45deg,transparent 75%,#ddd 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}.dsh-layers-preview img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.dsh-layers-preview-tools{display:flex;gap:6px;align-items:center;margin:7px 0 12px}.dsh-layers-preview-tools small{margin-left:auto}.dsh-layers-preview-tools button[aria-pressed=true]{border-color:#5283d6;color:#3575cd}.dsh-layers-row{padding:10px;border:1px solid var(--dsw-alias-border-l2,#d7dce2);border-radius:9px;margin:8px 0;background:var(--dsw-alias-bg-layer-2,#f8f9fb)}.dsh-layers-row-title{display:flex;gap:5px;align-items:center}.dsh-layers-row-title>input:not([type=checkbox]){min-width:0;flex:1}.dsh-layers-row small{font-size:10px;opacity:.65}.dsh-layers-panel input:not([type=checkbox]),.dsh-layers-panel textarea{box-sizing:border-box;max-width:100%;padding:5px 7px;border:1px solid var(--dsw-alias-border-l2,#d7dce2);border-radius:5px;background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;font:inherit}.dsh-layers-row textarea{display:block;resize:vertical;width:100%;min-height:42px;margin-top:6px}.dsh-layers-text label{display:flex;align-items:center;gap:5px;font-size:11px;margin:6px 0}.dsh-layers-text select{max-width:100%;width:100%}.dsh-layers-inline{display:flex;gap:12px;align-items:center}.dsh-layers-inline input[type=number]{width:70px}.dsh-layers-inline input[type=color]{width:38px;height:30px;padding:2px}.dsh-layers-error{font-size:11px;color:#d65244;white-space:pre-wrap;overflow-wrap:anywhere}.dsh-layers-warnings{font-size:11px;margin-bottom:10px;color:var(--dsw-alias-label-secondary,#687180)}.dsh-layers-warnings summary{cursor:pointer}.dsh-layers-progress{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;padding:10px;border-radius:8px;background:rgba(60,120,210,.08)}.dsh-layers-progress progress{width:100%;height:6px;accent-color:#397cf0}.dsh-layers-spinner{width:12px;height:12px;border:2px solid rgba(57,124,240,.2);border-top-color:#397cf0;border-radius:50%;animation:dsh-layers-spin .8s linear infinite;flex:none}@keyframes dsh-layers-spin{to{transform:rotate(360deg)}}.dsh-layers-foot{padding:10px 14px;border-top:1px solid var(--dsw-alias-border-l2,#e4e7eb);display:flex;gap:8px;flex-wrap:wrap}.dsh-layers-foot .dsh-layers-primary{background:#397cf0;border-color:#397cf0;color:#fff}.dsh-layers-export-tools{display:flex;gap:6px;flex:1}.dsh-layers-export-tools select{min-width:0;flex:1}.dsh-layers-exports>div{padding:9px 0;border-top:1px solid var(--dsw-alias-border-l2,#e4e7eb)}.dsh-layers-exports strong{display:block;overflow-wrap:anywhere;font-size:11px}.dsh-layers-exports small,.dsh-layers-path{display:block;overflow-wrap:anywhere;font-size:10px;opacity:.65}.dsh-layers-exports button{margin:5px 0}',
       '.dsh-materials-overlay{position:absolute;inset:58px 0 0;z-index:40;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box;background:var(--dsw-alias-bg-mask-1,rgba(8,12,20,.58));backdrop-filter:blur(8px)}.dsh-materials-panel{--ml-bg:var(--dsw-alias-bg-layer-1,#151922);--ml-card:var(--dsw-alias-bg-layer-2,#1d2330);--ml-line:var(--dsw-alias-border-l2,rgba(255,255,255,.11));--ml-muted:var(--dsw-alias-label-tertiary,#97a2b4);--ml-accent:var(--dsw-alias-brand-primary,#76a8ff);display:flex;flex-direction:column;width:min(1120px,100%);height:min(780px,100%);overflow:hidden;border:1px solid var(--ml-line);border-radius:20px;background:var(--ml-bg);color:var(--dsw-alias-label-primary,#f5f7fb);box-shadow:none;font-family:"PingFang SC","Microsoft YaHei",sans-serif}.dsh-materials-head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 22px 14px}.dsh-materials-title{display:flex;align-items:center;gap:9px;font-size:20px;font-weight:700;letter-spacing:-.02em}.dsh-materials-count{padding:3px 8px;border-radius:999px;background:rgba(118,168,255,.14);color:#a9c7ff;font-size:11px;font-weight:600;letter-spacing:0}.dsh-materials-sub{max-width:720px;margin-top:6px;color:var(--ml-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsh-materials-close{width:38px;height:38px;flex:none;border:1px solid var(--ml-line);border-radius:11px;background:rgba(128,128,128,.08);color:var(--dsw-alias-label-secondary,#dbe2ee);font-size:24px;line-height:1;cursor:pointer}.dsh-materials-close:hover{background:rgba(255,255,255,.1)}.dsh-materials-toolbar{display:flex;align-items:center;gap:12px;padding:12px 22px;border-block:1px solid var(--ml-line);background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.025))}.dsh-materials-search{display:flex;align-items:center;gap:8px;min-width:220px;max-width:380px;flex:1;padding:0 12px;border:1px solid var(--ml-line);border-radius:11px;background:var(--dsw-alias-bg-base,rgba(5,8,14,.35));color:var(--ml-muted)}.dsh-materials-search:focus-within{border-color:var(--ml-accent);box-shadow:0 0 0 3px rgba(91,145,255,.14)}.dsh-materials-search input{width:100%;height:38px;border:0;outline:0;background:transparent;color:inherit;font:13px inherit}.dsh-materials-toolbar-actions{display:flex;gap:7px}.dsh-materials-toolbar button,.dsh-materials-selectionbar button{padding:9px 12px;border:1px solid var(--ml-line);border-radius:10px;background:var(--ml-card);color:var(--dsw-alias-label-primary,#dce3ee);font:12px inherit;white-space:nowrap;cursor:pointer}.dsh-materials-toolbar button:hover,.dsh-materials-selectionbar button:hover{background:rgba(255,255,255,.11)}.dsh-materials-toolbar button:disabled,.dsh-materials-selectionbar button:disabled{opacity:.38;cursor:not-allowed}.dsh-materials-error{margin:10px 22px 0;padding:9px 11px;border:1px solid rgba(248,113,113,.3);border-radius:9px;background:rgba(127,29,29,.28);color:#fecaca;font-size:12px}.dsh-materials-body{flex:1;min-height:0;overflow:auto;padding:18px 22px}.dsh-materials-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}.dsh-materials-item{position:relative;display:flex;min-width:0;flex-direction:column;padding:0;overflow:hidden;border:1px solid var(--ml-line);border-radius:13px;background:var(--ml-card);color:inherit;text-align:left;cursor:pointer;transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease}.dsh-materials-item:hover{transform:translateY(-2px);border-color:rgba(118,168,255,.5);box-shadow:0 12px 30px rgba(0,0,0,.22)}.dsh-materials-item.is-selected{border-color:var(--ml-accent);box-shadow:0 0 0 2px rgba(91,145,255,.25)}.dsh-materials-check{position:absolute;z-index:2;top:9px;right:9px;display:grid;width:23px;height:23px;place-items:center;border:1px solid rgba(255,255,255,.4);border-radius:8px;background:rgba(9,14,24,.58);color:white;font-size:13px;backdrop-filter:blur(6px)}.dsh-materials-item.is-selected .dsh-materials-check{border-color:#87b2ff;background:#397cf0}.dsh-materials-thumb{display:block;aspect-ratio:16/10;overflow:hidden;background:var(--dsw-alias-bg-base,#0b0f16)}.dsh-materials-thumb img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .24s ease}.dsh-materials-item:hover img{transform:scale(1.025)}.dsh-materials-meta{display:flex;align-items:center;gap:8px;padding:10px 11px}.dsh-materials-item-name{min-width:0;flex:1;color:var(--dsw-alias-label-primary,#e7ebf2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dsh-materials-item-info{flex:none;color:var(--ml-muted);font-size:10px}.dsh-materials-empty{display:flex;min-height:240px;align-items:center;justify-content:center;flex-direction:column;gap:8px;border:1px dashed var(--ml-line);border-radius:14px;color:var(--ml-muted);font-size:12px;text-align:center}.dsh-materials-empty strong{color:var(--dsw-alias-label-primary,#dce3ee);font-size:15px}.dsh-materials-selectionbar{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:64px;padding:10px 22px;border-top:1px solid var(--ml-line);background:var(--dsw-alias-bg-layer-1,rgba(8,12,20,.42))}.dsh-materials-selection-summary,.dsh-materials-selection-actions{display:flex;align-items:center;gap:8px}.dsh-materials-selection-summary strong{min-width:66px;font-size:12px}.dsh-materials-selection-summary button{padding:6px 8px;border-color:transparent;background:transparent;color:var(--ml-muted)}.dsh-materials-selection-actions .is-primary{border-color:#4f8fff;background:#3b7bec;color:#fff}.dsh-materials-selection-actions .is-primary:hover{background:#4b89f5}.dsh-materials-selection-actions .is-danger{color:#fca5a5}.dsh-materials-selection-actions .is-danger:hover{border-color:rgba(248,113,113,.4);background:rgba(127,29,29,.32)}@media(max-width:760px){.dsh-materials-overlay{padding:8px}.dsh-materials-panel{height:100%;border-radius:14px}.dsh-materials-toolbar{align-items:stretch;flex-direction:column}.dsh-materials-search{max-width:none}.dsh-materials-toolbar-actions{display:grid;grid-template-columns:1fr 1fr}.dsh-materials-toolbar-actions button:first-child{grid-column:1/-1}.dsh-materials-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.dsh-materials-selectionbar{align-items:stretch;flex-direction:column}.dsh-materials-selection-actions{display:grid;grid-template-columns:1fr 1fr}.dsh-materials-selection-actions .is-primary{grid-column:1/-1}}@media(prefers-color-scheme:light){.dsh-materials-check{border-color:rgba(23,32,51,.25);background:rgba(255,255,255,.82);color:#fff}}',
       '.dsh-materials-overlay{align-items:stretch;justify-content:flex-end;padding:0;background:transparent;backdrop-filter:none;pointer-events:none}.dsh-materials-panel{width:min(390px,calc(100% - 28px));height:100%;max-height:none;border-width:0 0 0 1px;border-radius:18px 0 0 18px;pointer-events:auto;box-shadow:none;animation:dsh-materials-slide-in .2s cubic-bezier(.22,.8,.3,1)}@keyframes dsh-materials-slide-in{from{transform:translateX(28px);opacity:.3}to{transform:translateX(0);opacity:1}}.dsh-materials-head{padding:16px 16px 10px}.dsh-materials-title{font-size:18px}.dsh-materials-sub{max-width:290px}.dsh-materials-dropzone{display:flex;flex-direction:column;gap:2px;margin:0 16px 10px;padding:11px 12px;border:1px dashed var(--ml-line);border-radius:11px;background:rgba(118,168,255,.045);color:var(--ml-muted);font-size:10px;transition:.15s ease}.dsh-materials-dropzone strong{color:var(--dsw-alias-label-primary,#dce3ee);font-size:12px}.dsh-materials-panel.is-drop-active .dsh-materials-dropzone{border-color:var(--ml-accent);background:rgba(59,124,236,.18);box-shadow:0 0 0 3px rgba(59,124,236,.12)}.dsh-materials-toolbar{gap:8px;padding:9px 16px}.dsh-materials-search{min-width:0;max-width:none}.dsh-materials-toolbar-actions{gap:5px}.dsh-materials-toolbar-actions button{min-width:36px;padding:9px}.dsh-materials-toolbar-actions button:first-child{min-width:48px}.dsh-materials-toolbar-actions button.is-active{border-color:var(--ml-accent);background:rgba(59,124,236,.2);color:#bcd4ff}.dsh-materials-body{padding:12px 14px}.dsh-materials-grid{display:block;columns:2 150px;column-gap:10px}.dsh-materials-item{display:inline-flex;width:100%;margin:0 0 10px;break-inside:avoid;border-radius:11px;vertical-align:top}.dsh-materials-thumb{aspect-ratio:auto;min-height:90px}.dsh-materials-thumb img{height:auto;min-height:90px;max-height:230px;object-fit:cover}.dsh-materials-meta{padding:8px 9px}.dsh-materials-item-info{display:none}.dsh-materials-zoom{position:absolute;z-index:3;top:8px;right:8px;display:grid;width:27px;height:27px;padding:0;place-items:center;border:1px solid rgba(255,255,255,.32);border-radius:8px;background:rgba(9,14,24,.68);color:#fff;font:15px/1 inherit;cursor:pointer;backdrop-filter:blur(6px);opacity:.82}.dsh-materials-zoom:hover{opacity:1;background:#397cf0}.dsh-materials-selectionbar{min-height:58px;padding:8px 14px;gap:8px}.dsh-materials-selection-summary strong{min-width:auto}.dsh-materials-selection-actions{gap:5px}.dsh-materials-selection-actions button{padding:8px 9px}.dsh-materials-preview{position:absolute;inset:58px 0 0;z-index:48;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(5,8,14,.82);backdrop-filter:blur(10px)}.dsh-materials-preview-card{display:flex;max-width:min(1000px,92%);max-height:92%;flex-direction:column;overflow:hidden;border:1px solid var(--ml-line);border-radius:16px;background:var(--ml-card,#121722);box-shadow:var(--dsw-alias-bg-mask-drop,0 18px 48px rgba(0,0,0,.35))}.dsh-materials-preview-card>img{display:block;max-width:100%;max-height:calc(90vh - 130px);object-fit:contain;background:var(--dsw-alias-bg-base,#090d14)}.dsh-materials-preview-bar{display:flex;align-items:center;gap:8px;padding:10px 12px}.dsh-materials-preview-bar strong{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-materials-preview-bar button{padding:7px 10px;border:1px solid var(--ml-line);border-radius:8px;background:var(--ml-card);color:var(--dsw-alias-label-primary,#f2f5fa);cursor:pointer}@media(max-width:620px){.dsh-materials-panel{width:min(350px,calc(100% - 12px))}.dsh-materials-grid{columns:2 120px}.dsh-materials-selectionbar{align-items:stretch}.dsh-materials-selection-actions{display:grid;grid-template-columns:1fr 1fr 1fr}.dsh-materials-selection-actions .is-primary{grid-column:auto}}@media(prefers-color-scheme:light){.dsh-materials-zoom{border-color:rgba(255,255,255,.75);background:rgba(24,34,52,.68)}}',
       '.dsh-materials-location{display:flex;align-items:center;gap:8px;margin:0 16px 8px;padding:9px 10px;border:1px solid var(--ml-line);border-radius:11px;background:rgba(255,255,255,.035)}.dsh-materials-location-current{display:flex;min-width:0;flex:1;align-items:center;gap:8px}.dsh-materials-location-icon{display:grid;width:27px;height:27px;flex:none;place-items:center;border-radius:8px;background:rgba(118,168,255,.14);color:var(--ml-accent)}.dsh-materials-location-current>span:last-child{display:flex;min-width:0;flex-direction:column}.dsh-materials-location-current strong,.dsh-materials-location-current small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.dsh-materials-location-current strong{font-size:12px}.dsh-materials-location-current small{max-width:205px;color:var(--ml-muted);font-size:9px}.dsh-materials-location>button{flex:none;padding:7px 8px;border:1px solid var(--ml-line);border-radius:8px;background:rgba(255,255,255,.055);color:inherit;font:10px inherit;cursor:pointer}.dsh-materials-recent{display:flex;align-items:center;gap:8px;margin:0 16px 9px;color:var(--ml-muted);font-size:10px}.dsh-materials-recent>span{flex:none}.dsh-materials-recent select{min-width:0;flex:1;height:30px;padding:0 26px 0 8px;border:1px solid var(--ml-line);border-radius:8px;background:var(--ml-card);color:inherit;font:10px inherit;outline:none}.dsh-materials-recent select:focus{border-color:var(--ml-accent)}@media(prefers-color-scheme:light){.dsh-materials-location{background:#f4f7fb}.dsh-materials-location>button{background:#fff;color:#354156}}',

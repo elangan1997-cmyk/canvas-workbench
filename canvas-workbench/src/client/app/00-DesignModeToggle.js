@@ -55,7 +55,10 @@
         const update = () => {
           try {
             const snapshot = directory.store.getSnapshot();
-            if (snapshot && snapshot.current) activeChatModelSelection = { ...snapshot.current };
+            if (snapshot && snapshot.current) {
+              activeChatModelSelection = { ...snapshot.current };
+              window.dispatchEvent(new CustomEvent('dsh-canvas:model-selection', { detail: { sessionId: props.sessionId, selection: activeChatModelSelection } }));
+            }
             // 模型追踪诊断:与标题栏探针同一通道,远程可读(Win 模型识别走不通排查用)。
             reportModelStage('ok', {
               snapshotKeys: snapshot ? Object.keys(snapshot) : null,

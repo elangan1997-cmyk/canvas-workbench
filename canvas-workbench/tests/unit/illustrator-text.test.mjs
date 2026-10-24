@@ -18,7 +18,7 @@ for (const platform of ['mac', 'win']) test(`${platform}: AI script keeps editab
       textFit: { text: '校准文字', fontPostScript: 'Inter-Bold', fontSize: 280, tracking: -32.47, baselineOffset: 200, originOffsetX: 4, advance: 290 } },
     { text: '排除', enabled: false }
   ] });
-  const context = { app: { documents: { add: () => doc }, textFonts: { getByName: (name) => ({ name }) }, getIdentityMatrix: () => ({}) },
+  const context = { $: { sleep() {} }, app: { redraw() {}, documents: { add: () => doc }, textFonts: { getByName: (name) => ({ name }) }, getIdentityMatrix: () => ({}) },
     File: function(path) { this.fsName = path; }, RGBColor: function() {}, IllustratorSaveOptions: function() {},
     DocumentColorSpace: { RGB: 1 }, RulerUnits: { Points: 1 }, Justification: { LEFT: 0, CENTER: 1, RIGHT: 2 },
     Transformation: { DOCUMENTORIGIN: 0 }, SaveOptions: { DONOTSAVECHANGES: 2 } };
@@ -31,12 +31,15 @@ for (const platform of ['mac', 'win']) test(`${platform}: AI script keeps editab
   assert.equal(attrs.tracking, -32);
   assert.equal(attrs.fillColor.red, 18);
   assert.equal(calls[0].textRange.paragraphAttributes.justification, 2);
-  assert.equal(calls[0].matrix.mValueTX, 304);
-  assert.equal(calls[0].matrix.mValueTY, 280);
+  assert.deepEqual(Array.from(calls[0].anchor), [304, 280]);
+  const m=calls[0].matrix;
+  assert.ok(Math.abs(m.mValueA*304+m.mValueC*280+m.mValueTX-304)<1e-8);
+  assert.ok(Math.abs(m.mValueB*304+m.mValueD*280+m.mValueTY-280)<1e-8);
   assert.ok(Math.abs(calls[0].matrix.mValueB + .5) < 1e-10);
   assert.equal(doc.saved.fsName, output);
   assert.equal(doc.closed, 2);
   assert.doesNotMatch(jsx, /close every document|app\.documents\[|CloseOptions/);
+  assert.doesNotMatch(jsx, /\?Justification\./, 'ExtendScript enum assignments require explicit branches');
 });
 
 test('SVG fallback uses clean background, calibrated typography and UTF-8 spec result', async (t) => {

@@ -35,14 +35,15 @@ export function ratioHintFor(imageSize) {
   return '【画布已选输出比例，必须遵守】请以' + orient + ' ' + ratio + '（' + w + '×' + h + '）构图；这不是建议值。主体、文字和关键细节必须放在该画幅安全区内，禁止改成其他比例。';
 }
 
-export async function generateImage({ ctx, image, mask, prompt, engine, signal }) {
-  const settings = await readImageEngineSettings();
+export async function generateImage({ ctx, image, mask, prompt, engine, signal, background, maxAttempts, settingsOverride }) {
+  const settings = settingsOverride || await readImageEngineSettings();
   const selected = normalizeImageEngine(engine || settings.engine);
   const bytes = Buffer.from(image || []);
   if (!bytes.length) throw new Error('图片输入为空');
   const provider = imageProviders.require(selected);
   // api Provider 现在返回 Buffer[](生成数量可能 >1);画布编辑路径恒取第一张。
-  const buffers = await provider.generate({ ctx, images: [bytes], mask, prompt, settings, signal });
+  const buffers = await provider.generate({ ctx, images: [bytes], mask, prompt, settings, signal,
+    ...(background ? { background } : {}), ...(maxAttempts ? { maxAttempts } : {}) });
   return { engine: selected, bytes: Array.isArray(buffers) ? buffers[0] : buffers };
 }
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.9.58（2026-10-25）
+
+- 新增图片拆层：当前聊天模型识别照片、透明主体、文字、形状和背景，导出可编辑 PSD、原生 AI 与 SVG；完整照片保留原场景，文字底框为独立矢量形状。
+- 新增正式聊天工具 canvas_workbench、画布操作 API 与持久后台批处理：支持文件夹或指定对象、批量抠图/拆层/转换/局部编辑，独立创建结果项目并自动展示。
+- 一键完成分析→校准→结构检查→提取→导出；面板和后台共用质量恢复策略，已成功素材复用，明确的本地临时错误有限恢复，未知图像请求不盲目重发，累计额度不重置。
+- 拆层默认跟随当前聊天工作目录，失败后关闭或刷新可恢复原任务；适度尺寸差异等比适配，保留原始返回与自然边界 PNG。
+- 修复 Illustrator 居中被误执行成右对齐、字体切换 MRAP；保存重开检查字体、对齐、基线与边界；背景平滑融合避免硬像素块。
+- dsh-codex 默认 Image 2.5，冻结每轮模型；包内附后台 API 文档。
+- 173 项回归与构建/静态检查通过。新增 Windows 分支实际执行模拟：UTF-8 BOM JSX、PowerShell 编码 COM、失败不虚报成功，中文/空格/UNC/扩展长路径规格文件传输。Mac 双 Adobe 14 层实测，7 段文字渲染边界最大差1px；Windows 新功能尚未做 Adobe 实机验收。
+
 ## 1.9.57（2026-10-21）
 
 - 优化文字识别：小选区直接识别，大幅密集文字按原始像素分块识别并重试，结合本地文字行补漏，保留逐条校对。
@@ -28,16 +38,34 @@
 - 浮层更新复用同一个 Excalidraw 元素；项目恢复默认选择箭头，避免把之前的小手模式作为默认工具。
 - 增加10项实际 srcdoc 回归，覆盖累积监听、素材菜单、文件增量、恢复与保存屏障。实机120次连续点击保持1个监听；同场景对照末段响应中位数476→48ms。完整测试共76项通过，Windows实机及持续拖动FPS未测。
 
+## 本机性能修复（2026-10-18，基于 1.9.53，未发布）
+
+- 第三轮确认并修复点击监听泄漏：Main 每次重渲染都追加 document capture listener，改为挂载时注册、卸载时清理；菜单识别不再读取包含内嵌脚本的 body/html 全文。真实同场景 40 次点击对照：监听 58→1，重复调用 1392→40，末30次点击中位数476→48ms；继续至120次仍只有1个监听。新增3项回归，最终76项测试通过。
+- 修复实际 Main/onCanvasChange 绕过旧增量发送器的问题；删除未使用的 App 回调，拖动/缩放按 160ms 合并，仅新增或更换图片传 dataURL。
+- 图片缓存和计时器跨 Main 重渲染保留；等长图片替换也能识别，删除/撤销的文件集合保持正确。
+- 恢复期间禁止部分场景 changed；完整 loaded 后初始化增量缓存；切换项目取消迟到消息，实时保存屏障先刷新最终位置。
+- 构建、check、71 项测试通过；macOS DSH 0.2.1-rc.2 已部署并重启验证平移/缩放/图片移动保存/撤销/收起展开。
+- 第二轮：复用同一个 Excalidraw element，减少浮层更新牵连；恢复项目时默认选择箭头并清除测试残留小手模式。新增两项测试，最终73项通过；持续拖动流畅度仍待用户复测。
+- 诊断、备份与回退记录见 `docs/PERFORMANCE-FIX-2026-10-18.md`。npm 和 GitHub 未发布，安装版本号仍为 1.9.53。
+
 ## 1.9.53（2026-10-17）
 
 - 修复 Issue #1：srcdoc 通过 dsh-app 协议请求 vendor 脚本被 403 拒绝，导致画布初始化失败。构建时编码三个固定依赖，由 iframe 按顺序解码注入，避免外部资源请求与 HTML tokenizer 边界问题。
 - 新增两项回归测试；66 项测试通过。隔离浏览器复现旧版 403/createRoot 错误，修复版在相同限制下正常渲染。
 
-## 1.9.52— 2026-10-17
+## 1.9.52 — 2026-10-17
 
 - 修复 npm 发布包的旧 DSH peer 上限，支持 DSH 0.2.0/0.2.1（含 0.2.1-rc.2）。
 - 开发包与发布包共用兼容声明；DSH peer 标记为 optional，避免自动安装遮蔽宿主内核的副本。
 - 保留能力检测与按子功能降级策略，发布包携带同一份能力说明。
+
+## canvas-studio 0.1.0（2026-10-08，套件新组件：独立 zcode 插件,无需 DSH）
+
+- **新增 `canvas-studio/`:把画布工作台做成 zcode 插件,别人从插件市场安装即可用,完全不需要 DSH 桌面。** 三层实现:① `server/standalone.mjs` 用一个 ~90 行的 ctx shim(subprocess/webServer/fs/sandboxPolicy/inject/effect)直接驱动 canvas-workbench 宿主 `apply(ctx)`,41 条 /dsh-canvas/* 路由、图像引擎、Python 工具链在纯 Node 里运行,数据隔离到 `~/.canvas-studio`;② `server/page.mjs` 独立浏览器画布页,运行时从插件源码求值自包含 Excalidraw iframe(00-srcdoc/01-variants,含 ready/loaded 握手与 base64 剥离落盘,修复过 `</script>` 截断与就绪前覆盖两个坑);③ `server/mcp.mjs` 进程内自起服务并提供 13 个 MCP 工具(含 canvas_engine_setup 首机配钥)。项目格式与 DSH 完全互通。依赖:npm 版 canvas-workbench(≥1.9.42)+ @deepseek-ai/dsh-tools/dsh-llm 契约包。实测:冷启动/端口复用、项目列表/打开、上画布(canvas.json 元素+dshPath)、浏览器渲染截图验收(Excalidraw 完整界面+图片元素+已保存)。marketplace.json + README 就绪;待用户把 canvas-workbench 1.9.51 发上 npm 并推仓库后,市场安装即闭环。
+
+## canvas-bridge 1.0.0（2026-10-08，套件新组件，非插件版本）
+
+- **新增跨 Agent 桥 `canvas-bridge/`**:把画布宿主 API(127.0.0.1:19387 的 `/dsh-canvas/*`)与 canvas.json 官方并发状态通道(`/dsh-canvas/state` + revision 乐观锁)包装为 stdio MCP server(12 个 `canvas_*` 工具)与零依赖 CLI,使 zcode、WorkBuddy/CodeBuddy 及任意本地 agent 能开画布项目、导入素材、把本地图放上画布(外部追加元素走应用自身的 dshPath 持久化与加载重水化,格式逐字段一致)、调用图像引擎编辑/智能擦除、本地去背景/转矢量、Finder/Photoshop 衔接。插件本体零改动。zcode 用户级 MCP 已注册(`~/.zcode/cli/config.json`),配套技能 `~/.agents/skills/dsh-canvas-bridge/`。实测:临时项目 open/add×2/bg/vectorize 全通,edit 走参数校验路径;纯文生图仍属 DSH 会话内工具,不在此桥。
 
 ## 1.9.51（2026-10-02）
 

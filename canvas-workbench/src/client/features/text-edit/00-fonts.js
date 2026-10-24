@@ -21,6 +21,11 @@
         { ps: 'SourceHanSansSC-Bold', label: '思源黑体 Bold 粗体' },
         { ps: 'SourceHanSansSC-Heavy', label: '思源黑体 Heavy 重磅' }
       ] },
+      { group: '思源宋体（需安装对应字体）', items: [
+        { ps: 'SourceHanSerifSC-Regular', label: '思源宋体 Regular 常规' },
+        { ps: 'SourceHanSerifSC-Bold', label: '思源宋体 Bold 粗体' },
+        { ps: 'SourceHanSerifSC-Heavy', label: '思源宋体 Heavy 重磅' }
+      ] },
       { group: 'Inter（免费商用·现代无衬线）', items: [
         { ps: 'Inter-Thin', label: 'Inter Thin' },
         { ps: 'Inter-ExtraLight', label: 'Inter ExtraLight' },

@@ -17,14 +17,13 @@ export function buildIllustratorTextJsx({ background, output, width, height, blo
     + 'for(var i=0;i<cfg.rows.length;i++){var b=cfg.rows[i],tr=b.transform;\n'
     // Point text is anchored at its baseline, unlike TextFrame.left/top
     // which describe visible bounds and shift with font/justification.
-    + 'var tf=doc.textFrames.pointText([0,0]);tf.contents=b.text;\n'
+    + 'var px=ax+tr[4],py=ay-tr[5],tf=doc.textFrames.pointText([px,py]);tf.contents=b.text.replace(/\\r?\\n/g,"\\r");app.redraw();$.sleep(100);\n'
     + 'var ca=tf.textRange.characterAttributes;ca.size=b.fontSize;ca.tracking=b.tracking;\n'
-    + 'try{ca.textFont=app.textFonts.getByName(b.font);}catch(fontErr){}\n'
+    + 'ca.textFont=app.textFonts.getByName(b.font);app.redraw();ca=tf.textRange.characterAttributes;ca.size=b.fontSize;ca.tracking=b.tracking;ca.autoLeading=false;ca.leading=b.fontSize*1.2;\n'
     + 'ca.fillColor=rgb(b.color);\n'
-    + 'tf.textRange.paragraphAttributes.justification=b.align==="center"?Justification.CENTER:b.align==="right"?Justification.RIGHT:Justification.LEFT;\n'
+    + 'if(b.align==="center"){tf.textRange.paragraphAttributes.justification=Justification.CENTER;}else if(b.align==="right"){tf.textRange.paragraphAttributes.justification=Justification.RIGHT;}else{tf.textRange.paragraphAttributes.justification=Justification.LEFT;}\n'
     // Convert the image's downward Y axis to Illustrator document coordinates.
-    + 'var m=app.getIdentityMatrix();m.mValueA=tr[0];m.mValueB=-tr[1];m.mValueC=-tr[2];m.mValueD=tr[3];m.mValueTX=ax+tr[4];m.mValueTY=ay-tr[5];\n'
-    + 'tf.transform(m,true,true,true,true,100,Transformation.DOCUMENTORIGIN);\n'
+    + 'if(Math.abs(tr[1])>.000001||Math.abs(tr[0]-1)>.000001){var m=app.getIdentityMatrix();m.mValueA=tr[0];m.mValueB=-tr[1];m.mValueC=-tr[2];m.mValueD=tr[3];m.mValueTX=px-tr[0]*px+tr[2]*py;m.mValueTY=py+tr[1]*px-tr[3]*py;tf.transform(m,true,true,true,true,100,Transformation.DOCUMENTORIGIN);}app.redraw();\n'
     + '}\n'
     + 'var options=new IllustratorSaveOptions();options.pdfCompatible=true;doc.saveAs(new File(cfg.output),options);\n'
     + 'doc.close(SaveOptions.DONOTSAVECHANGES);return "dsh-ai-done";\n'

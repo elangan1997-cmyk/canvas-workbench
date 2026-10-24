@@ -41,7 +41,9 @@ def font_candidates(cjk: bool) -> tuple:
     names = ([('阿里巴巴普惠体 3.0', 'AlibabaPuHuiTi_3_' + suffix, weight)
               for suffix, weight in [('55_Regular', 'normal'), ('65_Medium', 'medium'), ('85_Bold', 'bold'), ('95_ExtraBold', 'bold')]]
              + [('思源黑体', 'SourceHanSansSC-' + suffix, weight)
-                for suffix, weight in [('Regular', 'normal'), ('Medium', 'medium'), ('Bold', 'bold')]]) if cjk else [
+                for suffix, weight in [('Regular', 'normal'), ('Medium', 'medium'), ('Bold', 'bold')]]
+             + [('思源宋体', 'SourceHanSerifSC-' + suffix, weight)
+                for suffix, weight in [('Regular', 'normal'), ('Bold', 'bold'), ('Heavy', 'bold')]]) if cjk else [
                     (family, family + '-' + suffix, weight)
                     for family in ('Inter', 'Montserrat', 'SourceSansPro')
                     for suffix, weight in [('Regular', 'normal'), ('Medium' if family != 'SourceSansPro' else 'Semibold', 'medium'), ('Bold', 'bold')]]
@@ -57,7 +59,7 @@ def font_candidates(cjk: bool) -> tuple:
     return tuple(result)
 
 
-def pixel_foreground(image, box, suggested=None):
+def pixel_foreground(image, box, suggested=None, ignore_leaders=False):
     """Find the dominant ink cluster, excluding antialias and background.
 
     Work on a bounded thumbnail. Keep original-image coordinates separately;
@@ -93,6 +95,51 @@ def pixel_foreground(image, box, suggested=None):
     radius = max(24, min(70, contrast * 0.32))
     mask = Image.new('L', crop.size)
     mask.putdata([255 if distance(p, ink) < radius and distance(p, bg) > contrast * 0.38 else 0 for p in pixels])
+    # OCR quadrilaterals occasionally include a neighbouring line. Separate
+    # only broad ink bands with a large blank gap; keep detached accents and
+    # the disconnected strokes of a single CJK glyph together.
+    data=mask.tobytes();rows=[sum(bool(v) for v in data[y*w:(y+1)*w]) for y in range(h)]
+    occupied=[y for y,count in enumerate(rows) if count>=max(2,w*.01)]
+    bands=[]
+    for y in occupied:
+        if not bands or y-bands[-1][-1]>max(5,h*.08):bands.append([y])
+        else:bands[-1].append(y)
+    if len(bands)>1:
+        ranked=sorted(bands,key=lambda b:sum(rows[y] for y in b),reverse=True)
+        primary=ranked[0];second=ranked[1]
+        def band_width(b):
+            xs=[x for y in b for x in range(w) if data[y*w+x]]
+            return max(xs)-min(xs)+1 if xs else 0
+        if sum(rows[y] for y in second)>.01*sum(rows[y] for y in primary) and band_width(second)>.3*max(1,band_width(primary)) and second[-1]-second[0]>=4:
+            clean=bytearray(data)
+            for y in range(h):
+                if y<primary[0] or y>primary[-1]:clean[y*w:(y+1)*w]=bytes(w)
+            mask=Image.frombytes('L',mask.size,bytes(clean))
+    if ignore_leaders:
+        # Dotted menu leaders are not letter spacing. Remove only tiny,
+        # disconnected marks outside the span of substantial glyph strokes;
+        # punctuation and i-dots inside the word stay in the mask.
+        data=mask.tobytes();seen=set();components=[]
+        for start,value in enumerate(data):
+            if not value or start in seen:continue
+            todo=[start];seen.add(start);points=[]
+            while todo:
+                at=todo.pop();points.append(at);px,py=at%w,at//w
+                for yy in range(max(0,py-1),min(h,py+2)):
+                    for xx in range(max(0,px-1),min(w,px+2)):
+                        near=yy*w+xx
+                        if data[near] and near not in seen:seen.add(near);todo.append(near)
+            xs=[p%w for p in points];ys=[p//w for p in points]
+            components.append((min(xs),min(ys),max(xs)+1,max(ys)+1,points))
+        tallest=max((c[3]-c[1] for c in components),default=0)
+        substantial=[c for c in components if c[3]-c[1]>=tallest*.35 or c[2]-c[0]>=tallest*.45]
+        if tallest>=10 and substantial:
+            left=min(c[0] for c in substantial);right=max(c[2] for c in substantial)
+            clean=bytearray(data)
+            for a,b,c,d,points in components:
+                if max(c-a,d-b)<=max(3,tallest*.18) and (c<left or a>=right):
+                    for point in points:clean[point]=0
+            mask=Image.frombytes('L',mask.size,bytes(clean))
     bbox = mask.getbbox()
     if not bbox:
         return None
@@ -190,7 +237,8 @@ def infer_block(image, raw: dict) -> dict:
     y = clamp(float(raw.get('y', 0) or 0), 0, height-1)
     w = clamp(float(raw.get('width', 2) or 2), 1, width-x)
     h = clamp(float(raw.get('height', 2) or 2), 1, height-y)
-    box = (int(x), int(y), min(width, math.ceil(x+w)), min(height, math.ceil(y+h)))
+    padding=max(0,min(32,float(raw.get('sourceSearchPadding',0) or 0)))
+    box = (max(0,math.floor(x-padding)), max(0,math.floor(y-padding)), min(width, math.ceil(x+w+padding)), min(height, math.ceil(y+h+padding)))
     text = str(raw.get('text') or '').strip()
     cjk = has_cjk(text)
     item.setdefault('fontFamily', '阿里巴巴普惠体 3.0' if cjk else 'Inter')
@@ -204,7 +252,7 @@ def infer_block(image, raw: dict) -> dict:
     # Axis-aligned pixel fitting must not flatten angled/multiline text.
     if abs(float(raw.get('rotation') or 0)) > 2 or not text or '\n' in text:
         return item
-    fg = pixel_foreground(image, box, raw.get('color'))
+    fg = pixel_foreground(image, box, raw.get('color'), ignore_leaders=not text.endswith(('.', '。', '…', '·')))
     if not fg:
         return item
     item['color'] = fg['color']

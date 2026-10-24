@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Pixel IO for the layered-image workflow; no model calls or font downloads."""
+import argparse
+import json
+import math
+from pathlib import Path
+import sys
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import ImageChops
+
+MAX_PIXELS = 20_000_000
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+
+
+def load(file):
+    with Image.open(file) as im:
+        if im.width * im.height > MAX_PIXELS or min(im.size) < 1:
+            raise ValueError('图片超过2000万像素，请缩小后再拆层')
+        return im.convert('RGBA')
+
+
+def info(im):
+    a = im.getchannel('A')
+    h = a.histogram()
+    bbox = a.getbbox()
+    return {'width': im.width, 'height': im.height, 'transparentPixels': h[0],
+            'semiTransparentPixels': sum(h[1:255]), 'alphaMin': a.getextrema()[0],
+            'bbox': list(bbox) if bbox else None, 'hasTransparency': h[0] > 0 and bbox is not None,
+            'checkerboard': looks_like_checkerboard(im)}
+
+
+def looks_like_checkerboard(im):
+    # A generated transparency grid is a common failure. Require a repeated
+    # neutral two-tone signal in at least three corners, not just any texture.
+    w, h = im.size
+    boxes = [(0, 0, w // 4, h // 4), (w * 3 // 4, 0, w, h // 4),
+             (0, h * 3 // 4, w // 4, h), (w * 3 // 4, h * 3 // 4, w, h)]
+    tile = min(96, w // 6, h // 6)
+    if tile >= 32:
+        boxes += [(x, y, x + tile, y + tile) for y in range(0, h - tile + 1, tile * 2) for x in range(0, w - tile + 1, tile * 2)]
+    votes = 0
+    for box in boxes:
+        if min(box[2] - box[0], box[3] - box[1]) < 20:
+            continue
+        sample = im.crop(box).resize((96, 96)).convert('RGB')
+        pixels = list(sample.getdata())
+        neutral = sum(max(p) - min(p) < 12 for p in pixels) / len(pixels)
+        if neutral < .96:
+            continue
+        row = [sum(sample.getpixel((x, 48))) / 3 for x in range(96)]
+        col = [sum(sample.getpixel((48, y))) / 3 for y in range(96)]
+        jumps = lambda line: sum(abs(a - b) > 22 for a, b in zip(line, line[1:]))
+        if 7 <= jumps(row) <= 65 and 7 <= jumps(col) <= 65:
+            votes += 1
+    return votes >= 3
+
+
+def save(im, file):
+    file = Path(file)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    im.save(file, 'PNG')
+
+
+def strict_font(postscript, size, text=''):
+    # Reuse the platform-aware search, never its system-font fallback.
+    from export_text_psd import _resolve_font_file
+    stem = postscript.replace('_', '-') if postscript.startswith('AlibabaPuHuiTi_3_') else postscript
+    file = _resolve_font_file(stem, ('.ttf', '.otf', '.TTF', '.OTF'))
+    if not file:
+        raise ValueError('未安装所选字体：' + postscript + '。请安装该字体或改为保留字形图层')
+    font = ImageFont.truetype(file, max(1, round(size)))
+    try:
+        from fontTools.ttLib import TTFont
+        opened = TTFont(file, fontNumber=0)
+        names = opened['name'].names
+        actual = {n.toUnicode() for n in names if n.nameID == 6}
+        if postscript not in actual:
+            raise ValueError('字体文件与PostScript名称不一致：' + postscript)
+        cmap = opened.getBestCmap() or {}
+        missing = [ch for ch in text if ch not in '\r\n\t' and ord(ch) not in cmap]
+        if missing:
+            raise ValueError('所选字体缺少字形：' + ''.join(dict.fromkeys(missing))[:30] + '，请更换字体或保留原字形图层')
+    except ImportError:
+        pass  # Pillow can render; the actual editor still checks its font.
+    return font
+
+
+def render_text(spec):
+    b, size = spec['element'], (spec['width'], spec['height'])
+    if not b.get('fontAccepted'):
+        raise ValueError('请先接受此候选字体')
+    font_size = float(b.get('fontSize', 24))
+    font = strict_font(b['fontPostScript'], font_size, str(b['text']))
+    im = Image.new('RGBA', size)
+    draw = ImageDraw.Draw(im)
+    geo = b['geometry']
+    anchor_x, anchor_y = geo['transform'][4:6]
+    tracking = round(float(b.get('tracking', 0))) * font_size / 1000
+    for i, line in enumerate(str(b['text']).replace('\r\n', '\n').replace('\r', '\n').split('\n')):
+        advance = float(font.getlength(line)) + tracking * max(0, len(line) - 1)
+        x = anchor_x - advance * ({'center': .5, 'right': 1}.get(b.get('textAlign'), 0))
+        y = anchor_y + i * font_size * 1.2
+        if tracking:
+            for ch in line:
+                draw.text((x, y), ch, font=font, fill=b.get('color', '#111827'), anchor='ls')
+                x += font.getlength(ch) + tracking
+        else:
+            draw.text((x, y), line, font=font, fill=b.get('color', '#111827'), anchor='ls')
+    angle = float(b.get('rotation', 0))
+    if angle:
+        im = im.rotate(-angle, resample=Image.Resampling.BICUBIC, center=(anchor_x, anchor_y))
+    if im.getchannel('A').getbbox() is None:
+        raise ValueError('文字位于画布外或没有可显示内容')
+    save(im, spec['output'])
+    return info(im)
+
+
+def normalize(spec):
+    im = load(spec['input'])
+    actual = list(im.size)
+    width, height = spec.get('width', im.width), spec.get('height', im.height)
+    if width * height > MAX_PIXELS:
+        raise ValueError('画布超过2000万像素')
+    aligned = None
+    placement_issues = []
+    element = spec.get('element') or {}
+    framing = 'canvas'
+    canvas_matches = abs(math.log((im.width / im.height) / (width / height))) <= .025
+    rectangle = [element.get(k) for k in ('x', 'y', 'width', 'height')]
+    valid = not spec.get('background') and not element.get('nativeText') and all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in rectangle)
+    if valid:
+        x, y, w, h = rectangle
+        valid = x >= 0 and y >= 0 and w >= 1 and h >= 1 and x+w <= width and y+h <= height
+    alpha = im.getchannel('A')
+    box = alpha.point(lambda a: 255 if a >= 32 else 0).getbbox()
+    transparent = alpha.getextrema()[0] == 0
+    # A response's canvas is not its visible layer. Strip transparent padding
+    # before measuring, then uniformly contain the whole asset in the source ROI.
+    # Keep alpha>=4 soft edges; discard only almost invisible stray pixels.
+    fit = valid and not spec.get('preserve_placement') and (not canvas_matches or transparent)
+    if spec.get('background') and not canvas_matches and not spec.get('preserve_placement'):
+        if looks_like_checkerboard(im) and not spec.get('allow_checkerboard'):
+            raise ValueError('模型把背景画成了棋盘格，原始返回已保留，不能作为背景交付')
+        if alpha.getextrema()[0] != 255:
+            raise ValueError('背景未完整填充，请重新补全背景')
+        if abs(math.log((im.width/im.height)/(width/height))) > .8:
+            raise ValueError('背景构图比例与原图差异过大，原始返回已保留')
+        # Background completion fills the document. Cover uniformly; visible
+        # original background pixels are restored by background_plate afterwards.
+        scale = max(width/im.width, height/im.height)
+        size = (max(width, round(im.width*scale)), max(height, round(im.height*scale)))
+        resized = im.resize(size, Image.Resampling.LANCZOS)
+        left, top = (size[0]-width)//2, (size[1]-height)//2
+        im = resized.crop((left, top, left+width, top+height))
+        aligned = {'from':[0,0,*actual], 'to':[0,0,width,height], 'mode':'cover', 'scale':scale}
+        framing = 'background-cover'
+        placement_issues.append({'id': element.get('id',''), 'code':'background-size-adapted', 'severity':'warning',
+            'message':'背景已等比缩放并铺满原图画布，原图可见背景由后续步骤保留'})
+    elif fit and box:
+        frame = alpha.point(lambda a: 255 if a >= 4 else 0).getbbox() if transparent else (0, 0, *im.size)
+        bw, bh = box[2]-box[0], box[3]-box[1]
+        mismatch = abs(math.log((bw/bh)/(w/h)))
+        if mismatch > .8:
+            raise ValueError('“'+str(element.get('name') or '当前图层')[:120]+'”可见内容 '+str(bw)+'×'+str(bh)+' 与图层区域 '+str(round(w))+'×'+str(round(h))+' 差异过大，可能混入其他内容；原始返回已保留，请核对识别框')
+        crop = im.crop(frame)
+        scale = min(w/crop.width, h/crop.height)
+        size = (max(1, min(round(w), round(crop.width*scale))), max(1, min(round(h), round(crop.height*scale))))
+        left, top = round(x+(w-size[0])/2), round(y+(h-size[1])/2)
+        placed = Image.new('RGBA', (width, height))
+        placed.paste(crop.resize(size, Image.Resampling.LANCZOS), (left, top))
+        aligned = {'from': list(frame), 'to': [left, top, left+size[0], top+size[1]], 'mode': 'contain', 'scale': scale}
+        im = placed
+        framing = 'layer-alpha-bounds' if transparent else 'layer-canvas'
+        if mismatch > .08:
+            placement_issues.append({'id': element.get('id', ''), 'code': 'layer-content-bounds-review', 'severity': 'warning' if mismatch <= .25 else 'review',
+                'message': '“'+str(element.get('name') or '当前图层')[:120]+'”已去透明留白并等比适配为 '+str(size[0])+'×'+str(size[1])+'，放入 '+str(round(w))+'×'+str(round(h))+' 原图区域；保留完整内容，未填满部分请核对识别框与原图位置'})
+    elif not canvas_matches:
+        name = str(element.get('name') or '当前图层')[:120]
+        expected = ('；图层区域 '+str(round(w))+'×'+str(round(h))) if valid else ''
+        raise ValueError('“'+name+'”返回 '+str(actual[0])+'×'+str(actual[1])+'，与原图画布 '+str(width)+'×'+str(height)+expected+' 的比例不匹配；原始结果已保留，请核对该层区域')
+    elif im.size != (width, height):
+        im = im.resize((width, height), Image.Resampling.LANCZOS)
+    result = info(im)
+    if spec.get('background') and result['checkerboard'] and not spec.get('allow_checkerboard'):
+        raise ValueError('模型把背景画成了棋盘格，不能作为完整背景交付。原始返回文件已保留，请核对或使用原图像素提取')
+    if spec.get('background') and result['alphaMin'] != 255:
+        raise ValueError('背景未完整填充，请重新补全背景')
+    if result['bbox'] is None:
+        raise ValueError('素材完全透明，没有可显示像素')
+    save(im, spec['output'])
+    return {**result, 'actualPixels': actual, 'resized': actual != [width, height], 'aligned': aligned, 'framing': framing, 'placementIssues': placement_issues}
+
+
+def crop_layer(spec):
+    im = load(spec['input'])
+    box = im.getchannel('A').point(lambda a: 255 if a >= 4 else 0).getbbox()
+    if not box:
+        raise ValueError('图层没有可见内容，无法裁出素材')
+    crop = im.crop(box)
+    save(crop, spec['output'])
+    return {'bounds': {'x': box[0], 'y': box[1], 'width': crop.width, 'height': crop.height}, **info(crop)}
+
+
+def background_plate(spec):
+    original, generated = load(spec['source']), load(spec['input'])
+    if original.size != generated.size:
+        raise ValueError('背景补全与原图尺寸不一致')
+    mask = Image.new('L', original.size)
+    draw = ImageDraw.Draw(mask)
+    for e in spec['elements']:
+        if e['type'] != 'background':
+            b=e.get('cleanupBounds') or e
+            draw.rectangle((b['x'] - 10, b['y'] - 10, b['x'] + b['width'] + 10, b['y'] + b['height'] + 10), fill=255)
+            if e.get('nativeText') and e.get('bounds'):
+                b=e['bounds']
+                draw.rectangle((b['x']-4,b['y']-4,b['x']+b['width']+4,b['y']+b['height']+4),fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(3))
+    # Approximate model rectangles may miss foreground edges. Only retain
+    # original pixels that also agree with the independently completed plate;
+    # otherwise an unmasked photo strip would be baked into the background.
+    delta=ImageChops.difference(original.convert('RGB'),generated.convert('RGB'))
+    r,g,b=delta.split();maximum=ImageChops.lighter(ImageChops.lighter(r,g),b)
+    disagreement=maximum.point(lambda v:255 if v>18 else 0).filter(ImageFilter.MaxFilter(15))
+    agreement=ImageChops.invert(disagreement).filter(ImageFilter.GaussianBlur(12))
+    color_weight=maximum.point(lambda v:255 if v<=18 else max(0,round(255*(50-v)/32)))
+    keep=ImageChops.multiply(ImageChops.multiply(agreement,color_weight),ImageChops.invert(mask))
+    result = Image.composite(original, generated, keep)
+    save(result, spec['output'])
+    return {**info(result),'sourceBackgroundPixels':keep.histogram()[255]}
+
+
+def source_flat(spec):
+    """Only reconstruct a flat plate when all visible background agrees.
+
+    Extraction copies original pixels; overlapping unmerged elements make this
+    path ineligible, rather than pretending to recover an occluded subject.
+    """
+    im = load(spec['input'])
+    rgb = im.convert('RGB')
+    color = rgb.getpixel((0, 0))
+    difference = ImageChops.difference(rgb, Image.new('RGB', im.size, color))
+    r, g, b = difference.split()
+    delta = ImageChops.lighter(ImageChops.lighter(r, g), b)
+    foreground = delta.point(lambda x: 255 if x > 4 else 0)
+    outside = Image.new('L', im.size, 255)
+    draw = ImageDraw.Draw(outside)
+    for e in spec['elements']:
+        if e['type'] == 'background':
+            continue
+        draw.rectangle((e['x'] - 2, e['y'] - 2, e['x'] + e['width'] + 2, e['y'] + e['height'] + 2), fill=0)
+    pixels = outside.histogram()[255]
+    mismatches = ImageChops.multiply(outside, foreground).histogram()[255]
+    if pixels < im.width * im.height * .15 or mismatches > max(5, pixels * .001):
+        return {'eligible': False}
+    # Every border must agree too: a texture hidden by erroneous boxes is not
+    # a verified flat background.
+    border = Image.new('L', im.size)
+    ImageDraw.Draw(border).rectangle((0, 0, im.width - 1, im.height - 1), outline=255, width=2)
+    if ImageChops.multiply(border, foreground).histogram()[255] > 5:
+        return {'eligible': False}
+    e = spec['element']
+    if e['type'] == 'background':
+        result = Image.new('RGBA', im.size, (*color, 255))
+    else:
+        x, y, w, h = e['x'], e['y'], e['width'], e['height']
+        merged = set(e.get('mergedIds', []))
+        for other in spec['elements']:
+            if other['id'] == e['id'] or other['id'] in merged or other['type'] == 'background':
+                continue
+            overlap = max(0, min(x + w, other['x'] + other['width']) - max(x, other['x'])) * max(0, min(y + h, other['y'] + other['height']) - max(y, other['y']))
+            if overlap > 4:
+                return {'eligible': False, 'reason': 'overlapping-elements'}
+        region = Image.new('L', im.size)
+        ImageDraw.Draw(region).rectangle((x, y, x + w - 1, y + h - 1), fill=255)
+        alpha = ImageChops.multiply(foreground, region)
+        if not alpha.getbbox():
+            return {'eligible': False}
+        result = im.copy()
+        result.putalpha(ImageChops.multiply(alpha, im.getchannel('A')))
+    save(result, spec['output'])
+    return {'eligible': True, 'engine': 'source-pixel-flat', 'color': list(color), **info(result)}
+
+
+def assemble(spec):
+    root = Path(spec['directory']).resolve()
+    width, height = spec['width'], spec['height']
+    if width * height > MAX_PIXELS:
+        raise ValueError('画布超过2000万像素')
+    preview = Image.new('RGBA', (width, height))
+    layers, total = [], 0
+    for i, b in enumerate(sorted(spec['elements'], key=lambda b: b['z'])):
+        if not b.get('enabled', True):
+            continue
+        file = Path(b.get('contentFile') or b['file']).resolve()
+        if not file.is_relative_to(root):
+            raise ValueError('素材路径不属于当前拆层任务')
+        im = load(file)
+        bounds = b.get('bounds') if b.get('contentFile') else None
+        if bounds:
+            if im.size != (bounds['width'], bounds['height']):
+                raise ValueError('素材尺寸与图层边界不一致：' + b['name'])
+            preview.alpha_composite(im, (bounds['x'], bounds['y']))
+            bbox = (bounds['x'], bounds['y'], bounds['x'] + im.width, bounds['y'] + im.height)
+        else:
+            if im.size != (width, height):
+                raise ValueError('图层画布尺寸不一致：' + b['name'])
+            preview.alpha_composite(im)
+            bbox = im.getchannel('A').getbbox()
+        if not bbox:
+            raise ValueError('空图层：' + b['name'])
+        crop = im if bounds else im.crop(bbox)
+        total += crop.width * crop.height
+        if total > 100_000_000:
+            raise ValueError('图层总像素过多，请减少图层或降低原图尺寸')
+        raw = root / ('export-' + str(i) + '.rgba')
+        raw.write_bytes(crop.tobytes())
+        layers.append({'id': b['id'], 'name': b['name'], 'raw': str(raw), 'left': bbox[0], 'top': bbox[1],
+                       'width': crop.width, 'height': crop.height, 'element': b})
+    save(preview, root / 'preview.png')
+    composite = root / 'composite.rgba'
+    composite.write_bytes(preview.tobytes())
+    return {'width': width, 'height': height, 'layers': layers, 'composite': str(composite), 'preview': str(root / 'preview.png')}
+
+
+def run(spec):
+    op = spec.get('operation', 'inspect')
+    if op == 'inspect':
+        im = load(spec['input'])
+        if spec.get('output'):
+            save(im, spec['output'])
+        return info(im)
+    if op == 'structure':
+        from layered_structure import inspect_structure
+        return inspect_structure(spec)
+    if op == 'render-structure':
+        from layered_structure import render_local
+        return render_local(spec)
+    if op == 'normalize':
+        return normalize(spec)
+    if op == 'crop-layer':
+        return crop_layer(spec)
+    if op == 'background-plate':
+        return background_plate(spec)
+    if op == 'source-flat':
+        return source_flat(spec)
+    if op == 'text':
+        return render_text(spec)
+    if op == 'assemble':
+        return assemble(spec)
+    raise ValueError('未知像素处理操作')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--spec', required=True)
+    args = parser.parse_args()
+    spec = json.loads(Path(args.spec).read_text(encoding='utf-8'))
+    try:
+        result = {'success': True, **run(spec)}
+    except Exception as e:
+        result = {'success': False, 'error': str(e)}
+    encoded = json.dumps(result, ensure_ascii=False)
+    if spec.get('result_output'):
+        Path(spec['result_output']).write_text(encoded, encoding='utf-8')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    print(encoded)
+    return 0 if result['success'] else 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -26,6 +26,9 @@
 
     function CanvasOverlay() {
       const [on, setOn] = React.useState(getMode());
+      const [automationOpen, setAutomationOpen] = React.useState(false);
+      const [automationActive, setAutomationActive] = React.useState(0);
+      const automationCommandsRef = React.useRef(new Map());
       const minimumChatWidth = 520;
       const clampPanelWidth = React.useCallback((value) => {
         const viewport = Math.max(720, window.innerWidth || 0);
@@ -258,6 +261,7 @@
       const [imageSettingsBusy, setImageSettingsBusy] = React.useState(false);
       const [autoAddOn, setAutoAddOnState] = React.useState(canvasAutoAddEnabled());
       const [textRebuild, setTextRebuild] = React.useState(null);
+      const [layeredImage, setLayeredImage] = React.useState(null);
       const projectRef = React.useRef({ cwd: activeChatCwd, sessionId: activeChatSessionId, project: chosenProject(activeChatCwd, activeChatSessionId) });
       const projectSwitchToken = React.useRef(0);
       // 场景令牌：每次向 iframe 发 load 都换新值；iframe 回传的 changed 必须携带
@@ -611,9 +615,19 @@
         fetch('/dsh-canvas/chat-context', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: projectInfo.sessionId, cwd: projectInfo.cwd || '', project: projectInfo.project || '', designMode: !!on })
+          body: JSON.stringify({ sessionId: projectInfo.sessionId, cwd: projectInfo.cwd || '', project: projectInfo.project || '', designMode: !!on, modelSelection: activeChatModelSelection || undefined })
         }).catch(() => {});
       }, [on, projectInfo.cwd, projectInfo.project, projectInfo.sessionId]);
+      React.useEffect(() => {
+        const publish = event => {
+          const current = projectRef.current, selected = event?.detail;
+          if (!current.sessionId || selected?.sessionId && selected.sessionId !== current.sessionId) return;
+          fetch('/dsh-canvas/chat-context', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...current,
+            designMode: getMode(), modelSelection: selected?.selection || activeChatModelSelection || undefined }) }).catch(() => {});
+        };
+        window.addEventListener('dsh-canvas:model-selection', publish); publish();
+        return () => window.removeEventListener('dsh-canvas:model-selection', publish);
+      }, [projectInfo.sessionId, projectInfo.project]);
       React.useEffect(() => {
         try { window.localStorage.setItem(PANEL_WIDTH_KEY, String(width)); } catch (err) {}
       }, [width]);
@@ -907,6 +921,62 @@
           setFeedback('⚠ 加载项目失败，当前画布未改变：' + String((err && err.message) || err));
         });
       };
+      React.useEffect(() => {
+        if (!projectInfo.sessionId) return undefined;
+        let stopped = false, timer; const controller = new AbortController();
+        const json = async (suffix, body) => {
+          const r = await fetch('/dsh-canvas/automation/' + suffix, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
+          const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || '后台结果读取失败'); return d.value;
+        };
+        const poll = async () => {
+          try {
+            const current = projectRef.current;
+            if (!current.sessionId || current.sessionId !== projectInfo.sessionId) return;
+            if (getMode() && frameReady.current && !switchingProject.current) post({ type: 'automation-context-request' });
+            const query = new URLSearchParams({ sessionId: current.sessionId, summary: 'true' });
+            const responses = await Promise.all([fetch('/dsh-canvas/automation/events?' + query, { cache: 'no-store', signal: controller.signal }),
+              fetch('/dsh-canvas/automation/jobs?' + query, { cache: 'no-store', signal: controller.signal })]);
+            const [events, jobs] = await Promise.all(responses.map(r => r.json()));
+            if (stopped || projectRef.current.sessionId !== current.sessionId) return;
+            if (jobs.ok) setAutomationActive((jobs.value || []).filter(j => ['queued','running','cancelling'].includes(j.status)).length);
+            const commands = (events.value || []).filter(e => e.kind === 'patch');
+            for (const command of commands) {
+              if (automationCommandsRef.current.has(command.id)) continue;
+              const revision = Number(latestSnapshot.current?.dshMeta?.revision || 0);
+              if (command.deadline <= Date.now() || projectRef.current.project !== command.project || revision !== command.baseRevision || !frameReady.current || switchingProject.current) {
+                await json('canvas-result', { id: command.id, sessionId: current.sessionId, error: '画布或版本已变化，请重新读取对象后调整' }); continue;
+              }
+              const record = { project: command.project, sessionId: current.sessionId, timer: null };
+              record.timer = setTimeout(() => { automationCommandsRef.current.delete(command.id); }, 11000);
+              automationCommandsRef.current.set(command.id, record);
+              post({ type: 'automation-patch', commandId: command.id, patches: command.patches, deadline: command.deadline, sceneStamp: command.sceneStamp, token: canvasLoadToken.current });
+            }
+            if (automationCommandsRef.current.size) return;
+            const displays = (events.value || []).filter(e => e.kind !== 'patch');
+            if (displays.length) {
+              const event = displays[displays.length - 1]; setMode(true);
+              await loadProject({ cwd: event.cwd || current.cwd, sessionId: current.sessionId, project: event.project }, true);
+              if (!stopped && projectRef.current.project === event.project && projectRef.current.sessionId === current.sessionId) {
+                if (event.kind === 'review' && event.taskId) {
+                  setAutomationOpen(false);
+                  setLayeredImage({ key: 'automation-review-' + event.revision, project: { cwd: event.cwd || current.cwd, project: event.project, sessionId: current.sessionId },
+                    data: {}, initialTaskId: event.taskId, automationLimits: { generationAllowed: event.generationAllowed, maxImageRequests: event.maxImageRequests } });
+                }
+                setFeedback('✓ ' + (event.message || '已展示工作台处理结果'));
+                for (const item of displays) await json('ack', { id: item.id, revision: item.revision });
+              }
+            }
+          } catch (error) { /* A transient UI failure never cancels a host-owned job. */ }
+          finally { if (!stopped) timer = setTimeout(poll, 2000); }
+        };
+        poll(); return () => {
+          stopped = true; controller.abort(); clearTimeout(timer);
+          for (const [id, record] of automationCommandsRef.current) if (record.sessionId === projectInfo.sessionId) {
+            clearTimeout(record.timer); automationCommandsRef.current.delete(id);
+            fetch('/dsh-canvas/automation/canvas-result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, sessionId: record.sessionId, error: '聊天已切换，请重新读取画布核对结果' }) }).catch(() => {});
+          }
+        };
+      }, [projectInfo.sessionId]);
       const openProjectList = () => {
         if (!projectInfo.cwd) { setFeedback('⚠ 当前聊天没有工作目录'); return; }
         setMoreMenuOpen(false);
@@ -1342,6 +1412,23 @@
             }
           }
           flushPending();
+        } else if (d.type === 'automation-context') {
+          const current = projectRef.current;
+          if (!current.project || !current.sessionId || switchingProject.current) return;
+          fetch('/dsh-canvas/automation/context', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...current,
+            selectedIds: d.selectedIds || [], elements: d.elements || [], sceneStamp: d.sceneStamp, revision: Number(latestSnapshot.current?.dshMeta?.revision || 0) }) }).catch(() => {});
+        } else if (d.type === 'automation-patch-result') {
+          const record = automationCommandsRef.current.get(d.commandId); if (!record) return;
+          clearTimeout(record.timer); automationCommandsRef.current.delete(d.commandId);
+          const finish = error => fetch('/dsh-canvas/automation/canvas-result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: d.commandId, sessionId: record.sessionId, sceneStamp: d.sceneStamp, ...(error ? { error } : {}) }) }).catch(() => {});
+          if (d.error || projectRef.current.project !== record.project || !Array.isArray(d.snapshot?.elements)) { void finish(d.error || '项目已切换或快照无效，未保存调整'); return; }
+          const snapshot = markCanvasChanged(d.snapshot, latestSnapshot.current || {}); latestSnapshot.current = snapshot;
+          clearTimeout(saveTimer.current);
+          queueStateSave(snapshot, projectRef.current.cwd, record.project).then(async response => {
+            const value = response && await response.json();
+            if (!value || !value.ok || value.stale) throw new Error('另一个窗口已修改画布，请重新读取对象');
+            setFeedback('✓ 已调整指定画布对象'); await finish();
+          }).catch(error => { setFeedback('⚠ ' + String(error.message || error)); void finish(String(error.message || error)); });
         } else if (d.type === 'size') {
           if (d.w < 100 || d.h < 100) console.error('canvas too small — tldraw CSS likely missing');
         } else if (d.type === 'snapshot-response') {
@@ -1467,6 +1554,11 @@
         } else if (d.type === 'save-to-materials') {
           saveMaterialItems(d.items || [], d.source === 'context-menu' ? '右键所选图片已加入当前素材库' : '画布所选图片已加入当前素材库')
             .catch((err) => setFeedback('⚠ 加入当前素材库失败：' + String(err.message || err)));
+        } else if (d.type === 'request-layered-image') {
+          if (!projectRef.current.project && !projectRef.current.cwd) { setFeedback('请先打开画布项目'); return; }
+          setLayeredImage(previous => previous && previous.hidden && previous.data.elementId === d.elementId && previous.data.imageData === (d.imageData || '') && previous.project.project === projectRef.current.project && previous.project.cwd === projectRef.current.cwd
+            ? { ...previous, hidden: false }
+            : { key: Date.now(), project: { ...projectRef.current }, data: { elementId: d.elementId, name: d.name || '画布图片.png', imageData: d.imageData || '' } });
         } else if (d.type === 'request-text-rebuild') {
           const base = { elementId: d.elementId, name: d.name || '当前图片', dataURL: d.imageData || '', loading: false, busy: false, hasDetected: false, blocks: [], erasePrompt: '', selection: null, selections: [], width: 0, height: 0, error: '' };
           setTextRebuild(base);
@@ -1877,8 +1969,12 @@
           const snapshot = latestSnapshot.current || {};
           const liveImages = (snapshot.elements || []).filter((item) => item && item.type === 'image' && !item.isDeleted);
           const projectRoot = currentProjectPath();
-          const sourceElements = liveImages.filter((item) => item.customData && canvasPathWithin(projectRoot, item.customData.dshSourcePath || ''));
-          const externalSourceElements = liveImages.filter((item) => item.customData && item.customData.dshSourcePath && !canvasPathWithin(projectRoot, item.customData.dshSourcePath));
+          // Task assets are intentionally excluded from the project directory scan.
+          // Check explicitly imported layered exports by path, so a missing scan
+          // entry cannot be mistaken for a Finder deletion.
+          const isLayeredOutput = (path) => canvasPathWithin(projectRoot + '/outputs/图片拆层', path || '');
+          const sourceElements = liveImages.filter((item) => item.customData && canvasPathWithin(projectRoot, item.customData.dshSourcePath || '') && !isLayeredOutput(item.customData.dshSourcePath));
+          const externalSourceElements = liveImages.filter((item) => item.customData && item.customData.dshSourcePath && (!canvasPathWithin(projectRoot, item.customData.dshSourcePath) || isLayeredOutput(item.customData.dshSourcePath)));
           const sourcePaths = new Set(sourceElements.map((item) => item.customData.dshSourcePath));
           for (const path of sourcePaths) queuedDiskPaths.current.delete(path);
           projectSyncBusy.current = true;
@@ -2232,6 +2328,7 @@
           ),
           React.createElement('button', { className: 'dsh-canvas-tb', title: '将选中的对象分别导出为 PNG；图片使用原图像素，SVG 按文件画板原尺寸渲染，PSD/AI/PDF 使用文件预览', onClick: () => post({ type: 'export-selected' }) }, '导出选中 PNG'),
           React.createElement('button', { className: 'dsh-canvas-tb', title: '本地素材库：常用图片发送到画布或聊天', onClick: () => openMaterials() }, '素材库'),
+          React.createElement('button', { className: 'dsh-canvas-tb', title: '指定文件夹或选中图片，在后台批量处理', onClick: () => setAutomationOpen(value => !value) }, automationActive ? '后台任务 ' + automationActive : '后台任务'),
           React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-tb-adobe', title: '把 Photoshop 里当前选中的图层拉到画布（PS 需已打开文档并选中图层；不用在 PS 里点任何面板）', disabled: !projectInfo.project, onClick: () => { void pullFromAdobe(projectRef.current, 'photoshop', setFeedback); } }, '取 Ps 图层'),
           React.createElement('button', { className: 'dsh-canvas-tb dsh-canvas-tb-adobe', title: '把 Illustrator 里当前选中的对象拉到画布（AI 需已打开文档并选中对象；150 dpi 透明 PNG）', disabled: !projectInfo.project, onClick: () => { void pullFromAdobe(projectRef.current, 'illustrator', setFeedback, { dpi: 150 }); } }, '取 Ai 对象'),
           React.createElement('button', {
@@ -2326,7 +2423,7 @@
                   React.createElement('input', { type: 'radio', name: 'dsh-image-engine', checked: imageSettings.engine === 'dsh-codex', onChange: () => setImageSettings({ ...imageSettings, engine: 'dsh-codex' }) }),
                   React.createElement('span', null,
                     React.createElement('strong', null, 'Codex 统一路由 ', React.createElement('em', { className: 'dsh-canvas-engine-badge ' + (imageSettings.health && imageSettings.health.dshCodex && imageSettings.health.dshCodex.ready ? 'is-ready' : '') }, imageSettings.health && imageSettings.health.dshCodex && imageSettings.health.dshCodex.ready ? '可用' : '待配置')),
-                    React.createElement('small', null, '与当前 DSH 的 dsh-codex 共用 ChatGPT OAuth、订阅额度和 gpt-image-2 图片能力。')
+                    React.createElement('small', null, '与当前 DSH 的 dsh-codex 共用 ChatGPT OAuth 和订阅额度，生图型号：' + (imageSettings.health && imageSettings.health.dshCodex && imageSettings.health.dshCodex.model || 'gpt-image-2.5') + '。')
                   )
                 ),
                 React.createElement('label', { className: 'dsh-canvas-engine-option' },
@@ -2623,6 +2720,27 @@
             )
           )
         ) : null,
+        automationOpen ? React.createElement(CanvasAutomationPanel, { project: projectInfo, onClose: () => setAutomationOpen(false) }) : null,
+        layeredImage && layeredImage.project.project === projectRef.current.project && layeredImage.project.cwd === projectRef.current.cwd ? React.createElement(LayeredImagePanel, {
+          key: layeredImage.key,
+          data: layeredImage.data,
+          hidden: !!layeredImage.hidden,
+          project: layeredImage.project,
+          initialTaskId: layeredImage.initialTaskId,
+          automationLimits: layeredImage.automationLimits,
+          model: activeChatModelSelection || {},
+          getModel: () => activeChatModelSelection || {},
+          onClose: () => setLayeredImage(previous => previous ? { ...previous, hidden: true } : null),
+          onFile: (image) => {
+            if (!image || !image.path || layeredImage.project.project !== projectRef.current.project || layeredImage.project.cwd !== projectRef.current.cwd) return;
+            const linked = ((latestSnapshot.current || {}).elements || []).some(e => e && !e.isDeleted && e.customData && e.customData.dshSourcePath === image.path);
+            if (linked || queuedDiskPaths.current.has(image.path) || knownDiskPaths.current && knownDiskPaths.current.has(image.path)) { setFeedback('该文件已在画布中：' + image.name); return; }
+            queuedDiskPaths.current.add(image.path);
+            if (knownDiskPaths.current) knownDiskPaths.current.add(image.path);
+            pendingRef.current.push({ ...image, explicit: true }); flushPending();
+            setFeedback('✓ 拆层文件已加入画布：' + image.name);
+          }
+        }) : null,
         textRebuild ? React.createElement(TextRebuildPanel, {
           data: textRebuild,
           onClose: () => { if (!textRebuild.busy) setTextRebuild(null); },

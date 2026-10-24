@@ -2,7 +2,7 @@
 // 41 条路由拆到 ./routes/*.js，由 createRouter 按原顺序分派；未命中仍回 404 'not found'。
 import { basename, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { access, mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { isMac, isWindows, resolvePython, resolvePythonWithDeps } from '../../lib/platform.js';
 import { PLUGIN_ROOT } from './vendor-assets.js';
@@ -29,7 +29,12 @@ import { register as register5 } from './routes/text.routes.js';
 import { register as register6 } from './routes/material.routes.js';
 import { register as register7 } from './routes/external.routes.js';
 import { register as registerAdobeBridge } from './routes/adobe-bridge.routes.js';
+import { register as registerLayeredImage } from './routes/layered-image.routes.js';
 import { createAdobeBridge } from './services/adobe-bridge.js';
+import { createLayeredImageService } from './services/layered-image.js';
+import { createCanvasAutomation } from './services/canvas-automation.js';
+import { register as registerAutomation } from './routes/automation.routes.js';
+import { installCanvasAutomationTool } from './services/canvas-automation-tool.js';
 
 function apply(ctx) {
   const fs = ctx.get('fs');
@@ -105,6 +110,7 @@ function apply(ctx) {
     await mkdir(previewCache, { recursive: true });
     const key = createHash('sha1').update(path + ':' + String(Math.round(mtimeMs || 0))).digest('hex');
     const target = join(previewCache, key + '.jpg');
+    try { await access(join(previewCache, key + '.png')); return { path: join(previewCache, key + '.png'), mime: 'image/png' }; } catch {}
     try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
     if (!isMac) {
       // Windows / Linux：sips 不存在，此前这里直接落占位 SVG。
@@ -151,6 +157,7 @@ function apply(ctx) {
     await mkdir(previewCache, { recursive: true });
     const key = createHash('sha1').update(path + ':' + String(Math.round(mtimeMs || 0)) + ':' + kind).digest('hex');
     const target = join(previewCache, key + '.jpg');
+    try { await access(join(previewCache, key + '.png')); return { path: join(previewCache, key + '.png'), mime: 'image/png' }; } catch {}
     try { await access(target); return { path: target, mime: 'image/jpeg' }; } catch (err) {}
     let pdftoppm = '';
     try { pdftoppm = await ctx.subprocess.resolveExecutable('pdftoppm'); } catch (err) {}
@@ -377,7 +384,15 @@ function apply(ctx) {
   adobeBridge.ensureInstalled().catch(() => {});
   // 本地工具链后台预置:镜像兜底下载部署并自检,首次点击即就绪;任何失败只记状态不阻断。
   startToolchainProvisioning(ctx);
-  const h = { adobeBridge, jobs, pythonTools, chatContexts, ctx, documentPreviewPath, svgInlinePreviewPath, flattenRecycleBin, previewUrl, progressPathFor, projectDirectory, projectStatePath, psdPreviewPath, runProcess, runProcessWithTimeout, scanProjectImagesShared, stateWriteChains, writeManagedImage, writeManagedSource, writeManagedSvg, writeProgressFile };
+  const cacheSourcePreview = async (path, mtimeMs, kind, png) => {
+    if (!['psd', 'ai', 'pdf'].includes(kind)) return;
+    const key = createHash('sha1').update(path + ':' + String(Math.round(mtimeMs || 0)) + (kind === 'psd' ? '' : ':' + kind)).digest('hex');
+    await mkdir(previewCache, { recursive: true });
+    await copyFile(png, join(previewCache, key + '.png'));
+  };
+  const h = { adobeBridge, jobs, pythonTools, chatContexts, ctx, documentPreviewPath, cacheSourcePreview, svgInlinePreviewPath, flattenRecycleBin, previewUrl, progressPathFor, projectDirectory, projectStatePath, psdPreviewPath, runProcess, runProcessWithTimeout, scanProjectImagesShared, stateWriteChains, writeManagedImage, writeManagedSource, writeManagedSvg, writeProgressFile, canvasAutomationContexts: new Map() };
+  h.layeredImage = createLayeredImageService(h);
+  h.automation = createCanvasAutomation(h);
   const router = createRouter();
   router.use(jobTrackingMiddleware(jobs));
   register0(router, h);
@@ -389,6 +404,8 @@ function apply(ctx) {
   register6(router, h);
   register7(router, h);
   registerAdobeBridge(router, h);
+  registerLayeredImage(router, h);
+  registerAutomation(router, h);
   registerJobs(router, h);
   registerContracts(router, h);
 
@@ -433,6 +450,8 @@ function apply(ctx) {
       } catch (err) {
         try { console.warn('[canvas-workbench] image router disabled:', err && err.message || String(err)); } catch (_) {}
       }
+      try { installCanvasAutomationTool(toolCtx, h.automation, chatContextFor); }
+      catch (err) { try { console.warn('[canvas-workbench] automation tool unavailable:', err?.message || String(err)); } catch {} }
     });
   } catch (err) {
     // 老版本 DSH 缺少工具注入能力时，基础画布仍应正常加载。
@@ -440,6 +459,7 @@ function apply(ctx) {
   // 注意：ctx.effect 会立即执行回调，返回的 disposer 才是清理函数。
   // 这里回调只返回 dispose（不执行），fiber 卸载时才真正销毁路由。
   ctx.effect(() => dispose);
+  ctx.effect(() => () => { h.automation.dispose().catch(() => {}); });
 }
 
 export { apply, inject, name };

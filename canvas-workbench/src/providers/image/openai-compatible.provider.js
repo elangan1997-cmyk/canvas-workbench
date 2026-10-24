@@ -85,12 +85,12 @@ export function gatewaySizeFor(imageSize) {
   return best[0];
 }
 
-async function generateWithApi({ image, images, mask, prompt, settings, signal, sizeOnEdit }) {
+async function generateWithApi({ image, images, mask, prompt, settings, signal, sizeOnEdit, background, maxAttempts: requestedAttempts }) {
   const auth = await readLegacyApiAuth();
   if (!auth.configured) throw new Error(`未配置 image2 API 密钥：${auth.filename}`);
   // 保留旧版 auth.json 中的自定义网关；只有设置文件明确改过默认地址时才覆盖它。
   const base = effectiveApiBase(settings, auth);
-  const maxAttempts = 4;
+  const maxAttempts = Math.max(1, Math.min(4, Math.round(Number(requestedAttempts) || 4)));
   let lastFailure = '';
   const inputImages = Array.isArray(images) && images.length
     ? images.map((item) => Buffer.from(item || [])).filter((item) => item.length)
@@ -109,6 +109,7 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal, 
       form.append('model', String(settings.apiModel || DEFAULT_API_MODEL));
       form.append('prompt', prompt);
       form.append('quality', 'high');
+      if (['transparent', 'opaque'].includes(background)) form.append('background', background);
       for (let index = 0; index < inputImages.length; index += 1) {
         const bytes = inputImages[index];
         form.append(inputImages.length > 1 ? 'image[]' : 'image', new Blob([bytes], { type: imageMediaType(bytes) }), `input-${index + 1}.png`);
@@ -124,6 +125,7 @@ async function generateWithApi({ image, images, mask, prompt, settings, signal, 
       // 尺寸比例:选了具体比例才传 size(默认 auto 不传,由服务端决定);
       // 编辑/擦除路径(带输入图)不传 size,输出跟随输入比例。
       const request = { model: String(settings.apiModel || DEFAULT_API_MODEL), prompt, quality: 'high' };
+      if (['transparent', 'opaque'].includes(background)) request.background = background;
       const requestSize = gatewaySizeFor(settings.imageSize);
       if (requestSize) request.size = requestSize;
       // 数量不传 n:网关对非标参数会静默忽略(n>1 实测只回一张),
@@ -214,8 +216,8 @@ export async function testImageApiConnection() {
 export const openAICompatibleProvider = {
   id: 'api',
   capabilities: ['image.generate', 'image.edit', 'image.mask'],
-  async generate({ images, mask, prompt, settings, signal, sizeOnEdit }) {
-    return generateWithApi({ images, mask, prompt, settings, signal, sizeOnEdit });
+  async generate({ images, mask, prompt, settings, signal, sizeOnEdit, background, maxAttempts }) {
+    return generateWithApi({ images, mask, prompt, settings, signal, sizeOnEdit, background, maxAttempts });
   },
   async health() {
     const settings = await readImageEngineSettings();

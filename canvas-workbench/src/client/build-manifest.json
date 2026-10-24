@@ -167,6 +167,14 @@
       ]
     },
     {
+      "file": "features/layered-image/00-LayeredImagePanel.js",
+      "note": "图片拆层：清单复核、后台进度、逐层预览及 AI/PSD/SVG 导出"
+    },
+    {
+      "file": "features/automation/00-AutomationPanel.js",
+      "note": "聊天工具与后台批处理共用的任务入口和进度"
+    },
+    {
       "file": "app/00-DesignModeToggle.js",
       "note": "设计模式开关按钮",
       "lines": [

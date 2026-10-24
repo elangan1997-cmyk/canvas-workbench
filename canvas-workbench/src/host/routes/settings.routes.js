@@ -233,7 +233,16 @@ export function register(router, h) {
             if (!sessionId) throw new Error('缺少聊天会话 ID');
             const cwd = expandHome(String(body.cwd || '')).replace(/[\\/]+$/, '');
             const project = body.project ? projectDirectory(cwd, body.project) : '';
-            chatContexts.set(sessionId, { sessionId, cwd, project, designMode: body.designMode === true, updatedAt: Date.now() });
+            const previous = chatContexts.get(sessionId) || {};
+            let modelSelection = previous.modelSelection || null;
+            if (body.modelSelection && typeof body.modelSelection === 'object') {
+              const selected = body.modelSelection;
+              if (typeof selected.provider === 'string' && typeof selected.model === 'string' && selected.provider.length < 240 && selected.model.length < 240) {
+                modelSelection = { provider: selected.provider, model: selected.model,
+                  ...(typeof selected.reasoningEffort === 'string' ? { reasoningEffort: selected.reasoningEffort.slice(0, 80) } : {}) };
+              }
+            }
+            chatContexts.set(sessionId, { sessionId, cwd, project, designMode: body.designMode === true, modelSelection, updatedAt: Date.now() });
             respond(res, 200, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: true }));
           } catch (err) {
             respond(res, 400, { ...CORS, 'content-type': 'application/json' }, JSON.stringify({ ok: false, error: String((err && err.message) || err) }));

@@ -104,6 +104,21 @@ function harness() {
 const image = (id = 'a', x = 0) => ({ id, type: 'image', fileId: id, x, y: 0, width: 100, height: 100 });
 const file = dataURL => ({ dataURL, mimeType: 'image/png' });
 
+test('automation acknowledges one authoritative scene without a second autosave, then preserves the next manual edit', () => {
+  const h = harness(); h.change([image()], { a: file('AAAA') }); h.tick(); h.messages.length = 0;
+  h.message({ type: 'automation-patch', commandId: 'test', token: 'A', deadline: Date.now() + 10000, patches: [{ id: 'a', x: 18 }] });
+  h.tick();
+  assert.equal(h.messages.filter(m => m.type === 'automation-patch-result').length, 1);
+  assert.equal(h.messages.find(m => m.type === 'automation-patch-result').snapshot.elements[0].x, 18);
+  assert.equal(h.messages.filter(m => m.type === 'changed').length, 0);
+  h.change([{ ...image('a', 40), version: 2 }]); h.tick();
+  assert.equal(h.messages.filter(m => m.type === 'changed').length, 1);
+  assert.equal(h.messages.at(-1).snapshot.elements[0].x, 40);
+  h.messages.length = 0;
+  h.message({ type: 'automation-patch', commandId: 'stale', token: 'A', deadline: Date.now() + 10000, sceneStamp: 'old', patches: [{ id: 'a', x: 55 }] });
+  assert.match(h.messages[0].error, /已变化/);
+});
+
 test('drag bursts and Main re-renders send one latest scene with no repeated image bytes', () => {
   const h = harness(), files = { a: file('data:image/png;base64,' + 'A'.repeat(4_000_000)) };
   h.window.__dshSentFilesReset(files);

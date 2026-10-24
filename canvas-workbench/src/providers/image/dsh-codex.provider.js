@@ -6,6 +6,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dshHome } from '../../host/services/image-engine-settings.js';
 import { dataUrl } from '../../shared/utils/image-bytes.js';
 
+export const DEFAULT_DSH_CODEX_IMAGE_MODEL = 'gpt-image-2.5';
+
+/** Share the live dsh-codex choice; older hosts use the canvas default. */
+export function dshCodexImageModel(ctx) {
+  const service = typeof ctx?.get === 'function' ? ctx.get('openAICodex') : null;
+  const preferences = typeof service?.imagePreferences === 'function' ? service.imagePreferences()
+    : typeof service?.policy?.snapshot === 'function' ? service.policy.snapshot() : null;
+  return String(preferences?.imageGenerationModel || DEFAULT_DSH_CODEX_IMAGE_MODEL);
+}
+
 async function moduleCandidates() {
   const root = dshHome();
   const candidates = [];
@@ -62,7 +72,7 @@ async function loadCodexModule() {
   throw new Error('dsh-codex 模块加载失败，请重启 DSH 后重试');
 }
 
-async function generateWithDshCodex({ ctx, image, prompt, signal }) {
+async function generateWithDshCodex({ ctx, image, prompt, signal, model, background }) {
   const module = await loadCodexModule();
   const service = typeof ctx.get === 'function' ? ctx.get('openAICodex') : null;
   const credentials = service && service.credentials
@@ -77,19 +87,29 @@ async function generateWithDshCodex({ ctx, image, prompt, signal }) {
     : module.OpenAICodexProxyTransport
       ? new module.OpenAICodexProxyTransport(() => ({ proxyMode: 'scoped', proxyUrl: '' })).fetch
       : undefined;
-  const client = new module.OpenAICodexImageClient(credentials, proxyFetch);
+  // Older dsh-codex clients hard-code background:auto. The layered workflow
+  // needs a real Alpha channel, so pass its explicit option to image requests.
+  const requestFetch = ['transparent', 'opaque'].includes(background) ? (input, init) => {
+    const imageUrls = [module.OPENAI_CODEX_IMAGE_EDITS_URL, module.OPENAI_CODEX_IMAGE_GENERATIONS_URL];
+    if (imageUrls.includes(String(input)) && typeof init?.body === 'string') {
+      const body = JSON.parse(init.body);
+      return (proxyFetch || globalThis.fetch)(input, { ...init, body: JSON.stringify({ ...body, background }) });
+    }
+    return (proxyFetch || globalThis.fetch)(input, init);
+  } : proxyFetch;
+  const client = new module.OpenAICodexImageClient(credentials, requestFetch);
   const images = Array.isArray(image) ? image : image ? [image] : [];
-  return Buffer.from(await client.generate(prompt, images.map(dataUrl), signal || AbortSignal.timeout(360000)));
+  return Buffer.from(await client.generate(prompt, images.map(dataUrl), signal || AbortSignal.timeout(360000), model || dshCodexImageModel(ctx)));
 }
 
 export const dshCodexProvider = {
   id: 'dsh-codex',
   capabilities: ['image.generate', 'image.edit'],
   loadCodexModule,
-  async generate({ ctx, images, prompt, signal, settings = {}, sizeOnEdit }) {
+  async generate({ ctx, images, prompt, signal, settings = {}, sizeOnEdit, background }) {
     // 比例提示词由 generateChatImage 在 Provider 分派前统一注入，API 与
     // dsh-codex 得到完全相同的构图约束；画布局部编辑仍保持原图比例。
-    return generateWithDshCodex({ ctx, image: images, prompt, signal });
+    return generateWithDshCodex({ ctx, image: images, prompt, signal, model: settings.dshCodexModel || dshCodexImageModel(ctx), background });
   },
   async health(ctx) {
     let installed = false;
@@ -110,7 +130,7 @@ export const dshCodexProvider = {
       }
     } catch {}
     return installed
-      ? { installed, authenticated, ready: installed && authenticated }
+      ? { installed, authenticated, ready: installed && authenticated, model: dshCodexImageModel(ctx) }
       : { installed, authenticated, ready: false, detail };
   }
 };

@@ -37,6 +37,8 @@ for (const dir of ['lib', 'src', 'vendor', 'scripts', 'adobe-bridge']) {
   });
 }
 await cp(join(pluginRoot, 'README.md'), join(outDir, 'README.md'));
+await cp(join(pluginRoot, 'AUTOMATION-API.md'), join(outDir, 'AUTOMATION-API.md'));
+await cp(join(suiteRoot, 'CHANGELOG.md'), join(outDir, 'CHANGELOG.md'));
 await cp(join(suiteRoot, 'LICENSE'), join(outDir, 'LICENSE'));
 
 // ---- 客户端模块 id：@local → npm 包名 ----
@@ -72,7 +74,7 @@ const publishPkg = {
     './cordis.patch.yml': './cordis.patch.yml',
     './package.json': './package.json',
   },
-  files: ['lib', 'src', 'vendor', 'scripts', 'adobe-bridge', 'cordis.patch.yml', 'README.md', 'LICENSE'],
+  files: ['lib', 'src', 'vendor', 'scripts', 'adobe-bridge', 'cordis.patch.yml', 'README.md', 'AUTOMATION-API.md', 'CHANGELOG.md', 'LICENSE'],
   os: devPkg.os,
   keywords: ['dsh', 'dsh-plugin', 'dsh-bundle', 'canvas', 'excalidraw', 'design'],
   repository: {
