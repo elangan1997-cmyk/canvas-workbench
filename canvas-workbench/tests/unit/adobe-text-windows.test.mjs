@@ -33,3 +33,10 @@ test('Windows Adobe activation failure stays a failure for the format fallback',
   assert.equal(result.ok, false);
   assert.equal(result.error, 'com-activate-failed');
 });
+
+test('Windows Adobe COM rejects timed-out or nonzero processes even if a success marker was printed', async()=>{
+ for(const failure of [{exitCode:1},{exitCode:0,timedOut:true}]){
+  const result=await runCom({},async()=>({...failure,stdout:'DSH_JSX=dsh-done\r\n',stderr:'process failed'}),{app:'illustrator',jsxPath:'C:\\temp\\test.jsx'});
+  assert.equal(result.ok,false);
+ }
+});

@@ -276,7 +276,7 @@ export function createLayeredImageService(h, overrides = {}) {
                   if (result.exitCode !== 0) failure = String(result.stderr || 'Illustrator 没有返回成功结果');
                 } else if (isWindows) {
                   await writeFile(jsxPath, '\uFEFF' + jsx, 'utf8');
-                  const result = await runAdobeJsxViaCom(ctx, runProcess, { app: 'illustrator', jsxPath, workDir: work, timeoutMs: 300000 });
+                  const result = await runAdobeJsxViaCom(ctx, runProcessWithTimeout, { app: 'illustrator', jsxPath, workDir: work, timeoutMs: 300000 });
                   if (!result.ok) failure = String(result.error || 'Illustrator 没有返回成功结果');
                 } else throw new Error('原生 AI 导出需要 macOS 或 Windows 上的 Illustrator，可改选 PSD / SVG');
                 if (!failure) break;

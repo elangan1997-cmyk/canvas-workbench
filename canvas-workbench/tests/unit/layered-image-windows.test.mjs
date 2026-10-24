@@ -21,13 +21,14 @@ let source=await readFile(serviceFile,'utf8');source=source.replace(/from '([^']
 const {createLayeredImageService}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 for(const failed of [false,true])test(`Windows native AI route ${failed?'retains COM failure without claiming success':'writes BOM JSX, uses encoded COM and validates artifact'}`,async t=>{
  const root=await mkdtemp(join(tmpdir(),'dsh-Win 中文-'));t.after(()=>rm(root,{recursive:true,force:true}));let comCalls=0;
- const h={ctx:{},projectDirectory:()=>root,previewUrl:p=>'preview:'+p,runProcessWithTimeout:async(exe,args,work)=>{
+ const h={ctx:{},projectDirectory:()=>root,previewUrl:p=>'preview:'+p,runProcessWithTimeout:async(exe,args,work,timeout)=>{
+  assert.equal(timeout,300000);
   comCalls++;assert.equal(exe,'powershell.exe');assert.deepEqual(args.slice(0,3),['-NoLogo','-NoProfile','-EncodedCommand']);const ps=Buffer.from(args[3],'base64').toString('utf16le');assert.match(ps,/Illustrator.Application/);
   const bytes=await readFile(join(work,'layers.jsx'));assert.deepEqual([...bytes.subarray(0,3)],[239,187,191]);const jsx=bytes.toString('utf8').slice(1);new Function(jsx.replace(/^#target[^\n]*\n/,''));assert.doesNotMatch(jsx,/\?Justification\./);assert.match(jsx,/AI text baseline mismatch/);
   if(failed)return{exitCode:0,stdout:'DSH_JSX_ERR=com-activate-failed\r\n',stderr:''};
   await writeFile(join(work,'layers.ai'),'%PDF-'+ 'fixture'.repeat(200));return{exitCode:0,stdout:'DSH_JSX=dsh-layered-ai-done\r\n',stderr:''};
  }};
- h.runProcess=h.runProcessWithTimeout;
+ h.runProcess=async()=>{throw Error("Windows native export must use the bounded process runner");};
  const pixel=async s=>{
   if(s.operation==='inspect'){await writeFile(s.output,await readFile(s.input));return{width:1,height:1};}
   if(s.operation==='source-flat'){await writeFile(s.output,'fixture');return{eligible:true,engine:'original'};}

@@ -1,6 +1,6 @@
 # 聊天操作画布与后台批处理
 
-1.9.58，2026-10-25。正式聊天工具名为 `canvas_workbench`，通过 DSH 的 `defineTool` / `ctx.tools.register` 注册。无需让模型编写脚本或直接修改 canvas.json。该工具不是独立公网服务；HTTP 路由挂在现有 DSH 插件服务中。
+1.9.59，2026-10-25。正式聊天工具名为 `canvas_workbench`，通过 DSH 的 `defineTool` / `ctx.tools.register` 注册。无需让模型编写脚本或直接修改 canvas.json。该工具不是独立公网服务；HTTP 路由挂在现有 DSH 插件服务中。
 
 ## 在聊天中使用
 
@@ -100,3 +100,5 @@ node tests/integration/verify-layered-adobe.mjs <task.json> <独立证据目录>
 2026-10-24 Mac 实测：当前 DeepSeek Flash 调用正式工具完成文件夹 2 张普通转换、幂等提交、含 2 段原生文字的 PSD+AI；Photoshop 与 Illustrator 都通过改中文、改价、移动、保存重开；关闭画布后本地抠图完成并自动打开新项目。本轮未发起新生图。复杂奶茶菜单的两段低分文字进入复核，不能等同于全自动精确恢复。Windows 本轮只有静态兼容和模拟传输检查，没有新增 Adobe 实机证据。
 
 2026-10-25 发布检查补充：画布一键与 Agent 后台入口统一使用 hasBlockingLayerQuality 策略，允许局部可修复问题进入共享执行器重检，缺字体或无效几何仍暂停。173项回归包含正式聊天工具→真实后台服务→真实拆层服务→PSD矢量形状→新画布的受控离线链路，以及 Windows 原生AI分支模拟、BOM/COM/编码/中文路径传输。Windows Adobe 实机尚未验收。
+
+1.9.59 补充：Windows AI 导出使用真正具备5分钟超时的进程执行器，超时/异常退出不能报告成功；174项回归通过。

@@ -307,7 +307,7 @@ export async function runAdobeJsxViaCom(ctx, runProcess, params) {
   const encoded = Buffer.from(lines.join('\r\n'), 'utf16le').toString('base64');
   const result = await runProcess(powershell, ['-NoLogo', '-NoProfile', '-EncodedCommand', encoded], workDir, timeoutMs);
   const stdout = String(result.stdout || '');
-  const ok = stdout.includes('DSH_JSX=');
+  const ok = result.exitCode === 0 && result.timedOut !== true && stdout.includes('DSH_JSX=');
   const errLine = (stdout.split('DSH_JSX_ERR=')[1] || '').split(/\r?\n/)[0].trim();
   return { ...result, ok, error: ok ? '' : (errLine || stdout.trim() || result.stderr.trim() || 'JSX 执行失败') };
 }
