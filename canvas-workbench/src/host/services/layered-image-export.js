@@ -7,7 +7,7 @@ export function nativeLayerText(b) {
   if (!b.fontAccepted || !b.text || !b.fontPostScript) throw new Error('原生文字必须确认内容及候选字体：' + b.name);
   const geo = textLayerGeometry(b), hex = b.color.slice(1);
   return { text: String(b.text), transform: geo.transform, shapeType: 'point', pointBase: [0, 0], orientation: 'horizontal', antiAlias: 'sharp',
-    style: { font: { name: b.fontPostScript }, fontSize: geo.fontSize, tracking: Math.round(b.tracking || 0), leading: geo.fontSize * 1.2, autoLeading: false,
+    style: { font: { name: b.fontPostScript }, fontSize: geo.fontSize, tracking: Math.round(b.tracking || 0), leading: geo.leading, autoLeading: false,
       fillColor: { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4), 16) } },
     paragraphStyle: { justification: geo.align } };
 }
@@ -58,7 +58,7 @@ export async function buildLayeredSvg(task) {
       const geo = textLayerGeometry(b), tr = geo.transform;
       parts.push('<text transform="matrix(' + tr.join(' ') + ')" fill="' + escapeXml(b.color) + '" font-family="' + escapeXml(b.fontPostScript) + '" font-size="' + geo.fontSize + '" letter-spacing="' + (Math.round(b.tracking || 0) * geo.fontSize / 1000) + '" text-anchor="' + ({ center: 'middle', right: 'end' }[geo.align] || 'start') + '" xml:space="preserve">');
       const lines = b.text.replace(/\r\n?/g, '\n').split('\n');
-      lines.forEach((line, i) => parts.push('<tspan x="0" y="' + i * geo.fontSize * 1.2 + '">' + escapeXml(line) + '</tspan>'));
+      lines.forEach((line, i) => parts.push('<tspan x="0" y="' + i * geo.leading + '">' + escapeXml(line) + '</tspan>'));
       parts.push('</text>');
     } else if(b.type==='shape') {
       parts.push('<rect x="'+b.x+'" y="'+b.y+'" width="'+b.width+'" height="'+b.height+'" rx="'+(b.radius||0)+'" fill="'+escapeXml(b.fill)+'"/>');
@@ -86,7 +86,7 @@ export function buildLayeredIllustratorJsx({ width, height, elements, output }) 
     + 'for(var i=0;i<cfg.rows.length;i++){stage="layer "+i;var b=cfg.rows[i],layer=i===0?doc.layers[0]:doc.layers.add();layer.name=b.name;doc.activeLayer=layer;\n'
     + 'if(b.shape){var s=b.shape,sp=s.radius?doc.pathItems.roundedRectangle(ay-s.y,ax+s.x,s.width,s.height,s.radius,s.radius):doc.pathItems.rectangle(ay-s.y,ax+s.x,s.width,s.height);sp.name=b.name;sp.filled=true;sp.fillColor=rgb(s.fill);sp.stroked=false;sp.move(layer,ElementPlacement.PLACEATBEGINNING);\n'
     + '}else if(b.nativeText){var font;try{font=app.textFonts.getByName(b.font);}catch(e){throw new Error("Missing Illustrator font: "+b.font);}\n'
-    + 'var tr=b.transform,px=ax+tr[4],py=ay-tr[5],tf=doc.textFrames.pointText([px,py]);tf.name=b.name;tf.contents=b.text.replace(/\\r?\\n/g,"\\r");app.redraw();$.sleep(100);var ca=tf.textRange.characterAttributes;ca.textFont=app.textFonts.getByName(b.font);app.redraw();ca=tf.textRange.characterAttributes;ca.size=b.fontSize;ca.tracking=b.tracking;ca.autoLeading=false;ca.leading=b.fontSize*1.2;ca.fillColor=rgb(b.color);\n'
+    + 'var tr=b.transform,px=ax+tr[4],py=ay-tr[5],tf=doc.textFrames.pointText([px,py]);tf.name=b.name;tf.contents=b.text.replace(/\\r?\\n/g,"\\r");app.redraw();$.sleep(100);var ca=tf.textRange.characterAttributes;ca.textFont=app.textFonts.getByName(b.font);app.redraw();ca=tf.textRange.characterAttributes;ca.size=b.fontSize;ca.tracking=b.tracking;ca.autoLeading=false;ca.leading=b.leading;ca.fillColor=rgb(b.color);\n'
     // ExtendScript's native enum wrappers are unsafe in conditional expressions:
     // Illustrator 30 selected RIGHT for CENTER. Assign each enum in its own branch.
     + 'if(b.align==="center"){tf.textRange.paragraphAttributes.justification=Justification.CENTER;}else if(b.align==="right"){tf.textRange.paragraphAttributes.justification=Justification.RIGHT;}else{tf.textRange.paragraphAttributes.justification=Justification.LEFT;}\n'

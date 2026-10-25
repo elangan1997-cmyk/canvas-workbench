@@ -46,7 +46,7 @@ export function textLayerGeometry(block) {
   const y = Number(block.y || 0) + (fitted ? Number(fit.baselineOffset) : fontSize);
   const angle = Number(block.rotation || 0) * Math.PI / 180;
   const cos = Math.cos(angle), sin = Math.sin(angle);
-  return { fontSize, align, transform: [cos, sin, sin ? -sin : 0, cos, x, y] };
+  return { fontSize, leading: fitted&&Number.isFinite(fit.leading)&&fit.leading>0?fit.leading:fontSize*1.2, align, transform: [cos, sin, sin ? -sin : 0, cos, x, y] };
 }
 
 function nativeTextLayer(block, index) {

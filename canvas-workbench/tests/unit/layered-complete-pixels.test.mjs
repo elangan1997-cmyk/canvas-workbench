@@ -33,6 +33,9 @@ with tempfile.TemporaryDirectory() as temp:
  original=refine.infer_block;refine.infer_block=lambda image,block:{**block,'styleConfidence':0.1}
  fitted=refine.refine({'input':str(source),'elements':[e],'complete':True})['elements'][0];refine.infer_block=original
  assert fitted['fontAvailable'] and fitted['textFit'],fitted
+ vertical={**e,'id':'vertical','text':'M\\ni\\nl\\nk','x':20,'y':5,'width':18,'height':70}
+ fitted_vertical=refine.refine({'input':str(source),'elements':[vertical],'complete':True})['elements'][0]
+ assert fitted_vertical['fontAvailable'] and fitted_vertical['textFit']['leading']>fitted_vertical['fontSize'],fitted_vertical
  before=source.read_bytes();glyph=p/'source-glyph.png';run({'operation':'source-glyph-cutout','input':str(source),'output':str(glyph),'element':e})
  image=Image.open(glyph);assert image.getchannel('A').getbbox() is not None and image.getpixel((0,0))[3]==0
  assert image.getchannel('A').getbbox()[2]<image.width and source.read_bytes()==before

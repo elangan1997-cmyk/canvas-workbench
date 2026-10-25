@@ -87,6 +87,12 @@ export function createLayeredImageService(h, overrides = {}) {
     if (task.id !== id || task.directory !== dir || !isPathWithin(dir, task.source)) throw new Error('拆层任务记录损坏');
     for(const k of ['referenceSource','analysisSource','suppliedHdSource'])if(task[k]&&!isPathWithin(dir,task[k]))throw new Error('任务参考素材路径无效');
     for (const e of task.elements || []) for (const k of ['file', 'rawFile', 'reusedRawFile', 'contentFile']) if (e[k] && !isPathWithin(dir, e[k])) throw new Error('任务素材路径无效');
+    // v1 complete mode passed two references through the old single-buffer
+    // facade. dataUrl rejected those bytes before client.generate could send
+    // HTTP. Only this exact local preflight error is safe to recover without
+    // the unknown-request approval used for actual network failures.
+    const rejected=(task.elements||[]).filter(e=>task.reconstruction==='complete'&&e.requestState==='unknown'&&e.error==='图片输入格式无效'&&!e.rawFile);
+    if(rejected.length){for(const e of rejected){e.requestState='not-submitted';e.status='pending';e.error='';}task.generationAttempts=Math.max(0,(task.generationAttempts||0)-rejected.length);task.recoveryEvents=[...(task.recoveryEvents||[]),{step:'multi-image-local-preflight',count:rejected.length,at:Date.now(),message:'旧单图接口在本地拒绝多图字节，未发送HTTP；恢复素材并扣回本地误计数'}];await save(task);}
     if (task.status === 'running' && !active.has(dir)) {
       task.status = 'failed'; task.stage = 'error'; task.error = '应用上次关闭时任务尚未完成。已保留素材，可继续拆层；结果未知的请求需核对后再重试。';
       for (const e of task.elements || []) if (e.requestState === 'submitted') e.requestState = 'unknown';
@@ -164,6 +170,7 @@ export function createLayeredImageService(h, overrides = {}) {
   const transientLocal = error => error?.localRetryable === true || ['EAGAIN','EBUSY','EIO','EMFILE','ENFILE','EPIPE'].includes(error?.code);
   async function fixCompleteText(task,ids,settings,signal,render=false){
     if(!ids.length)return [];
+    task.stage='verification';task.message='正在对照原图核对 '+ids.length+' 处文字与包装归属，复用已完成素材…';await save(task);
     const result=await (overrides.recoverText||recoverCompleteText)(ctx,task,ids,pixel,signal);
     for(const old of task.elements){const next=result.elements.find(e=>e.id===old.id);if(!next)continue;
       if(result.changed.includes(old.id))for(const k of ['cleanupBounds','textFit','sourceTextFallback','nativePreviewSignature','contentUncertain'])delete old[k];
@@ -171,6 +178,10 @@ export function createLayeredImageService(h, overrides = {}) {
     }
     if(result.unresolved.length)throw new Error('完整拆分仍有无法确认的文字：'+result.unresolved.join('、')+'；原图与高清参考已保留，未把它们伪装成可编辑内容');
     const targets=task.elements.filter(e=>result.changed.includes(e.id)&&e.enabled&&e.type==='text');
+    // Narrow upright CJK columns are multiple baselines, not one horizontal
+    // word squeezed into a character-wide rectangle. Keep native text in both
+    // Adobe formats and measure the same line spacing in the preview.
+    for(const e of targets)if(!/[\r\n]/.test(e.text)&&/[\u3400-\u9fff]/.test(e.text)&&e.text.length>=3&&e.height/e.width>=e.text.length*.65)e.text=Array.from(e.text).join('\n');
     if(targets.length){
       const refined=await (overrides.completeRefinement||((spec,s)=>runLayerRefinementScript(h,spec,s)))({operation:'refine',input:task.source,elements:targets,complete:true},signal);
       for(const next of refined.elements){const e=task.elements.find(e=>e.id===next.id);Object.assign(e,next);e.nativeText=!!(e.fontAvailable&&e.textFit);e.fontAccepted=e.nativeText;if(!e.nativeText)throw new Error('完整拆分的替代字体无法显示：'+e.name);
@@ -305,7 +316,8 @@ export function createLayeredImageService(h, overrides = {}) {
         await writeFile(raw, result.bytes, { flag: 'wx' });
         e.rawFile = raw; e.requestState = 'returned'; await save(task);
       } catch (error) {
-        e.requestState = 'unknown'; e.status = 'failed'; e.error = String(error?.message || error); await save(task); throw error;
+        if(error.imageRequestNotSent===true){e.requestState='not-submitted';task.generationAttempts=Math.max(0,(task.generationAttempts||0)-1);}else e.requestState = 'unknown';
+        e.status = 'failed'; e.error = String(error?.message || error); await save(task); throw error;
       }
     } else { e.rawFile = raw; e.requestState = 'returned'; }
     signal.throwIfAborted();
@@ -458,7 +470,7 @@ export function createLayeredImageService(h, overrides = {}) {
         const resolved=denseSourceStructure(elements);elements=normalizeLayerElements(resolved.elements,task.width,task.height);
         task.analysisWarnings=[...new Set([...(task.analysisWarnings||[]),...resolved.warnings])];
       }
-      if (!task.flat && elements.some(e=>e.enabled && e.type==='text' &&
+      if (!task.flat && task.reconstruction!=='complete' && elements.some(e=>e.enabled && e.type==='text' &&
         (/\r|\n/.test(e.text) || (!e.nativeText && e.textMode!=='image' && !e.sourceTextFallback && task.autoRefine)))) {
         // Old paused tasks and edited fonts use the same automatic local policy
         // as new tasks, without another vision or image-generation request.
@@ -779,7 +791,10 @@ export function createLayeredImageService(h, overrides = {}) {
       }
       const controller=new AbortController();preparing.set(task.directory,controller);
       let settings;
-      try { settings = await prepareRun(task, body,controller.signal); } finally { preparing.delete(task.directory); }
+      task.status='running';task.stage='preparing';task.error='';task.message='正在准备原任务，已有图层和高清分区会复用';await save(task);
+      try { settings = await prepareRun(task, body,controller.signal); }
+      catch(error){task.status=controller.signal.aborted?'cancelled':'failed';task.stage=task.status==='cancelled'?'cancelled':'error';task.error=controller.signal.aborted?'':String(error.message||error);task.message=task.error||'已取消准备，成功素材保留';await save(task);throw error;}
+      finally { preparing.delete(task.directory); }
       start(task, signal => executeRun(task, settings, signal));
       return present(task);
     },

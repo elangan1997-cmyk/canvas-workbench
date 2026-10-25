@@ -25,7 +25,8 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
       ? { x: Math.round(Math.min(width - 1, r.x)), y: Math.round(Math.min(height - 1, r.y)), width: Math.round(Math.min(width - r.x, r.width)), height: Math.round(Math.min(height - r.y, r.height)) } : undefined;
     const fit = !normalized && b.textFit && typeof b.textFit === 'object' && ['fontSize', 'tracking', 'baselineOffset', 'originOffsetX', 'advance'].every(k => Number.isFinite(b.textFit[k]) && Math.abs(b.textFit[k]) < 1e7)
       ? { text: String(b.textFit.text || '').slice(0, 3000), fontPostScript: String(b.textFit.fontPostScript || '').slice(0, 180),
-        ...Object.fromEntries(['fontSize', 'tracking', 'baselineOffset', 'originOffsetX', 'advance'].map(k => [k, b.textFit[k]])) } : undefined;
+        ...Object.fromEntries(['fontSize', 'tracking', 'baselineOffset', 'originOffsetX', 'advance'].map(k => [k, b.textFit[k]])),
+        ...(Number.isFinite(b.textFit.leading)&&b.textFit.leading>0&&b.textFit.leading<10000?{leading:b.textFit.leading}:{}) } : undefined;
     return { id, type, name: String(b.name || (type === 'background' ? '完整背景' : '图层 ' + (index + 1))).slice(0, 120),
       description: String(b.description || '').slice(0, 1600),
       ...(b.role === 'decoration' || b.role === 'subject' ? { role: b.role } : {}),

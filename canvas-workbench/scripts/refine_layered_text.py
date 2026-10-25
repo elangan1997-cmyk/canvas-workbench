@@ -73,13 +73,14 @@ def refine(spec):
             e['fontAccepted']=False
             issues.append({'id':e['id'],'code':'unsupported-text-geometry','severity':'review','message':'此文字含复杂行式或旋转，自动保留原字形区域'});result.append(e);continue
         e['sourceSearchPadding']=min(12,max(4,(y2-y1)*.15))
-        fitted=infer_block(im,e)
+        multiline='\n' in e['text'] or '\r' in e['text']
+        fitted=dict(e) if multiline else infer_block(im,e)
         # A low score may still supply useful placement for an explicit
         # replacement-font policy; it is never labelled an original-font match.
         if not fitted.get('textFit'):
             pad=math.ceil(e['sourceSearchPadding'])
             fg=pixel_foreground(im,(max(0,x1-pad),max(0,y1-pad),min(im.width,x2+pad),min(im.height,y2+pad)),e.get('color'),ignore_leaders=not e['text'].endswith(('.', '。', '…', '·')))
-            best=fit_font(e['text'],fg,has_cjk(e['text'])) if fg else None
+            best=fit_font(e['text'],fg,has_cjk(e['text'])) if fg and not multiline else None
             if best and best['widthError']<=.2 and best['heightError']<=.2:
                 for key in ('fontFamily','fontPostScript','fontWeight','fontSize','tracking'):fitted[key]=best[key]
                 fitted['color']=fg['color'];fitted['fontCandidates']=best['candidates'];fitted['styleConfidence']=round(max(0,best['score']),3)
@@ -120,13 +121,19 @@ def refine(spec):
             choices=font_candidates(has_cjk(e['text']))
             for family,ps,weight,_ in choices:
                 try:
-                    target=fitted.get('cleanupBounds') or e
-                    tw,th=target['width'],target['height'];probe=strict_font(ps,48,e['text']);bb=probe.getbbox(e['text'],anchor='ls')
-                    size=max(8,math.floor(48*min(tw/max(1,bb[2]-bb[0]),th/max(1,bb[3]-bb[1]))));font=strict_font(ps,size,e['text']);bb=font.getbbox(e['text'],anchor='ls')
-                    if bb[2]-bb[0]>tw+2 or bb[3]-bb[1]>th+2:continue
+                    target=e if multiline else fitted.get('cleanupBounds') or e
+                    tw,th=target['width'],target['height'];probe=strict_font(ps,48,e['text']);lines=e['text'].replace('\r','\n').split('\n')
+                    boxes=[probe.getbbox(line or ' ',anchor='ls') for line in lines]
+                    bb=(min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes))
+                    size=max(8,math.floor(48*min(tw/max(1,bb[2]-bb[0]),th/max(1,bb[3]-bb[1]+48*1.2*(len(lines)-1)))))
+                    font=strict_font(ps,size,e['text']);boxes=[font.getbbox(line or ' ',anchor='ls') for line in lines]
+                    bb=(min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes))
+                    if bb[2]-bb[0]>tw+2 or bb[3]-bb[1]+size*1.2*(len(lines)-1)>th+2:continue
+                    leading=(th-(bb[3]-bb[1]))/(len(lines)-1) if multiline and len(lines)>1 else size*1.2
                     fitted.update(fontFamily=family,fontPostScript=ps,fontWeight=weight,fontSize=size,tracking=0)
                     fitted['textFit']={'text':e['text'],'fontPostScript':ps,'fontSize':size,'tracking':0,
-                        'originOffsetX':target['x']-e['x']-bb[0],'baselineOffset':target['y']-e['y']-bb[1]+max(0,(th-(bb[3]-bb[1]))/2),'advance':font.getlength(e['text'])}
+                        'originOffsetX':target['x']-e['x']-bb[0],'baselineOffset':target['y']-e['y']-bb[1]+(0 if multiline else max(0,(th-(bb[3]-bb[1]))/2)),
+                        'advance':max(font.getlength(line) for line in lines),'leading':leading}
                     fitted['styleNote']='完整重建使用可编辑替代字体；内容与位置仍须对照原图核验'
                     issues.append({'id':e['id'],'code':'font-layout-substitution','severity':'warning','message':fitted['styleNote']});break
                 except (ValueError,OSError):continue

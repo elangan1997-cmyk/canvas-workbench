@@ -125,6 +125,14 @@ test('generateImage：空输入报错；未知引擎经 normalize 回落 dsh-cod
   await assert.rejects(generateImage({ ctx: { get: () => null }, image: Buffer.alloc(0), prompt: 'x' }), /图片输入为空/);
 });
 
+test('image edit keeps original and enhanced references separate; invalid bytes are rejected before provider submission',async()=>{
+ const provider=imageProviders.get('api'),before=provider.generate,png=Buffer.from([137,80,78,71,13,10,26,10,1]),jpg=Buffer.from([255,216,255,2]);let calls=0;
+ provider.generate=async({images})=>{calls++;assert.deepEqual(images,[png,jpg]);return png;};
+ try{const result=await generateImage({ctx:{},image:[png,jpg],prompt:'x',engine:'api',settingsOverride:{engine:'api'}});assert.deepEqual(result.bytes,png);
+ await assert.rejects(generateImage({ctx:{},image:[png,Buffer.from('bad')],prompt:'x',engine:'api',settingsOverride:{engine:'api'}}),error=>error.imageRequestNotSent===true);assert.equal(calls,1);
+ }finally{provider.generate=before;}
+});
+
 test('gatewaySizeFor:非标比例映射到网关标准三档(对数距离最近)', () => {
   const cases = {
     '1024x1024': '1024x1024', '1536x1024': '1536x1024', '1024x1536': '1024x1536',

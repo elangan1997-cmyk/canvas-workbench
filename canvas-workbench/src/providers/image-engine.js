@@ -5,6 +5,7 @@ import { openAICompatibleProvider, testImageApiConnection } from './image/openai
 import { createProviderRegistry } from './registry.js';
 import { imageEngineSettingsPath, normalizeImageCount, normalizeImageEngine, readImageEngineSettings } from '../host/services/image-engine-settings.js';
 import { cropToRatio } from '../host/services/image-crop.js';
+import {imageMediaType} from '../shared/utils/image-bytes.js';
 
 const imageProviders = createProviderRegistry();
 imageProviders.register(dshCodexProvider);
@@ -38,11 +39,12 @@ export function ratioHintFor(imageSize) {
 export async function generateImage({ ctx, image, mask, prompt, engine, signal, background, maxAttempts, settingsOverride }) {
   const settings = settingsOverride || await readImageEngineSettings();
   const selected = normalizeImageEngine(engine || settings.engine);
-  const bytes = Buffer.from(image || []);
-  if (!bytes.length) throw new Error('图片输入为空');
+  const sources=Array.isArray(image)&&image.every(b=>Buffer.isBuffer(b)||b instanceof Uint8Array)?image:[image];
+  const inputs=sources.map(b=>Buffer.from(b||[]));
+  if(!inputs.length||inputs.some(b=>!b.length)||inputs.some(b=>!imageMediaType(b).startsWith('image/'))){const error=new Error(!inputs.length||inputs.some(b=>!b.length)?'图片输入为空':'图片输入格式无效');error.imageRequestNotSent=true;throw error;}
   const provider = imageProviders.require(selected);
   // api Provider 现在返回 Buffer[](生成数量可能 >1);画布编辑路径恒取第一张。
-  const buffers = await provider.generate({ ctx, images: [bytes], mask, prompt, settings, signal,
+  const buffers = await provider.generate({ ctx, images: inputs, mask, prompt, settings, signal,
     ...(background ? { background } : {}), ...(maxAttempts ? { maxAttempts } : {}) });
   return { engine: selected, bytes: Array.isArray(buffers) ? buffers[0] : buffers };
 }

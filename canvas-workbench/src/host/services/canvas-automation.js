@@ -166,7 +166,10 @@ export function createCanvasAutomation(h, overrides = {}) {
         item.requestState = (task.elements.some(e => ['submitted', 'unknown'].includes(e.requestState))||['submitted','unknown'].includes(task.sourceHd?.requestState)||Object.values(task.sourceHd?.tiles||{}).some(s=>['submitted','unknown'].includes(s))) ? 'unknown' : 'returned';
       }
     }
-    job.imageRequestsUsed = Math.max(job.imageRequestsUsed || 0, total);
+    // The persisted item/child journals are authoritative and include pending
+    // network calls. A local preflight rejection may legitimately correct an
+    // old overcount; keeping the previous maximum would charge it forever.
+    job.imageRequestsUsed = total;
   };
   const perform = async (job, item, signal) => {
     if (overrides.perform) return overrides.perform(job, item, signal);

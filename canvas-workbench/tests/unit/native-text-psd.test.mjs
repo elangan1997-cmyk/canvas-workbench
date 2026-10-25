@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readPsd, writePsdBuffer } from 'ag-psd';
 import { buildNativeTextPsd } from '../../src/host/services/native-text-psd.js';
+import {nativeLayerText,buildLayeredIllustratorJsx} from '../../src/host/services/layered-image-export.js';
+import {normalizeLayerElements} from '../../src/host/services/layered-image-model.js';
 
 test('native PSD writer creates hidden editable Type layers with reviewed styling', async () => {
   const draft = writePsdBuffer({ width: 64, height: 64, children: [] });
@@ -56,4 +58,13 @@ test('tracking is encoded as an integer because Photoshop misreads real-valued T
   const bytes = await buildNativeTextPsd(draft, [{ text: 'Spacing', tracking: -32.47, fontSize: 28 }]);
   const layer = readPsd(bytes, { useImageData: true, skipThumbnail: true }).children.find((item) => item.text);
   assert.equal(layer.text.style.tracking, -32);
+});
+
+test('upright columns retain the measured leading through resume, PSD and Illustrator export',()=>{
+ const b={id:'column',type:'text',name:'竖排',enabled:true,nativeText:true,fontAccepted:true,text:'菜\n单',x:10,y:20,width:12,height:50,fontSize:10,fontPostScript:'Inter-Regular',color:'#112233',tracking:0,
+ textFit:{text:'菜\n单',fontPostScript:'Inter-Regular',fontSize:10,tracking:0,baselineOffset:9,originOffsetX:0,advance:10,leading:38}};
+ const row=normalizeLayerElements([b],100,100).find(e=>e.id==='column');assert.equal(row.textFit.leading,38);
+ const roundtrip=readPsd(writePsdBuffer({width:100,height:100,children:[{name:b.name,text:nativeLayerText(row)}]}),{skipThumbnail:true,useImageData:true}).children[0];
+ assert.equal(roundtrip.text.style.leading,38);assert.equal(roundtrip.text.style.autoLeading,false);
+ const jsx=buildLayeredIllustratorJsx({width:100,height:100,elements:[row],output:'/test.ai'});assert.match(jsx,/"leading":38/);assert.match(jsx,/ca.leading=b.leading/);
 });

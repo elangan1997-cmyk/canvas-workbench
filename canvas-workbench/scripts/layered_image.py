@@ -99,7 +99,7 @@ def render_text(spec):
     for i, line in enumerate(str(b['text']).replace('\r\n', '\n').replace('\r', '\n').split('\n')):
         advance = float(font.getlength(line)) + tracking * max(0, len(line) - 1)
         x = anchor_x - advance * ({'center': .5, 'right': 1}.get(b.get('textAlign'), 0))
-        y = anchor_y + i * font_size * 1.2
+        y = anchor_y + i * float(geo.get('leading',font_size*1.2))
         if tracking:
             for ch in line:
                 draw.text((x, y), ch, font=font, fill=b.get('color', '#111827'), anchor='ls')
