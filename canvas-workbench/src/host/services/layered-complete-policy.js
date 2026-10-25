@@ -1,7 +1,7 @@
 /** Complete reconstruction is explicit: no ordinary raster text or flattened
  * promotional panels may be reported as fully editable output. */
 export function completeLayerPlan(elements){
- return elements.map(raw=>{
+ const plan=elements.map(raw=>{
   const e={...raw};
   if(e.type==='text'&&['handwriting','display'].includes(e.typographyKind)){
    e.type='image';e.visualKind='graphic';e.nativeText=false;e.foregroundColors=[e.color||'#111111'];
@@ -22,6 +22,12 @@ export function completeLayerPlan(elements){
   }
   return e;
  });
+ const words=plan.filter(e=>e.enabled&&['handwriting','display'].includes(e.typographyKind));
+ for(const group of plan.filter(e=>e.enabled&&e.type==='image'&&e.visualKind==='graphic'&&!e.typographyKind&&/手写|书法|艺术字|装饰字/.test(e.name||''))){
+  const inside=words.filter(e=>e.x>=group.x-8&&e.y>=group.y-8&&e.x+e.width<=group.x+group.width+8&&e.y+e.height<=group.y+group.height+8);
+  if(inside.length){const x=Math.min(...inside.map(e=>e.x)),y=Math.min(...inside.map(e=>e.y)),r=Math.max(...inside.map(e=>e.x+e.width)),b=Math.max(...inside.map(e=>e.y+e.height));if((r-x)*(b-y)>group.width*group.height*.35){group.enabled=false;group.typographySuperseded=true;}}
+ }
+ return plan;
 }
 
 export function completeLayerAudit(elements){
@@ -40,7 +46,7 @@ export function completeLayerAudit(elements){
  * even when a new text candidate becomes an independent artwork glyph. */
 export function reuseCompleteMaterials(elements,previous,fixedLayout){
  const owners=new Set(fixedLayout.map(e=>e.id)),prior=new Map(previous.map(e=>[e.id,e]));
- return elements.map(e=>owners.has(e.id)&&prior.has(e.id)?{...e,...prior.get(e.id)}:e);
+ return elements.map(e=>owners.has(e.id)&&prior.has(e.id)?{...e,...prior.get(e.id),enabled:e.enabled}:e);
 }
 
 export function deduplicateCompleteText(elements){

@@ -160,7 +160,12 @@ def normalize(spec):
     # before measuring, then uniformly contain the whole asset in the source ROI.
     # Keep alpha>=4 soft edges; discard only almost invisible stray pixels.
     fit = valid and not spec.get('preserve_placement') and (not canvas_matches or transparent)
-    if spec.get('background') and not canvas_matches and not spec.get('preserve_placement'):
+    if valid and element.get('forceModelCutout') and not canvas_matches and not spec.get('preserve_placement') and abs(math.log((im.width/im.height)/(w/h)))<=.08:
+        mismatch=abs(math.log((im.width/im.height)/(w/h)))
+        if mismatch>.08:raise ValueError('独立提取没有保持来源裁图比例，已保留原始返回，未拉伸或按透明边界居中')
+        resized=im.resize((round(w),round(h)),Image.Resampling.LANCZOS);im=Image.new('RGBA',(width,height));im.paste(resized,(round(x),round(y)))
+        aligned={'from':[0,0,*actual],'to':[round(x),round(y),round(x+w),round(y+h)],'mode':'source-crop-frame'};framing='source-crop-frame'
+    elif spec.get('background') and not canvas_matches and not spec.get('preserve_placement'):
         if looks_like_checkerboard(im) and not spec.get('allow_checkerboard'):
             raise ValueError('模型把背景画成了棋盘格，原始返回已保留，不能作为背景交付')
         if alpha.getextrema()[0] != 255:
@@ -178,6 +183,7 @@ def normalize(spec):
         placement_issues.append({'id': element.get('id',''), 'code':'background-size-adapted', 'severity':'warning',
             'message':'背景已等比缩放并铺满原图画布，原图可见背景由后续步骤保留'})
     elif fit and box:
+        if element.get('forceModelCutout') and not element.get('sourceBoundsConfirmed'):raise ValueError('模型返回紧裁素材，但原图完整主体边界尚未核实；未自动居中或拉伸')
         frame = alpha.point(lambda a: 255 if a >= 4 else 0).getbbox() if transparent else (0, 0, *im.size)
         bw, bh = box[2]-box[0], box[3]-box[1]
         mismatch = abs(math.log((bw/bh)/(w/h)))
@@ -328,14 +334,10 @@ def assemble(spec):
 
 
 def exclude_owned_regions(im,e,elements):
-    alpha=im.getchannel('A');draw=ImageDraw.Draw(alpha)
-    for other in elements:
-        if not other.get('enabled',True) or other['id']==e['id'] or other['type']=='background':continue
-        x,y,w,h=[int(other[k]) for k in ('x','y','width','height')]
-        if w*h>=e['width']*e['height']*.9:continue
-        if x>=e['x']-2 and y>=e['y']-2 and x+w<=e['x']+e['width']+2 and y+h<=e['y']+e['height']+2:
-            draw.rectangle((max(0,x-2),max(0,y-2),min(im.width,x+w+1),min(im.height,y+h+1)),fill=0)
-    im.putalpha(alpha)
+    # A rectangle is not an object mask. Erasing nested text/objects here cut
+    # holes through cups, forks and labels. Physical ownership is decided from
+    # actual alpha plus source-model review; occluded products use extraction.
+    return im
 
 def preserve_flat_canvas_margin(spec):
     """Restore a real, border-connected flat canvas (e.g. menu paper).
@@ -382,12 +384,16 @@ def preserve_flat_canvas_margin(spec):
     for g in components(1-mask):
         if not g['edge'] and g['area']<source.width*source.height*.025:
             for y,x,end in g['runs']:mask[y,x:end]=1
-    tile=Image.new('RGBA',source.size,tuple(map(int,color))+(255,));generated.paste(tile,(0,0),Image.fromarray(mask*255));save(generated,spec['output'])
+    tile=Image.new('RGBA',source.size,tuple(map(int,color))+(255,));generated.paste(tile,(0,0),Image.fromarray(mask*255))
+    generated.paste(source,(0,0),Image.fromarray((mask&flat)*255));save(generated,spec['output'])
     return {'applied':True,'restoredPixels':int(mask.sum()),**info(generated)}
 
 
 def run(spec):
     op = spec.get('operation', 'inspect')
+    if op in ['text-colors','matte-quality','text-material-ownership']:
+        from layered_quality import text_colors,matte_quality,text_material_ownership
+        return {'text-colors':text_colors,'matte-quality':matte_quality,'text-material-ownership':text_material_ownership}[op](spec)
     if op=='preserve-canvas-margin':return preserve_flat_canvas_margin(spec)
     if op == 'text-presence':
         from infer_text_style import pixel_foreground

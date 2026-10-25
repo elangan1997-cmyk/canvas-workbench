@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials} from '../../src/host/services/layered-complete-policy.js';
 import {prepareLayerSourceHd} from '../../src/host/services/layered-source-hd.js';
 import {codexImageRequestOptions} from '../../src/providers/image/dsh-codex.provider.js';
+import {recoverCompleteText} from '../../src/host/services/layered-complete-text.js';
 
 test('complete policy separates product/text without matting rectangular photo panels, and audit rejects flattened text',()=>{
  const rows=completeLayerPlan([{id:'b',type:'background',enabled:true},{id:'p',type:'image',visualKind:'product',sourceRegion:true,enabled:true},
@@ -67,4 +68,12 @@ test('renumbered artwork text never inherits an unrelated old price cache',()=>{
  const art={id:'text-011',type:'image',name:'Nature',text:'Nature',typographyKind:'handwriting',x:100,y:300};
  const result=reuseCompleteMaterials([{id:'cup',type:'image'},art],[cup,oldPrice],[cup]);
  assert.equal(result[0].file,cup.file);assert.deepEqual(result[1],art);assert.equal(result[1].file,undefined);
+});
+
+test('physical-print classification accepts a single flat model decision without changing ordinary copy',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'print-role-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const task={directory:root,source:'original',width:100,height:100,analysisModel:{provider:'ds',model:'current'},elements:[{id:'cup',name:'杯子',description:'实物杯身',type:'image',visualKind:'product',enabled:true,x:0,y:0,width:100,height:100},{id:'brand',name:'杯身品牌',type:'text',enabled:true,text:'品牌',x:30,y:30,width:20,height:10}]};
+ const ctx={attachments:{saveImage:async()=>({id:'source'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:'{"id":"brand","embedded":true,"reason":"印在杯上"}'};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const result=await recoverCompleteText(ctx,task,['brand'],async spec=>writeFile(spec.output,'source'),new AbortController().signal,{roleOnly:true});
+ assert.equal(result.elements[1].enabled,false);assert.equal(result.elements[1].embeddedInMaterial,true);assert.equal(task.elements[1].enabled,true,'caller commits the independent decision');
 });

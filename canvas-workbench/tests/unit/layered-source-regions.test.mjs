@@ -13,3 +13,12 @@ test('local pixel context refines the complete cup before source cropping, leavi
  const result=await refineLayerSourceRegions(ctx,task,async spec=>spec.output?writeFile(spec.output,'crop'):{bounds:null},new AbortController().signal);
  assert.equal(calls,1);assert.ok(result.elements[0].y+result.elements[0].height>original.y+original.height);assert.deepEqual(result.elements[1],task.elements[1]);assert.deepEqual(original,task.elements[0]);assert.equal(result.version,2);
 });
+
+test('complete mode verifies large photography groups and caches the same source boundary decision',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'large-region-'));t.after(()=>rm(root,{recursive:true,force:true}));let calls=0;
+ const ctx={attachments:{saveImage:async()=>({id:'crop'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){calls++;yield{type:'text-delta',index:0,text:JSON.stringify({regions:[{id:'hero',x:20,y:20,width:200,height:300}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const task={directory:root,source:'source',sourceHash:'original',width:500,height:500,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[{id:'hero',type:'image',visualKind:'product',enabled:true,name:'实拍组合',x:40,y:50,width:200,height:300}]};
+ const pixel=async spec=>spec.output?writeFile(spec.output,'source-crop'):{bounds:null};
+ const result=await refineLayerSourceRegions(ctx,task,pixel,new AbortController().signal);assert.equal(result.elements[0].sourceBoundsConfirmed,true);assert.equal(calls,1);
+ await refineLayerSourceRegions(ctx,task,pixel,new AbortController().signal);assert.equal(calls,1,'source crop boundary decisions survive restart without re-query');
+});

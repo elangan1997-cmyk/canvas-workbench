@@ -102,6 +102,7 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
   // copy. The selected vision model remains the source of native text content.
   const text=coverage.blocks.filter(b=>b.enabled!==false).map((b,i)=>({...b,id:'text-'+String(i+1).padStart(3,'0'),type:'text',name:'文字 '+String(i+1).padStart(3,'0')+'：'+b.text.slice(0,20),
     description:'原图独立文字行',z:100+i/1000,nativeText:false,
+    ...(body.reconstruction==='complete'&&runtime.textSourceHash&&/^#[0-9a-f]{6}$/i.test(b.color||'')?{sourceTextColor:b.color}:{}),
     ...(b.recognitionSource==='local-ocr-supplement'?{textMode:'image',sourceTextFallback:true,sourceTextSupplement:true}:{}),enabled:true}));
   if(coverage.supplementedCount)warnings.push(coverage.supplementedCount+' 个模型遗漏或部分重叠的OCR区域已保留原像素，不作为已确认的可编辑文案');
   warnings.push('密集图按结构与文字分区分析，分区结果映回一张完整原尺寸画板；图像与背景最多40层，文字和形状总层数上限320');

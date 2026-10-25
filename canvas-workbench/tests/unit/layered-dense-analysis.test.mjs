@@ -30,6 +30,7 @@ test('dense layout separates 80 text objects, splits only truncated cores and re
  const sourceRuntime={...runtime,textSourceHash:'original-content-v2',fixedLayout:result.elements.filter(e=>e.type!=='text')},completeBody={...body,reconstruction:'complete'};
  const corrected=await analyzeLayeredDocument(ctx,uploaded,completeBody,2000,1400,new AbortController().signal,sourceRuntime);
  assert.ok(corrected.elements.filter(e=>e.type==='text').every(e=>e.text.startsWith('原文')),'HD text checkpoints cannot override original-source text');
+ assert.ok(corrected.elements.filter(e=>e.type==='text').every(e=>/^#[0-9a-f]{6}$/i.test(e.sourceTextColor)),'source style survives later pixel fitting');
  assert.equal(calls.filter(n=>n==='图片拆层分析').length,0);assert.equal(corrected.elements.find(e=>e.id==='band').id,'band','material ownership remains stable');
  const after=calls.length;await analyzeLayeredDocument(ctx,uploaded,completeBody,2000,1400,new AbortController().signal,sourceRuntime);assert.equal(calls.length,after,'original-source text checkpoints resume independently');
 });

@@ -9,6 +9,9 @@ test('readback accepts multiple complete JSON blocks without dropping issues, wh
  assert.deepEqual(parseReadbackResult('<think>reason {ignored}</think>```json\n{"issues":[{"id":"a","reason":"a {brace} and \\\"quote\\\""}]}\n```\n{"issues":[{"id":"b","reason":"错字"}]}').issues.map(i=>i.id),['a','b']);
  assert.throws(()=>parseReadbackResult('{"issues":[]}\n{"issues":['),/完整/);
  assert.throws(()=>parseReadbackResult('{"other":[]}'),/问题数组/);
+ assert.equal(parseReadbackResult('{"id":"t","text":"原文","x":1,"y":2,"width":3,"height":4}').issues[0].text,'原文');
+ assert.equal(parseReadbackResult('```json\n[{"id":"t","reason":"实际差异"}]\n```').issues.length,1);
+ assert.throws(()=>parseReadbackResult('[{"id":"t","reason":"实际差异"},'));
 });
 
 test('complete readback retains spatial evidence for text missing from the IR, including multiple missing rows',async t=>{
@@ -27,4 +30,18 @@ test('dense readback isolates token limits and caches unchanged verification reg
  assert.equal(result.complete,false);assert.equal(result.checkedRegions,4);assert.equal(result.incompleteRegions.length,1);assert.equal(calls,7);assert.ok(budgets.includes(16000));
  fail=false;result=await inspectLayerReadback(ctx,task,'preview',new AbortController().signal,runtime);assert.equal(result.complete,true);assert.equal(calls,8,'only the failed region must be retried');
  await inspectLayerReadback(ctx,task,'preview',new AbortController().signal,runtime);assert.equal(calls,8,'verified neighbours and the resumed tile must now all be cached');
+});
+
+test('known text repairs retain source positions, colors, vertical parts and explicit removals',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'readback-typed-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const ctx={attachments:{saveImage:async()=>({id:'crop'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:JSON.stringify({issues:[{id:'t',text:'棒打鲜橙',x:10,y:20,width:60,height:50,color:'#111111',parts:[{text:'棒打',layout:'vertical',x:10,y:20,width:20,height:50},{text:'鲜橙',layout:'vertical',x:40,y:20,width:20,height:50}]},{id:'fake',absent:true,reason:'原图无此底框'}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const result=await inspectLayerReadback(ctx,{directory:root,source:'source',width:100,height:100,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[{id:'t',enabled:true,type:'text',x:10,y:20,width:60,height:50},{id:'fake',enabled:true,type:'shape',x:0,y:0,width:10,height:10}]},'preview',new AbortController().signal,{pixel:async spec=>writeFile(spec.output,spec.input)});
+ assert.equal(result.issues[0].sourceConfirmed,true);assert.equal(result.issues[0].parts.length,2);assert.equal(result.issues[0].parts[1].layout,'vertical');assert.equal(result.issues[0].color,'#111111');assert.equal(result.issues[1].absent,true);
+});
+
+test('unplanned images and shapes are retained; an unlocated issue cannot silently pass verification',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'readback-open-world-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const ctx={attachments:{saveImage:async()=>({id:'crop'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:JSON.stringify({issues:[{id:'missing',kind:'missing-image',visualKind:'product',name:'漏掉的水果',description:'原图左侧一颗',x:5,y:5,width:20,height:30,reason:'原图存在且预览遗漏'},{id:'missing',kind:'missing-shape',fill:'#88CC00',radius:5,x:50,y:20,width:30,height:10,reason:'原图标签底框遗漏'},{id:'unknown-object',reason:'仍有未定位对象'}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const result=await inspectLayerReadback(ctx,{directory:root,source:'source',width:100,height:100,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[]},'preview',new AbortController().signal,{pixel:async spec=>writeFile(spec.output,spec.input)});
+ assert.equal(result.issues.length,2);assert.equal(result.issues[0].kind,'missing-image');assert.equal(result.issues[1].kind,'missing-shape');assert.notEqual(result.issues[0].id,result.issues[1].id);assert.equal(result.complete,false);assert.equal(result.incompleteRegions.length,1);
 });

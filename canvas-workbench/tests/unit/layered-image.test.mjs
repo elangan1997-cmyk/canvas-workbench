@@ -19,6 +19,9 @@ async function fixture(t, generation) {
   t.after(() => rm(project, { recursive: true, force: true }));
   const generated = [];
   const pixel = async spec => {
+    if (spec.operation === 'text-colors') return {colors:[]};
+    if (spec.operation === 'matte-quality') return {accepted:true};
+    if (spec.operation === 'text-material-ownership') return {candidates:[]};
     if (spec.operation === 'structure') return {elements:spec.elements,structureChanges:[]};
     if (spec.operation === 'render-structure') { await writeFile(spec.output,'local'); return {engine:spec.element.type==='shape'?'local-vector-shape':'source-photo-rectangle'}; }
     if (spec.operation === 'source-flat') return { eligible: false };
@@ -485,4 +488,26 @@ test('complete visual readback can add and render a genuinely missing text layer
  await s.run({id:a.id,autoExportFormat:'psd'});const task=await s.settled(a);
  assert.equal(task.status,'ready',task.error);assert.equal(task.completeness.editableText,1);assert.equal(task.elements.find(e=>e.id==='missing-new').nativeText,true);assert.equal(task.exports.length,1);
  const psd=readPsd(await readFile(task.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.ok(psd.children.some(e=>e.text?.text==='奶茶'));
+});
+
+test('source-grounded visual repairs update native copy and ink directly without another guessing round',async t=>{
+ const f=await fixture(t);let reads=0;
+ f.overrides.analyze=async()=>({elements:[{id:'bg',type:'background'},{id:'title',type:'text',name:'标题',text:'错误',nativeText:true,fontAccepted:true,fontPostScript:'AlibabaPuHuiTi_3_55_Regular',sourceTextColor:'#111111',x:0,y:0,width:4,height:4}]});
+ f.overrides.recoverText=async()=>{throw Error('typed source evidence must not be sent to a second guessing call');};
+ f.overrides.readback=async()=>({complete:true,issues:reads++===0?[{id:'title',sourceConfirmed:true,text:'改正',color:'#202020',x:0,y:0,width:3,height:3,reason:'原图真实文字及位置'}]:[]});
+ f.overrides.completeRefinement=async spec=>({elements:spec.elements.map(e=>({...e,color:'#FFFFFF',fontAvailable:true,fontSize:8,textFit:{text:e.text,fontPostScript:e.fontPostScript,fontSize:8,tracking:0,baselineOffset:8,originOffsetX:0,advance:3}}))});
+ const service=createLayeredImageService(f.h,f.overrides),created=await service.analyze({imageData:png,provider:'ds',model:'current',reconstruction:'complete',autoRun:true,autoExportFormat:'psd',maxImageRequests:1});
+ // Real dense images use the same readback gate; keep this tiny fixture bounded.
+ const file=join(created.outputDirectory,'task.json');await service.settled({id:created.id});
+ const record=JSON.parse(await readFile(file,'utf8'));record.analysisStrategy='dense';record.assemblyCheck={verified:false};record.completeness=null;await writeFile(file,JSON.stringify(record));
+ const restarted=createLayeredImageService(f.h,f.overrides);await restarted.run({id:created.id,maxImageRequests:1});const result=await restarted.settled({id:created.id});
+ assert.equal(result.status,'ready',result.error);const row=result.elements.find(e=>e.id==='title');assert.equal(row.text,'改正');assert.equal(row.color,'#202020');assert.equal(row.nativeText,true);
+});
+
+test('a legacy rasterized shape rejected by the image service is recovered locally from its original vector plan',async t=>{
+ const f=await fixture(t),present=await f.service.get(f.body),file=join(present.outputDirectory,'task.json'),record=JSON.parse(await readFile(file,'utf8'));record.reconstruction='complete';record.generationAttempts=1;
+ const e=record.elements.find(e=>e.id==='object');Object.assign(e,{requestState:'unknown',status:'failed',error:'OpenAI Codex image request failed (HTTP 400): rejected',type:'image',sourceRegion:true,extractionMode:'photo'});
+ await mkdir(join(present.outputDirectory,'analysis'),{recursive:true});await writeFile(join(present.outputDirectory,'analysis/image-regions.json'),JSON.stringify({result:{elements:[{id:e.id,type:'shape',name:'高亮块',x:1,y:1,width:2,height:2,fill:'#88CC00',radius:1,enabled:true}]}}));await writeFile(file,JSON.stringify(record));
+ const restored=await createLayeredImageService(f.h,f.overrides).get(f.body),shape=restored.elements.find(e=>e.id==='object');assert.equal(shape.type,'shape');assert.equal(shape.requestState,'local');assert.equal(shape.extractionMode,undefined);assert.equal(restored.generationAttempts,1);assert.equal(f.generated.length,0);
+ assert.equal(restored.recoveryEvents.at(-1).previousRequestState,'rejected');
 });

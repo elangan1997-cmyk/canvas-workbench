@@ -26,8 +26,18 @@ with tempfile.TemporaryDirectory() as temp:
  e={'id':'art','type':'image','x':18,'y':18,'width':25,'height':25,'foregroundColors':['#000000']};graphic=p/'graphic.png'
  result=run({'operation':'graphic-cutout','input':str(source),'output':str(graphic),'element':e});assert result['eligible'] and result['hasTransparency']
  Image.open(graphic).crop((18,18,43,43)).save(p/'crop.png');placed=p/'placed.png'
- run({'operation':'place-cutout','input':str(p/'crop.png'),'output':str(placed),'width':100,'height':100,'element':{**e,'x':50,'y':50}})
+ run({'operation':'place-cutout','input':str(p/'crop.png'),'output':str(placed),'width':100,'height':100,'element':{**e,'x':50,'y':50},'elements':[{'id':'printed','type':'text','x':55,'y':55,'width':10,'height':10}]})
  assert Image.open(placed).getchannel('A').getbbox()==(52,52,73,73)
+ assert Image.open(placed).getpixel((60,60))[3]==255,'a text bounding box must not punch a hole through the product'
+ bad=p/'bad-matte.png';im=Image.new('RGBA',(50,70),'green');im.putpixel((0,0),(0,0,0,0));im.save(bad)
+ assert not run({'operation':'matte-quality','input':str(bad)})['accepted'],'one transparent pixel is not a valid product cutout'
+ cropframe=p/'frame.png';im=Image.new('RGBA',(40,80));ImageDraw.Draw(im).rectangle((10,40,20,60),fill='red');im.save(cropframe)
+ result=run({'operation':'normalize','input':str(cropframe),'output':str(placed),'width':200,'height':200,'element':{'x':30,'y':20,'width':40,'height':80,'forceModelCutout':True}})
+ assert Image.open(placed).getchannel('A').getbbox()==(40,60,51,81),'crop framing must preserve internal transparent padding and position'
+ product=p/'owned.png';Image.new('RGBA',(10,10),'green').save(product)
+ ownership=run({'operation':'text-material-ownership','elements':[{'id':'cup','type':'image','visualKind':'product','enabled':True,'status':'complete','file':str(product),'contentFile':str(product),'bounds':{'x':20,'y':20,'width':10,'height':10}},
+ {'id':'printed','type':'text','enabled':True,'x':22,'y':22,'width':4,'height':4},{'id':'outside','type':'text','enabled':True,'x':28,'y':28,'width':4,'height':4}]})
+ assert [r['id'] for r in ownership['candidates']]==['printed'],'ownership uses full text area and cropped alpha, not a bounding rectangle intersection'
  family,ps,weight,_=font_candidates(False)[0];font=strict_font(ps,24,'Milk Tea');im=Image.new('RGBA',(220,80),'white');ImageDraw.Draw(im).text((20,20),'Milk Tea',font=font,fill='black');im.save(source)
  e={'id':'word','type':'text','enabled':True,'text':'Milk Tea','x':18,'y':18,'width':150,'height':38,'fontPostScript':ps,'fontSize':24,'color':'#000000'}
  original=refine.infer_block;refine.infer_block=lambda image,block:{**block,'styleConfidence':0.1}

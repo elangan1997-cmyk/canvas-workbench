@@ -72,7 +72,7 @@ export function createLayeredImageService(h, overrides = {}) {
     warnings: task.warnings || [], engine: task.engine || '', imageModel: task.imageModel || '', localOnly: task.localOnly === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
     quality: task.quality ? { ...task.quality, reviewAcknowledged: task.qualityAcknowledged === true } : null, analysisModel: task.analysisModel || null, analysisAttempts: task.analysisAttempts || 0,
     analysisProgress:task.analysisProgress||null,analysisStrategy:task.analysisStrategy||'',analysisComplete:task.analysisComplete===true,
-    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',textTruthVersion:task.textTruthVersion||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
+    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',textTruthVersion:task.textTruthVersion||0,materialGeometryTruth:task.materialGeometryTruth||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
     generationAttempts: task.generationAttempts || 0, maxImageRequests: task.maxImageRequests ?? 40,
     sourceUrl: previewUrl(task.source, task.createdAt), previewUrl: task.preview ? previewUrl(task.preview, task.updatedAt) : '',
     outputDirectory: task.directory, storageProject: join(task.directory, '..', '..', '..'),
@@ -87,6 +87,15 @@ export function createLayeredImageService(h, overrides = {}) {
     if (task.id !== id || task.directory !== dir || !isPathWithin(dir, task.source)) throw new Error('拆层任务记录损坏');
     for(const k of ['referenceSource','analysisSource','suppliedHdSource'])if(task[k]&&!isPathWithin(dir,task[k]))throw new Error('任务参考素材路径无效');
     for (const e of task.elements || []) for (const k of ['file', 'rawFile', 'reusedRawFile', 'contentFile']) if (e[k] && !isPathWithin(dir, e[k])) throw new Error('任务素材路径无效');
+    for(const e of task.elements||[])if(e.requestState==='unknown'&&/\(HTTP (400|401|403|404|413|422|429)\)/.test(e.error||''))e.requestState='rejected';
+    if(task.reconstruction==='complete'&&!task.nativeShapeRestoreVersion){
+      let plan;try{plan=JSON.parse(await readFile(join(dir,'analysis','image-regions.json'),'utf8')).result?.elements;}catch{}
+      for(const original of (plan||[]).filter(e=>e.type==='shape')){const e=task.elements.find(n=>n.id===original.id);if(!e||e.type==='shape')continue;
+        task.recoveryEvents=[...(task.recoveryEvents||[]),{step:'restore-native-shape',id:e.id,at:Date.now(),previousError:e.error||'',previousRaw:e.rawFile||'',previousRequestState:e.requestState||'',message:'旧修复把原生图形降成了图片；依据原结构恢复本地图形，未向图像服务重发'}];
+        Object.assign(e,original,{type:'shape',status:'pending',nativeText:false,requestState:'local',file:'',contentFile:'',rawFile:'',reusedRawFile:'',error:''});for(const key of ['sourceRegion','forceModelCutout','forceSourceCutout','extractionMode','visualKind'])delete e[key];
+      }
+      task.nativeShapeRestoreVersion=1;await save(task);
+    }
     // v1 complete mode passed two references through the old single-buffer
     // facade. dataUrl rejected those bytes before client.generate could send
     // HTTP. Only this exact local preflight error is safe to recover without
@@ -169,6 +178,17 @@ export function createLayeredImageService(h, overrides = {}) {
   };
 
   const transientLocal = error => error?.localRetryable === true || ['EAGAIN','EBUSY','EIO','EMFILE','ENFILE','EPIPE'].includes(error?.code);
+  async function fitCompleteCandidates(task,ids,settings,signal,render=false){
+    const targets=task.elements.filter(e=>ids.includes(e.id)&&e.enabled&&e.type==='text');
+    for(const e of targets)if(!/[\r\n]/.test(e.text)&&/[\u3400-\u9fff]/.test(e.text)&&e.text.length>=2&&e.height/e.width>=e.text.length*.65)e.text=Array.from(e.text).join('\n');
+    if(!targets.length)return;
+    const refined=await (overrides.completeRefinement||((spec,s)=>runLayerRefinementScript(h,spec,s)))({operation:'refine',input:task.source,elements:targets,complete:true},signal);
+    for(const next of refined.elements){const e=task.elements.find(e=>e.id===next.id);Object.assign(e,next);e.nativeText=!!(e.fontAvailable&&e.textFit);e.fontAccepted=e.nativeText;if(!e.nativeText)throw new Error('完整拆分的替代字体无法显示：'+e.name);
+      if(task.quality?.fontPolicy==='strict'&&Number(e.styleConfidence||0)<.9)throw new Error('严格字体策略无法确认原字体：'+e.name+'；未自动换成近似字体');
+    }
+    const colors=await pixel({operation:'text-colors',input:task.source,elements:targets},signal);for(const e of targets){const measured=colors.colors?.find(row=>row.id===e.id);e.color=e.sourceTextColor||measured?.color||e.color;}
+    if(render)for(const e of targets){await extract(task,e,settings,signal);e.contentFile ||=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;}
+  }
   async function fixCompleteText(task,ids,settings,signal,render=false){
     if(!ids.length)return [];
     task.stage='verification';task.message='正在对照原图核对 '+ids.length+' 处文字与包装归属，复用已完成素材…';await save(task);
@@ -178,18 +198,7 @@ export function createLayeredImageService(h, overrides = {}) {
       Object.assign(old,next);if(result.changed.includes(old.id)){delete old.contentUncertain;delete old.nativePreviewSignature;}if(result.unresolved.includes(old.id)){old.contentUncertain=true;old.nativeText=false;}
     }
     if(result.unresolved.length)throw new Error('完整拆分仍有无法确认的文字：'+result.unresolved.join('、')+'；原图与高清参考已保留，未把它们伪装成可编辑内容');
-    const targets=task.elements.filter(e=>result.changed.includes(e.id)&&e.enabled&&e.type==='text');
-    // Narrow upright CJK columns are multiple baselines, not one horizontal
-    // word squeezed into a character-wide rectangle. Keep native text in both
-    // Adobe formats and measure the same line spacing in the preview.
-    for(const e of targets)if(!/[\r\n]/.test(e.text)&&/[\u3400-\u9fff]/.test(e.text)&&e.text.length>=2&&e.height/e.width>=e.text.length*.65)e.text=Array.from(e.text).join('\n');
-    if(targets.length){
-      const refined=await (overrides.completeRefinement||((spec,s)=>runLayerRefinementScript(h,spec,s)))({operation:'refine',input:task.source,elements:targets,complete:true},signal);
-      for(const next of refined.elements){const e=task.elements.find(e=>e.id===next.id);Object.assign(e,next);e.nativeText=!!(e.fontAvailable&&e.textFit);e.fontAccepted=e.nativeText;if(!e.nativeText)throw new Error('完整拆分的替代字体无法显示：'+e.name);
-        if(task.quality?.fontPolicy==='strict'&&Number(e.styleConfidence||0)<.9)throw new Error('严格字体策略无法确认原字体：'+e.name+'；未自动换成近似字体');
-        if(render){await extract(task,e,settings,signal);e.contentFile ||=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;}
-      }
-    }
+    await fitCompleteCandidates(task,result.changed,settings,signal,render);
     if(render)for(const e of task.elements.filter(e=>result.changed.includes(e.id)&&e.enabled&&e.unresolvedAsGlyph)){
       await extract(task,e,settings,signal);e.contentFile ||=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;
     }
@@ -211,7 +220,7 @@ export function createLayeredImageService(h, overrides = {}) {
 
   async function extract(task, e, settings, signal) {
     const output = join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.png');
-    const raw = e.reusedRawFile || join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.original');
+    let raw = e.reusedRawFile || join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.original');const wasModelCutout=e.forceModelCutout===true;
     if(e.unresolvedAsGlyph||e.typographyKind){
       await pixel({operation:'source-glyph-cutout',input:task.source,output,element:e},signal);e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine='source-unconfirmed-glyph';return;
     }
@@ -223,7 +232,9 @@ export function createLayeredImageService(h, overrides = {}) {
       if(!checked){checked={...await (overrides.verifyEnhancement||verifyEnhancedRegion)(ctx,task.analysisModel,original,candidate,signal,task.sourceFacts?.brands||[]),signature};await writeFile(report,JSON.stringify(checked,null,2));}
       e.hdSourceCheck=checked;if(!checked.accepted){e.useOriginalRegion=true;task.warnings.push('“'+e.name+'”高清版本未通过身份/品牌核对，改从原图透明提取：'+checked.reason);}
     }
-    if(task.reconstruction==='complete'&&e.type==='image'&&e.extractionMode==='cutout'&&(!await exists(raw)||e.forceSourceCutout)){
+    const nestedProduct=task.reconstruction==='complete'&&e.type==='image'&&task.elements.some(n=>n.enabled&&n.id!==e.id&&n.type==='image'&&n.visualKind==='product'&&n.x>=e.x&&n.y>=e.y&&n.x+n.width<=e.x+e.width&&n.y+n.height<=e.y+e.height&&n.width*n.height<e.width*e.height*.9);
+    if(nestedProduct)e.forceModelCutout=true;
+    if(task.reconstruction==='complete'&&e.type==='image'&&e.extractionMode==='cutout'&&!e.forceModelCutout&&(!await exists(raw)||e.forceSourceCutout)){
       const source=e.useOriginalRegion?task.source:task.analysisSource||task.source;
       if(e.visualKind==='graphic'){
         const local=await pixel({operation:'graphic-cutout',input:source,output,element:e,elements:task.elements},signal);
@@ -240,11 +251,13 @@ export function createLayeredImageService(h, overrides = {}) {
             const python=await resolvePythonWithDeps(ctx),run=await runPythonSpec((exe,args,cwd,timeout)=>runProcessWithTimeout(exe,args,cwd,timeout),python,join(PLUGIN_ROOT,'scripts','remove_background.py'),{input,output:matte,model:'birefnet-general-lite'},{cwd:PLUGIN_ROOT,timeoutMs:600000});
             if(run.exitCode!==0||!await exists(matte))throw new Error('本地素材抠图不可用');
           }
+          const measured=await pixel({operation:'matte-quality',input:matte},signal);e.matteQuality=measured;if(measured.accepted===false){e.forceModelCutout=true;throw new Error(measured.reason);}
           await pixel({operation:'place-cutout',input:matte,output,element:e,elements:task.elements,width:task.width,height:task.height},signal);
           e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine='hd-product-local-matte';return;
-        }catch(error){signal.throwIfAborted();if(e.forceSourceCutout)throw error;task.warnings.push('“'+e.name+'”本地透明提取未通过，继续模型提取：'+String(error.message||error));}
+        }catch(error){signal.throwIfAborted();if(e.forceSourceCutout&&!e.forceModelCutout)throw error;task.warnings.push('“'+e.name+'”本地透明提取未通过，继续模型提取：'+String(error.message||error));}
       }
     }
+    if(e.forceModelCutout&&!wasModelCutout)raw=join(task.directory,'assets',e.id+'-'+e.assetKey.slice(0,20)+'-source-crop.original');
     if(await enhanceLayerRegion(task,e,settings,signal,{ctx,pixel,generate,save,verify:overrides.verifyEnhancement}))return;
     if(e.type==='background'&&task.analysisStrategy==='dense'&&task.reconstruction!=='complete'){
       const local=await pixel({operation:'source-layout-plate',input:task.source,output,elements:task.elements},signal);
@@ -281,7 +294,7 @@ export function createLayeredImageService(h, overrides = {}) {
       }
       e.file = output; e.status = 'complete'; e.requestState = 'local'; return;
     }
-    if (await exists(output) && !(e.type === 'background' && e.plateVersion !== 4 && await exists(raw))) {
+    if (await exists(output) && !e.forceModelCutout && !(e.type === 'background' && e.plateVersion !== 4 && await exists(raw))) {
       let checked;
       try { checked = await pixel({ operation: 'normalize', input: output, output, width: task.width, height: task.height, background: e.type === 'background', element: e, preserve_placement: true, allow_checkerboard: task.sourceCheckerboard === true }, signal); }
       catch (error) {
@@ -312,15 +325,18 @@ export function createLayeredImageService(h, overrides = {}) {
       if ((task.generationAttempts || 0) >= task.maxImageRequests) throw new Error('图像请求已达到本轮上限，已保留成功素材；提高请求上限后可继续');
       task.generationAttempts = (task.generationAttempts || 0) + 1;
       e.requestState = 'submitted'; await save(task);
+      let enteredGenerator=false;
       try {
-        const result = await generate({ ctx, image: task.reconstruction==='complete'&&task.analysisSource?[await readFile(task.referenceSource||task.source),await readFile(task.analysisSource)]:await readFile(task.source), prompt: extractionPrompt(e, task.elements, task.width, task.height)+(e.type==='image'?sourceBrandConstraint(task):''),
+        let reference=task.reconstruction==='complete'&&task.analysisSource?[await readFile(task.referenceSource||task.source),await readFile(task.analysisSource)]:await readFile(task.source),prompt=extractionPrompt(e,task.elements,task.width,task.height);
+        if(e.forceModelCutout){const crop=join(task.directory,'analysis',e.id+'-extraction-source.png');await pixel({operation:'analysis-crop',input:task.source,output:crop,region:e},signal);reference=await readFile(crop);prompt='保持输入裁图的画布比例、目标在裁图中的原位置和四周留白，不居中、不移动、不放大；只从这张原图裁切中提取透明PNG，不重新设计，不改变目标造型、品牌或包装文字。保留原来裁图中目标的比例与完整内容、自然接触阴影，去掉绿色/白色等背景和所有海报排版文字。其他已独立产品也要去掉且补全遮挡。只提取：'+e.name+'；详细归属：'+e.description+'。真实Alpha，不得留下矩形色块、擦除洞、棋盘格或添加文字。'+sourceBrandConstraint(task);}
+        enteredGenerator=true;const result = await generate({ ctx, image:reference, prompt:prompt+(e.type==='image'?sourceBrandConstraint(task):''),
           engine: task.engine, signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
           background: e.type === 'background' ? 'opaque' : 'transparent', maxAttempts: 1, settingsOverride: settings });
         // Retain a returned result even when cancellation races the response.
         await writeFile(raw, result.bytes, { flag: 'wx' });
         e.rawFile = raw; e.requestState = 'returned'; await save(task);
       } catch (error) {
-        if(error.imageRequestNotSent===true){e.requestState='not-submitted';task.generationAttempts=Math.max(0,(task.generationAttempts||0)-1);}else e.requestState = 'unknown';
+        if(!enteredGenerator||error.imageRequestNotSent===true){e.requestState='not-submitted';task.generationAttempts=Math.max(0,(task.generationAttempts||0)-1);}else e.requestState = /\(HTTP (400|401|403|404|413|422|429)\)/.test(String(error.message||error))?'rejected':'unknown';
         e.status = 'failed'; e.error = String(error?.message || error); await save(task); throw error;
       }
     } else { e.rawFile = raw; e.requestState = 'returned'; }
@@ -338,7 +354,7 @@ export function createLayeredImageService(h, overrides = {}) {
           const error = new Error('“' + e.name + '”本地去背景' + (run.exitCode == null ? '进程被中断' : run.timedOut ? '超时' : '失败') + '，原始返回已保存；详情见任务文件夹中的 matte 日志'); error.localRetryable = run.exitCode == null || run.timedOut === true; throw error;
         }
         signal.throwIfAborted();
-        inspected = await pixel({ operation: 'normalize', input: matte, output, width: task.width, height: task.height, element: e }, signal);
+            inspected = await pixel({ operation: 'normalize', input: matte, output, width: task.width, height: task.height, element: e,preserve_placement:e.forceModelCutout===true }, signal);
       }
       inspected = await pixel({ operation: 'inspect', input: output }, signal);
       if (!inspected.hasTransparency) throw new Error('前景仍无有效透明区域，不能作为独立图层：' + e.name);
@@ -518,6 +534,8 @@ export function createLayeredImageService(h, overrides = {}) {
         const key = hash({ pipeline: 'layers-v1', source: task.sourceHd?.fingerprint||task.sourceHash, engine, model: engine === 'api' ? settings.apiModel : settings.dshCodexModel,
           element: appearance, ...(e.type === 'background' ? { selected: [...selected].sort((a, b) => a.id.localeCompare(b.id)) } : {}) });
         const previous = old.get(e.id);
+        if(body.elements&&previous&&e.color!==previous.color)delete e.sourceTextColor;
+        if(e.type==='image'&&previous?.rawFile&&previous.forceModelCutout===e.forceModelCutout&&previous.description===e.description&&previous.revision===e.revision&&['x','y','width','height'].every(k=>previous[k]===e[k])&&task.engine===engine&&task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel)&&isPathWithin(task.directory,previous.rawFile))e.reusedRawFile=previous.rawFile;
         e.assetKey = key;
         if(previous?.requestState==='unknown')e.requestState='unknown';
         if (e.type === 'background' && previous?.rawFile && removalKey(task.elements)===removalKey(elements) && previous.description===e.description && previous.revision===e.revision && task.engine===engine && task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel) && isPathWithin(task.directory,previous.rawFile)) e.reusedRawFile=previous.rawFile;
@@ -560,7 +578,7 @@ export function createLayeredImageService(h, overrides = {}) {
         if(task.reconstruction!=='complete')await separateRasterText();
         let layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
         const overlapping=new Set([...layoutIssues.flatMap(i=>[i.id,i.otherId]).filter(Boolean),...(task.sourcePlateFallbackIds||[])]);
-        if(task.reconstruction==='complete'&&overlapping.size){
+        if(task.reconstruction==='complete'&&overlapping.size&&!ctx.llm?.prepareCall&&!overrides.readback){
           await fixCompleteText(task,[...overlapping].filter(id=>task.elements.some(e=>e.id===id&&e.type==='text')),settings,signal,true);
           layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
         }
@@ -589,7 +607,14 @@ export function createLayeredImageService(h, overrides = {}) {
               const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
               await writeFile(join(task.directory,'assembly-check.json'),JSON.stringify(checked,null,2));
               const repaired=[];
-              const restoreIssues=async issues=>{const restored=[],targets=new Map();
+              const restoreIssues=async issues=>{const restored=[],targets=new Map(),direct=new Set();
+              if(task.reconstruction==='complete')for(const issue of issues.filter(i=>['missing-image','missing-shape'].includes(i.kind))){
+                let e=task.elements.find(e=>e.id===issue.id);if(!e){if(task.elements.length>=320||issue.kind==='missing-image'&&task.elements.filter(e=>e.enabled&&e.type==='image'&&!e.typographyKind).length>=40)throw new Error('遗漏素材超过图层上限，已保留来源清单');
+                  e={id:issue.id,type:issue.kind==='missing-shape'?'shape':'image',name:issue.name||'补漏素材 '+issue.id,description:issue.description||issue.reason,x:issue.x,y:issue.y,width:issue.width,height:issue.height,z:50,enabled:true,nativeText:false,preserveSource:false,sourceBoundsConfirmed:true,useOriginalRegion:true,classificationReason:issue.reason,
+                    ...(issue.kind==='missing-shape'?{fill:issue.fill,radius:issue.radius||0,shapeKind:issue.radius?'roundedRect':'rect'}:{visualKind:issue.visualKind,framingEvidence:issue.framingEvidence||'',foregroundColors:issue.foregroundColors?.length?issue.foregroundColors:issue.color?[issue.color]:[],extractionMode:['photo-panel','screenshot'].includes(issue.visualKind)?'photo':'cutout',modeLocked:true,sourceRegion:['photo-panel','screenshot'].includes(issue.visualKind),forceSourceCutout:issue.strategy==='source-alpha',forceModelCutout:issue.strategy==='regenerate-cutout'}),assetKey:hash(issue),status:'pending'};task.elements.push(e);
+                }
+                if(!enabled.includes(e))enabled.push(e);if(!order.includes(e))order.push(e);await extract(task,e,settings,signal);e.contentFile ||=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;restored.push(e.id);
+              }
               if(task.reconstruction==='complete')for(const issue of issues.filter(i=>i.kind==='missing-text')){
                 let e=task.elements.find(e=>(e.type==='text'||e.unresolvedAsGlyph)&&(()=>{const b=e.recognitionBounds||e;const area=Math.max(0,Math.min(b.x+b.width,issue.x+issue.width)-Math.max(b.x,issue.x))*Math.max(0,Math.min(b.y+b.height,issue.y+issue.height)-Math.max(b.y,issue.y));return area>Math.min(b.width*b.height,issue.width*issue.height)*.5;})());
                 if(!e){
@@ -601,10 +626,37 @@ export function createLayeredImageService(h, overrides = {}) {
                 if(!enabled.includes(e))enabled.push(e);if(!order.includes(e))order.push(e);issue.id=e.id;
               }
               for(const issue of issues){
+                if(['missing-image','missing-shape'].includes(issue.kind))continue;
                 const e=task.elements.find(e=>e.enabled&&e.id===issue.id);if(!e||e.type==='background')continue;
+                if(task.reconstruction==='complete'){
+                  if(issue.absent===true||(issue.embedded===true&&e.type==='text')){e.enabled=false;e.absentFromSource=issue.absent===true;e.embeddedInMaterial=issue.embedded===true;restored.push(e.id);continue;}
+                  if(issue.frontOf){const other=task.elements.find(n=>n.id===issue.frontOf);if(other)e.z=other.z+.1;if(issue.strategy==='reorder'){restored.push(e.id);continue;}}
+                  if(e.typographyKind&&!e.unresolvedAsGlyph&&issue.sourceConfirmed){
+                    for(const key of ['x','y','width','height','text'])e[key]=issue[key];e.useOriginalRegion=true;e.assetKey=hash({previous:e.assetKey,issue});e.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,e[k]]));await extract(task,e,settings,signal);const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;restored.push(e.id);continue;
+                  }
+                  if(issue.parts?.length&&(e.type==='text'||e.unresolvedAsGlyph)){
+                    e.enabled=false;e.replacedByParts=true;
+                    for(const [index,part] of issue.parts.entries()){
+                      const id=(e.id.length<=59?e.id:e.id.slice(0,48)+'-'+hash(e.id).slice(0,8))+'-p'+(index+1);let child=task.elements.find(n=>n.id===id);
+                      if(!child){if(task.elements.length>=320)throw new Error('修复文字部件超过320层');child={...e,id,name:e.name+' 部件 '+(index+1)};task.elements.push(child);}
+                      Object.assign(child,part,{type:'text',text:part.layout==='vertical'?Array.from(part.text).join('\n'):part.text,enabled:true,nativeText:false,textMode:'editable',contentVerified:true,geometrySource:'source-readback',textGroupId:e.id,assetKey:hash({id,part}),status:'pending'});
+                      for(const key of ['unresolvedAsGlyph','typographyKind','sourceTextFallback','embeddedInMaterial','nativePreviewSignature','textFit','cleanupBounds'])delete child[key];child.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,child[k]]));
+                      if(!enabled.includes(child))enabled.push(child);if(!order.includes(child))order.push(child);direct.add(child.id);restored.push(child.id);
+                    }
+                    restored.push(e.id);continue;
+                  }
+                  if(issue.sourceConfirmed&&(e.type==='text'||e.unresolvedAsGlyph)){
+                    Object.assign(e,{type:'text',text:issue.text,x:issue.x,y:issue.y,width:issue.width,height:issue.height,nativeText:false,textMode:'editable',contentVerified:true,geometrySource:'source-readback',assetKey:hash({previous:e.assetKey,issue})});
+                    for(const key of ['unresolvedAsGlyph','typographyKind','sourceTextFallback','embeddedInMaterial','nativePreviewSignature','textFit','cleanupBounds'])delete e[key];if(issue.color){e.color=issue.color;e.sourceTextColor=issue.color;}e.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,e[k]]));direct.add(e.id);restored.push(e.id);continue;
+                  }
+                  if((e.type==='shape'||e.type==='image'&&e.visualKind!=='product'&&issue.fill)&&Number.isFinite(issue.x)&&Number.isFinite(issue.width)){
+                    e.type='shape';delete e.sourceRegion;delete e.extractionMode;delete e.forceModelCutout;delete e.forceSourceCutout;
+                    for(const key of ['x','y','width','height','fill','radius'])if(issue[key]!==undefined)e[key]=issue[key];e.assetKey=hash({previous:e.assetKey,issue});await extract(task,e,settings,signal);const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;restored.push(e.id);continue;
+                  }
+                }
                 targets.set(e.id,issue.reason);
                 const a=e.bounds||e;
-                for(const n of task.elements.filter(n=>n.enabled&&n.nativeText&&n.id!==e.id)){
+                for(const n of task.elements.filter(n=>task.reconstruction!=='complete'&&n.enabled&&n.nativeText&&n.id!==e.id)){
                   const b=n.bounds||n;if(e.excludedNativeIds?.includes(n.id)||(a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&a.y+a.height>b.y))targets.set(n.id,issue.reason);
                 }
               }
@@ -612,9 +664,10 @@ export function createLayeredImageService(h, overrides = {}) {
                 const e=task.elements.find(e=>e.id===id);
                 if(task.reconstruction==='complete'&&e.type==='text')continue;
                 if(task.reconstruction==='complete'&&e.type==='image'&&e.extractionMode==='cutout'){
-                  e.useOriginalRegion=true;e.forceSourceCutout=true;e.assetKey=hash({previous:e.assetKey,originalRepair:true});
+                  e.useOriginalRegion=true;e.forceSourceCutout=true;e.forceModelCutout=issues.some(i=>i.id===e.id&&i.strategy==='regenerate-cutout');if(e.forceModelCutout){e.revision=(e.revision||0)+1;delete e.reusedRawFile;delete e.rawFile;}e.assetKey=hash({previous:e.assetKey,originalRepair:true,revision:e.revision});
                   await extract(task,e,settings,signal);const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;restored.push(e.id);continue;
                 }
+                if(task.reconstruction==='complete'&&e.type==='shape')continue;
                 if(e.type==='text'){e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;}
                 else if(e.type==='shape'||e.enhancedFile){e.type='image';e.sourceRegion=true;e.modeLocked=true;e.extractionMode='photo';e.resolutionPolicy='preserve';delete e.enhancedFile;e.enhancementCheck={accepted:false,reason};}
                 else continue;
@@ -622,6 +675,8 @@ export function createLayeredImageService(h, overrides = {}) {
                 const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;
                 restored.push(e.id);task.warnings.push('“'+e.name+'”装配对照发现问题，已自动保留原图区域：'+reason);
               }
+              if(direct.size)await fitCompleteCandidates(task,[...direct],settings,signal,true);
+              deduplicateCompleteText(task.elements);
               if(task.reconstruction==='complete')restored.push(...await fixCompleteText(task,[...targets.keys()].filter(id=>task.elements.some(e=>e.id===id&&e.type==='text')),settings,signal,true));
               if(restored.length){
                 if(task.reconstruction!=='complete')await separateRasterText(true);
@@ -665,6 +720,8 @@ export function createLayeredImageService(h, overrides = {}) {
         if(task.reconstruction==='complete'){
           const ids=task.elements.filter(e=>e.enabled&&e.type==='text'&&(!e.nativeText||e.sourceTextSupplement&&!e.contentVerified)).map(e=>e.id);
           await fixCompleteText(task,ids,settings,signal);deduplicateCompleteText(task.elements);
+          const measured=await pixel({operation:'text-colors',input:task.source,elements:task.elements},signal);
+          for(const e of task.elements.filter(e=>e.type==='text')){const row=measured.colors?.find(n=>n.id===e.id);e.color=e.sourceTextColor||row?.color||e.color;}
         }
         const enabled = task.elements.filter(e => e.enabled), order = [...enabled.filter(e => e.type !== 'background'), ...enabled.filter(e => e.type === 'background')];
         let done = 0;
@@ -689,6 +746,14 @@ export function createLayeredImageService(h, overrides = {}) {
           const foreground=order.filter(e=>e.type!=='background');let cursor=0;
           const outcomes=await Promise.allSettled(Array.from({length:Math.min(2,foreground.length)},async()=>{while(cursor<foreground.length)await processElement(foreground[cursor++]);}));
           const failure=outcomes.find(r=>r.status==='rejected');if(failure)throw failure.reason;
+          if(ctx.llm?.prepareCall){
+            const ownership=await pixel({operation:'text-material-ownership',elements:task.elements},signal),candidates=ownership.candidates||[],key=hash(candidates.map(c=>({...c,text:task.elements.find(e=>e.id===c.id)?.text})));
+            if(candidates.length&&task.materialOwnershipKey!==key){task.stage='verification';task.message='正在区分产品表面印字与独立海报文字，防止重复拆出杯贴…';await save(task);
+              const roles=await recoverCompleteText(ctx,task,candidates.map(c=>c.id),pixel,signal,{roleOnly:true});
+              for(const e of task.elements){const checked=roles.elements.find(n=>n.id===e.id);if(checked?.embeddedInMaterial){e.enabled=false;e.embeddedInMaterial=true;}}
+              task.materialOwnershipKey=key;
+            }
+          }
           for(const e of order.filter(e=>e.type==='background'))await processElement(e);
         }else for(const e of order)await processElement(e);
         const failed = order.filter(e => e.status !== 'complete');
@@ -701,7 +766,7 @@ export function createLayeredImageService(h, overrides = {}) {
   }
 
   async function refreshCompleteSourceText(task,signal){
-    if(task.reconstruction!=='complete'||task.textTruthVersion===3||task.analysisStrategy!=='dense'||!task.analysisSource||!ctx.llm?.prepareCall)return;
+    if(task.reconstruction!=='complete'||task.textTruthVersion===4||task.analysisStrategy!=='dense'||!task.analysisSource||!ctx.llm?.prepareCall)return;
     task.stage='analysis';task.message='正在从原图重新核对全部菜单文字；已生成的高清素材和背景保留';await save(task);
     const previous=task.elements,body={...task.analysisModel,reconstruction:'complete',localOnly:task.localOnly===true};
     const fixedLayout=task.elements.filter(e=>e.type!=='text'&&!e.typographyKind);
@@ -717,7 +782,15 @@ export function createLayeredImageService(h, overrides = {}) {
     task.analysisWarnings=[...new Set([...(task.analysisWarnings||[]),...(result.warnings||[]),'文字内容由原图独立识别；高清重绘仅供素材与结构参考，不能作为文案事实'])];
     task.stage='calibration';task.message='原图文字分区已保存，正在校准文字框与原生字体…';await save(task);
     await calibrate(task,{...body,editableText:true,fontPolicy:task.quality?.fontPolicy||'substitute'},signal);
-    task.textTruthVersion=3;await save(task);
+    task.textTruthVersion=4;await save(task);
+  }
+
+  async function refreshCompleteMaterialGeometry(task,signal){
+    if(task.reconstruction!=='complete'||task.materialGeometryTruth===1||!ctx.llm?.prepareCall)return;
+    task.stage='verification';task.message='正在按原图逐件确认产品完整边界，较大的摄影组合也会核对…';await save(task);
+    const result=await refineLayerSourceRegions(ctx,{...task,imageGeometryVersion:0},pixel,signal);
+    task.elements=result.elements;task.imageGeometryVersion=result.version;task.materialGeometryTruth=1;
+    task.analysisWarnings=[...new Set([...(task.analysisWarnings||[]),...(result.warnings||[])])];await save(task);
   }
 
   async function executeAnalysis(task,body,signal,automaticSettings=null) {
@@ -747,8 +820,9 @@ export function createLayeredImageService(h, overrides = {}) {
         task.analysisWarnings = result.warnings || []; task.warnings = [...task.analysisWarnings]; task.analysisAttempts = result.analysisAttempts || (body.flat ? 0 : 1);
         task.semanticPolicyVersion=result.semanticPolicyVersion||1;
         task.analysisComplete=true;task.analysisStrategy=result.analysisStrategy||'whole';
-        if(task.reconstruction==='complete')task.textTruthVersion=3;
+        if(task.reconstruction==='complete')task.textTruthVersion=4;
         task.imageGeometryVersion=result.imageGeometryVersion||0;
+        if(task.reconstruction==='complete'&&result.imageGeometryVersion===2)task.materialGeometryTruth=1;
         if (result.rawAnalysis) await writeFile(join(task.directory, 'model-analysis.json'), JSON.stringify(result.rawAnalysis, null, 2));
         if (task.autoRefine && !body.flat) {
           task.stage = 'calibration'; task.message = '正在校准原图文字位置、候选字体和基线…'; await save(task);
@@ -819,7 +893,7 @@ export function createLayeredImageService(h, overrides = {}) {
       const controller=new AbortController();preparing.set(task.directory,controller);
       let settings;
       task.status='running';task.stage='preparing';task.error='';task.message='正在准备原任务，已有图层和高清分区会复用';await save(task);
-      try { await refreshCompleteSourceText(task,controller.signal);settings = await prepareRun(task, body,controller.signal); }
+      try { await refreshCompleteSourceText(task,controller.signal);await refreshCompleteMaterialGeometry(task,controller.signal);settings = await prepareRun(task, body,controller.signal); }
       catch(error){task.status=controller.signal.aborted?'cancelled':'failed';task.stage=task.status==='cancelled'?'cancelled':'error';task.error=controller.signal.aborted?'':String(error.message||error);task.message=task.error||'已取消准备，成功素材保留';await save(task);throw error;}
       finally { preparing.delete(task.directory); }
       start(task, signal => executeRun(task, settings, signal));
@@ -840,8 +914,9 @@ export function createLayeredImageService(h, overrides = {}) {
       if (!task.elements.length || task.elements.some(e => e.enabled && (e.status !== 'complete' || !e.file))) throw new Error('请先完成所有已选图层的提取');
       task.status = 'running'; task.stage = 'export'; task.progress = 10; task.error = ''; task.message = '正在生成 ' + body.format.toUpperCase() + ' 文件…';
       start(task, async signal => {
-        if(task.reconstruction==='complete'&&task.textTruthVersion!==3&&task.analysisSource&&task.analysisStrategy==='dense'&&ctx.llm?.prepareCall){
+        if(task.reconstruction==='complete'&&(task.textTruthVersion!==4||task.materialGeometryTruth!==1)&&task.analysisSource&&task.analysisStrategy==='dense'&&ctx.llm?.prepareCall){
           await refreshCompleteSourceText(task,signal);
+          await refreshCompleteMaterialGeometry(task,signal);
           const settings=await prepareRun(task,{...body,engine:task.engine,autoExportFormat:'',maxImageRequests:task.maxImageRequests},signal);await executeRun(task,settings,signal);
         }
         await recoverLocal(task, '导出文件', () => exportArtifact(task, body.format, signal, body.openAfterExport === true), signal);

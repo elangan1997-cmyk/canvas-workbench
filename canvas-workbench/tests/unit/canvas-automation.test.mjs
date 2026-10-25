@@ -198,7 +198,7 @@ test('background API resumes full validation even when all PNG assets were alrea
  const f=await fixture(t);delete f.options.perform;f.options.python=async()=>({success:true,width:40,height:60});let validated=false,runs=0;
  const child={id:'child',reconstruction:'complete',status:'cancelled',width:40,height:60,generationAttempts:0,elements:[{enabled:true,status:'complete'}],quality:{issues:[]},exports:[]};
  f.h.layeredImage={analyze:async()=>child,get:async()=>child,settled:async()=>child,
- run:async()=>{runs++;validated=true;Object.assign(child,{status:'ready',textTruthVersion:3,completeness:{complete:true},assemblyCheck:{verified:true}});},
+ run:async()=>{runs++;validated=true;Object.assign(child,{status:'ready',textTruthVersion:4,materialGeometryTruth:1,completeness:{complete:true},assemblyCheck:{verified:true}});},
  export:async({format})=>{assert.equal(validated,true,'export waits for source-text/assembly validation');const path=join(f.root,'validated.'+format);await writeFile(path,'validated');child.exports.push({path,kind:format});}};
  const service=createCanvasAutomation(f.h,f.options);t.after(()=>service.dispose());const job=await service.submit({...f.body,folder:'',paths:[join(f.input,'1.png')],operation:'layered_export',formats:['ai','psd'],reconstruction:'complete'});
  const result=await service.settled(job);assert.equal(result.status,'completed');assert.equal(runs,1);assert.equal(result.items[0].outputs.length,2);
