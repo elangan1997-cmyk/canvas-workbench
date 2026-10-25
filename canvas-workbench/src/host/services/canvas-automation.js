@@ -1,12 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { generateImage, readImageEngineSettings } from '../../../lib/image-engine.js';
 import { resolvePythonWithDeps } from '../../../lib/platform.js';
 import { dshCodexImageModel } from '../../providers/image/dsh-codex.provider.js';
 import { expandHome } from '../../shared/utils/paths.js';
-import { isRasterImagePath, MAX_IMAGE_BYTES, mimeOf } from '../../shared/utils/image-types.js';
+import { isRasterImagePath, MAX_IMAGE_BYTES, mimeOf, sniffImageMime, extOf } from '../../shared/utils/image-types.js';
 import { PLUGIN_ROOT } from '../vendor-assets.js';
 import { runPythonSpec } from './python-launch.js';
 import { appendAutomationOutputs, mutateAutomationCanvas, patchAutomationCanvas, readAutomationCanvas, summarizeAutomationCanvas } from './automation-canvas.js';
@@ -20,6 +20,11 @@ const cleanName = value => String(value || '').replace(/[\\/:*?"<>|\x00-\x1f]/g,
 const absolute = value => { const p = expandHome(String(value || '').trim()); if (!p || !isAbsolute(p)) throw new Error('请使用绝对文件夹或文件路径'); return resolve(p); };
 const budgetError = text => Object.assign(new Error(text), { code: 'NEEDS_REVIEW' });
 const delay = ms => new Promise(r => setTimeout(r, ms));
+const rasterMime=async path=>{
+  if(isRasterImagePath(path))return mimeOf(path);
+  if(extOf(path))return null;
+  const file=await open(path,'r');try{const header=Buffer.alloc(32);const {bytesRead}=await file.read(header,0,32,0);return sniffImageMime(header.subarray(0,bytesRead));}finally{await file.close();}
+};
 
 /** Durable serial jobs; published jobs outlive the chat turn, never a host shutdown. */
 export function createCanvasAutomation(h, overrides = {}) {
@@ -98,7 +103,7 @@ export function createCanvasAutomation(h, overrides = {}) {
           if (e.name.startsWith('.') || e.isSymbolicLink()) continue;
           const p = join(dir, e.name);
           if (e.isDirectory() && body.recursive === true) await scan(p, depth + 1);
-          else if (e.isFile() && isRasterImagePath(p)) { paths.push(p); if (paths.length > limit) throw new Error('图片超过本批上限' + limit + '张，请缩小文件夹或明确提高maxFiles'); }
+          else if (e.isFile() && await rasterMime(p)) { paths.push(p); if (paths.length > limit) throw new Error('图片超过本批上限' + limit + '张，请缩小文件夹或明确提高maxFiles'); }
         }
       }; await scan(directory, 0);
     } else if (Array.isArray(body.paths) && body.paths.length) paths = body.paths.map(absolute);
@@ -114,10 +119,10 @@ export function createCanvasAutomation(h, overrides = {}) {
     const files = [];
     for (const p of paths) {
       try {
-        if (!isRasterImagePath(p)) throw new Error('仅支持PNG/JPG/WebP/GIF/AVIF/BMP栅格图片');
         const info = await lstat(p);
         if (!info.isFile() || info.isSymbolicLink() || info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new Error('文件为空、不可读或超过32MB');
-        files.push({ path: p, name: basename(p), size: info.size, mtime: info.mtimeMs, elementId: targets.find(e => e.path === p)?.id || '' });
+        const mime=await rasterMime(p);if(!mime)throw new Error('仅支持PNG/JPG/WebP/GIF/AVIF/BMP栅格图片，无扩展名附件按真实文件头识别');
+        files.push({ path: p, name: basename(p),mime, size: info.size, mtime: info.mtimeMs, elementId: targets.find(e => e.path === p)?.id || '' });
       } catch (error) { ignored.push({ path: p, reason: message(error) }); }
     }
     if (!files.length) throw new Error('没有可处理的图片' + (ignored.length ? '：' + ignored[0].reason : ''));
@@ -167,7 +172,7 @@ export function createCanvasAutomation(h, overrides = {}) {
     const work = join(job.project, 'outputs', '批处理过程', job.id, item.id); await mkdir(work, { recursive: true });
     if (!item.sourceCopy) {
       const bytes = await readFile(item.path); if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) throw new Error('输入文件已变更或超过32MB');
-      item.sourceCopy = join(work, 'source' + (/\.[a-z0-9]+$/i.exec(item.name)?.[0] || '.png'));
+      item.sourceCopy = join(work, 'source' + (/\.[a-z0-9]+$/i.exec(item.name)?.[0] || (item.mime==='image/jpeg'?'.jpg':'.'+String(item.mime||'image/png').split('/')[1])));
       try { await writeFile(item.sourceCopy, bytes, { flag: 'wx' }); }
       catch (error) { if (error.code !== 'EEXIST') throw error; }
       item.sourceHash = createHash('sha256').update(await readFile(item.sourceCopy)).digest('hex'); await save(job);
@@ -175,19 +180,25 @@ export function createCanvasAutomation(h, overrides = {}) {
     const dimensions = await python('automation_image.py', { operation: 'inspect', input: item.sourceCopy }, signal);
     if (['layered_export', 'flat_psd'].includes(job.operation)) {
       const service = h.layeredImage;
+      if(!item.layeredTaskId && item.previousLayeredTasks?.length){
+        const candidate=item.previousLayeredTasks[item.previousLayeredTasks.length-1];
+        try{await service.get({project:job.project,id:candidate});item.layeredTaskId=candidate;await save(job);}catch{}
+      }
       if (!item.layeredTaskId) {
         const task = await service.analyze({ project: job.project, imageData: 'data:' + (mimeOf(item.sourceCopy) || 'image/png') + ';base64,' + (await readFile(item.sourceCopy)).toString('base64'),
-          name: item.name, ...job.model, flat: job.operation === 'flat_psd', autoRefine: true, editableText: job.editableText, fontPolicy: job.fontPolicy });
+          name: item.name, ...job.model, flat: job.operation === 'flat_psd', autoRefine: true, editableText: job.editableText, fontPolicy: job.fontPolicy,localOnly:!job.allowGeneration });
         item.layeredTaskId = task.id; await save(job);
       }
       const request = { project: job.project, id: item.layeredTaskId };
       let task = await waitLayer(service, request, signal);
       if (task.status === 'failed' && !task.elements.length) {
-        // Analysis has no image-generation side effect. A manual resume may
-        // safely create a fresh analysis while retaining the failed record.
-        item.previousLayeredTasks = [...(item.previousLayeredTasks || []), item.layeredTaskId];
-        item.layeredTaskId = ''; await save(job);
-        throw new Error((task.error || '图层分析失败') + '；继续任务时将重新分析');
+        // Keep ownership of the analysis and all completed tile checkpoints.
+        // Resume the same child instead of starting a full duplicate analysis.
+        if(item.analysisResumeRevision===job.runRevision)throw new Error(task.error||'图层分析失败，已保存完成的分区');
+        item.analysisResumeRevision=job.runRevision;await save(job);
+        await service.run({...request,localOnly:!job.allowGeneration,maxImageRequests:Math.max(0,job.maxImageRequests-(job.imageRequestsUsed||0)),engine:job.imageSettings.engine,imageSettingsOverride:job.imageSettings});
+        task=await waitLayer(service,request,signal);
+        if(task.status==='failed'&&!task.elements.length)throw new Error(task.error||'图层分析失败，已保存完成的分区，可继续原任务');
       }
       await reconcileRequests(job); await save(job);
       if (hasBlockingLayerQuality(task.quality)) throw budgetError(task.message || '图层结构数据无效，需要重新分析');
@@ -205,7 +216,7 @@ export function createCanvasAutomation(h, overrides = {}) {
       const outputs = [...(item.outputs || [])];
       for (const format of job.operation === 'flat_psd' ? ['psd'] : job.formats) {
         if (outputs.some(e => e.kind === format)) continue;
-        const existing = (task.exports || []).find(e => e.kind === format);
+        const existing = [...(task.exports || [])].reverse().find(e => e.kind === format);
         if (existing) { outputs.push({ ...existing, width: task.width, height: task.height }); continue; }
         await service.export({ ...request, format, openAfterExport: false }); task = await waitLayer(service, request, signal);
         if (task.status !== 'ready') throw new Error(task.error || '文件导出失败');
@@ -256,13 +267,16 @@ export function createCanvasAutomation(h, overrides = {}) {
         const controller = new AbortController();
         const entry = { controller, promise: null }; workers.set(id, entry);
         entry.promise = (async () => {
-          job.status = 'running'; job.startedAt ||= Date.now(); await save(job);
+          job.status = 'running'; job.runRevision=(job.runRevision||0)+1;job.startedAt ||= Date.now(); await save(job);
           try {
             for (const item of job.items) {
               controller.signal.throwIfAborted(); if (item.status === 'completed') continue;
               item.status = 'running'; item.error = ''; job.message = '正在处理 ' + (job.items.indexOf(item) + 1) + '/' + job.items.length + '：' + item.name; await save(job);
               try {
-                item.outputs = await perform(job, item, controller.signal); controller.signal.throwIfAborted();
+                item.outputs = (await perform(job, item, controller.signal)).map(output=>{
+                  const previous=[...(item.previousOutputs||[])].reverse().find(p=>(p.kind||'image')===(output.kind||'image'));
+                  return {...output,sourceItemId:item.id,...(previous&&previous.path!==output.path?{replacePath:previous.path}:{})};
+                }); controller.signal.throwIfAborted();
                 item.status = 'completed'; await appendAutomationOutputs(h, job.project, item.outputs, job.id);
               } catch (error) {
                 if (controller.signal.aborted) { item.status = 'cancelled'; throw error; }
@@ -330,7 +344,11 @@ export function createCanvasAutomation(h, overrides = {}) {
     },
     async resume(body) {
       const job = await load(body.id); if (workers.has(job.id) || ['queued', 'running', 'cancelling'].includes(job.status)) throw new Error('任务仍在执行，请等待收尾');
-      if (job.status === 'completed') return present(job);
+      if (job.status === 'completed'&&!body.reprocess) return present(job);
+      if(body.reprocess===true){
+        const targets=job.items.filter(item=>!body.itemId||item.id===body.itemId);if(!targets.length)throw new Error('指定的批处理文件不存在');
+        for(const item of targets){item.previousOutputs=[...(item.previousOutputs||[]),...(item.outputs||[])];item.outputs=[];item.status='queued';}
+      }
       if (body.allowGeneration !== undefined) job.allowGeneration = body.allowGeneration === true;
       if (body.maxImageRequests !== undefined) { options({ ...job, maxImageRequests: body.maxImageRequests }); job.maxImageRequests = body.maxImageRequests; }
       job.retryUnknown = body.retryUnknown === true;

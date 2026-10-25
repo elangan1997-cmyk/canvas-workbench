@@ -110,6 +110,16 @@ test('automatic completion persists a real PSD in assets and preview before open
   assert.equal(processFiles.some(name => name.endsWith('.psd')), false, 'managed delivery must not leave a second complete PSD in the process folder');
 });
 
+test('failed analysis resumes the same task rather than discarding it or applying an empty UI draft',async t=>{
+ const f=await fixture(t);let calls=0;
+ f.overrides.analyze=async()=>{if(++calls===1)throw Error('元素分析未正常完成：max-tokens');return{elements:sampleElements(),warnings:[]};};
+ f.overrides.calibrate=async task=>({elements:task.elements,quality:{status:'passed',issues:[]}});
+ const service=createLayeredImageService(f.h,f.overrides);const task=await service.analyze({imageData:png,provider:'test',model:'test',autoRefine:true});
+ let result=await service.settled({id:task.id});assert.equal(result.status,'failed');assert.equal(result.elements.length,0);
+ await service.run({id:task.id,elements:[],autoExportFormat:'psd',maxImageRequests:2});result=await service.settled({id:task.id});
+ assert.equal(result.id,task.id);assert.equal(result.status,'ready',result.error);assert.equal(result.elements.length,2,'an empty restored UI draft must not replace the new analysis');assert.equal(result.exports.length,1);assert.equal(calls,2);
+});
+
 test('new canvas splits follow the current workspace; switching workspace never moves an existing task or reuses an old test path', async t => {
   const f = await fixture(t);
   const a = join(f.project, 'work-a'), b = join(f.project, 'work-b');
@@ -353,4 +363,17 @@ test('typed photos bypass image generation and matting; PSD shape layers retain 
  assert.equal(shape.vectorFill.type,'color');assert.equal(shape.vectorMask.paths[0].knots.length,8);
  assert.deepEqual(shape.vectorFill.color,{r:229,g:234,b:243});
  const jsx=buildLayeredIllustratorJsx({width:4,height:4,elements:result.elements,output:'/tmp/unused-shape.ai'});assert.match(jsx,/roundedRectangle/);assert.match(jsx,/sp\.stroked=false/);
+});
+
+test('dense assembled-picture readback restores a flagged native word locally and verifies the repaired preview',async t=>{
+ const f=await fixture(t),basePixel=f.overrides.pixel;let checks=0,sourceText=0;
+ f.overrides.pixel=async spec=>{
+  if(spec.operation==='source-layout-plate'){await writeFile(spec.output,'background');return {engine:'source-layout-plate'};}
+  if(spec.operation==='source-text')sourceText++;
+  return basePixel(spec);
+ };
+ f.overrides.analyze=async()=>({analysisStrategy:'dense',elements:[{id:'bg',type:'background',name:'背景',z:-100},{id:'word',type:'text',text:'奶茶',name:'菜名',x:0,y:0,width:3,height:2,z:1,nativeText:true,fontAccepted:true}]});
+ f.overrides.readback=async()=>({issues:++checks===1?[{id:'word',reason:'局部原字重影'}]:[]});
+ const s=createLayeredImageService(f.h,f.overrides);const a=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(a);
+ await s.run({id:a.id});const result=await s.settled(a);assert.equal(result.status,'ready',result.error);assert.equal(checks,2);assert.equal(sourceText,1);assert.equal(result.elements.find(e=>e.id==='word').nativeText,false);assert.equal(f.generated.length,0);
 });

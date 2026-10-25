@@ -55,14 +55,19 @@ export async function appendAutomationOutputs(h, project, outputs, jobId) {
     for (const output of outputs) {
       if (paths.has(output.path)) continue;
       const id = 'auto_' + token(), fileId = 'file_' + token(), ratio = Number(output.width) / Number(output.height);
+      const replacement=output.replacePath?scene.elements.find(e=>!e.isDeleted&&e.customData?.dshAutomationJobId===jobId&&e.customData?.dshSourcePath===output.replacePath):null;
       const width = ratio > 1 ? 240 : 240 * (ratio || .75), height = ratio > 1 ? 240 / ratio : 240;
       const e = { id, type: 'image', fileId, x: 80 + (index % columns) * 300, y: 80 + Math.floor(index / columns) * 310,
         width, height, angle: 0, strokeColor: 'transparent', backgroundColor: 'transparent', fillStyle: 'solid', strokeWidth: 1, strokeStyle: 'solid',
         roughness: 0, opacity: 100, seed: Math.floor(Math.random() * 2147483647), version: 1, versionNonce: Math.floor(Math.random() * 2147483647),
         isDeleted: false, groupIds: [], frameId: null, boundElements: null, updated: now, created: now, link: null, locked: false, roundness: null,
         status: 'saved', scale: [1, 1], crop: null, customData: { dshSourcePath: output.path, dshFileName: output.name || basename(output.path),
-          dshSourceKind: output.kind || 'image', dshManaged: true, dshMtime: output.mtime || now, dshAutomationJobId: jobId } };
-      scene.elements.push(e);
+          dshSourceKind: output.kind || 'image', dshManaged: true, dshMtime: output.mtime || now, dshAutomationJobId: jobId,...(output.sourceItemId?{dshAutomationItemId:output.sourceItemId}:{}) } };
+      if(replacement){
+        const previousFileId=replacement.fileId;
+        Object.assign(replacement,{fileId,customData:{...replacement.customData,...e.customData},updated:now,version:(replacement.version||0)+1,versionNonce:e.versionNonce});
+        if(!scene.elements.some(item=>item!==replacement&&!item.isDeleted&&item.fileId===previousFileId))delete scene.files[previousFileId];
+      }else scene.elements.push(e);
       scene.files[fileId] = { id: fileId, mimeType: 'image/png', dshPath: output.path, created: now, lastRetrieved: now };
       paths.add(output.path); index++;
     }

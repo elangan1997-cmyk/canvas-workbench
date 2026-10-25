@@ -128,7 +128,7 @@ def render_local(spec):
         d.rounded_rectangle((0,0,tile.width-1,tile.height-1),radius=max(0,e.get('radius',0)*scale),fill=e.get('fill','#FFFFFF'))
         out.paste(tile.resize(size,Image.Resampling.LANCZOS),(int(e['x']),int(e['y'])))
         engine='local-vector-shape'
-    elif e.get('extractionMode')=='photo':
+    elif e.get('extractionMode')=='photo' or e.get('sourceRegion'):
         x,y,w,h=[int(e[k]) for k in ('x','y','width','height')];tile=source.crop((x,y,x+w,y+h));pixels=tile.load()
         for plate in spec['elements']:
             if plate.get('type')!='shape' or not plate.get('textElementId') or not plate.get('enabled',True):continue
@@ -146,3 +146,39 @@ def render_local(spec):
     else:raise ValueError('当前元素不支持本地结构提取')
     from layered_image import save,info
     save(out,spec['output']);return {**info(out),'engine':engine,'placementIssues':issues}
+
+
+def source_object_region(spec):
+    """Tighten a small product on a simple local surface; exclude separate text.
+    The model chooses the object, connected source pixels measure its boundary.
+    """
+    from PIL import ImageFilter
+    source=Image.open(spec['input']).convert('RGB');e=spec['element'];px=max(24,round(e['width']*.8));py=max(28,round(e['height']*.8))
+    x=max(0,round(e['x']-px));y=max(0,round(e['y']-py));right=min(source.width,round(e['x']+e['width']+px));bottom=min(source.height,round(e['y']+e['height']+py))
+    crop=source.crop((x,y,right,bottom));w,h=crop.size;data=list(crop.getdata());mask=Image.new('L',crop.size);values=[]
+    for yy in range(h):
+        edges=[]
+        for side in [range(min(6,w)),range(max(0,w-6),w)]:edges.append(tuple(median(data[yy*w+xx][k] for xx in side) for k in range(3)))
+        bg=max(edges,key=sum)
+        for xx in range(w):values.append(255 if max(abs(data[yy*w+xx][k]-bg[k]) for k in range(3))>32 else 0)
+    # A thin separator must not connect the cup shadow to the image edge.
+    for yy in range(h):
+        if sum(bool(v) for v in values[yy*w:(yy+1)*w])>w*.75:
+            values[yy*w:(yy+1)*w]=[0]*w
+    mask.putdata(values);mask=mask.filter(ImageFilter.MaxFilter(3));data=mask.tobytes();seen=bytearray(len(data));choices=[]
+    for start,value in enumerate(data):
+        if not value or seen[start]:continue
+        seen[start]=1;q=deque([start]);xs=[];ys=[];overlap=0
+        while q:
+            i=q.popleft();xx,yy=i%w,i//w;xs.append(xx);ys.append(yy)
+            if e['x']<=x+xx<e['x']+e['width'] and e['y']<=y+yy<e['y']+e['height']:overlap+=1
+            for nx,ny in ((xx-1,yy),(xx+1,yy),(xx,yy-1),(xx,yy+1)):
+                if 0<=nx<w and 0<=ny<h:
+                    j=ny*w+nx
+                    if data[j] and not seen[j]:seen[j]=1;q.append(j)
+        a,b,c,d=min(xs),min(ys),max(xs)+1,max(ys)+1
+        if a==0 or b==0 or c==w or d==h or overlap<e['width']*e['height']*.08:continue
+        area=(c-a)*(d-b)
+        if not e['width']*e['height']*.35<area<e['width']*e['height']*4:continue
+        choices.append((overlap,{'x':max(0,x+a-2),'y':max(0,y+b-2),'width':min(source.width,x+c+2)-max(0,x+a-2),'height':min(source.height,y+d+2)-max(0,y+b-2)}))
+    return {'bounds':max(choices,key=lambda item:item[0])[1] if choices else None}

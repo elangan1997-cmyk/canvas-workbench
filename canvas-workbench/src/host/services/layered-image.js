@@ -13,6 +13,10 @@ import { textLayerGeometry } from './native-text-psd.js';
 import { analyzeLayeredImage, extractionPrompt, normalizeLayerElements } from './layered-image-model.js';
 import { buildLayeredIllustratorJsx, buildLayeredPsd, buildLayeredSvg } from './layered-image-export.js';
 import { calibrateLayeredAnalysis, checkLayerLayout, runLayerRefinementScript, hasBlockingLayerQuality, automaticLayerQuality } from './layered-image-refinement.js';
+import { denseSourceStructure } from './layered-source-policy.js';
+import { enhanceLayerRegion } from './layered-image-enhancement.js';
+import { inspectLayerReadback } from './layered-image-readback.js';
+import { refineLayerSourceRegions } from './layered-image-regions.js';
 
 const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 const exists = async path => { try { await access(path); return true; } catch { return false; } };
@@ -63,6 +67,8 @@ export function createLayeredImageService(h, overrides = {}) {
     status: task.status, stage: task.stage, message: task.message, progress: task.progress, error: task.error || '',
     warnings: task.warnings || [], engine: task.engine || '', imageModel: task.imageModel || '', localOnly: task.localOnly === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
     quality: task.quality ? { ...task.quality, reviewAcknowledged: task.qualityAcknowledged === true } : null, analysisModel: task.analysisModel || null, analysisAttempts: task.analysisAttempts || 0,
+    analysisProgress:task.analysisProgress||null,analysisStrategy:task.analysisStrategy||'',analysisComplete:task.analysisComplete===true,
+    assemblyCheck:task.assemblyCheck||null,
     generationAttempts: task.generationAttempts || 0, maxImageRequests: task.maxImageRequests ?? 40,
     sourceUrl: previewUrl(task.source, task.createdAt), previewUrl: task.preview ? previewUrl(task.preview, task.updatedAt) : '',
     outputDirectory: task.directory, storageProject: join(task.directory, '..', '..', '..'),
@@ -166,12 +172,18 @@ export function createLayeredImageService(h, overrides = {}) {
   async function extract(task, e, settings, signal) {
     const output = join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.png');
     const raw = e.reusedRawFile || join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.original');
+    if(await enhanceLayerRegion(task,e,settings,signal,{ctx,pixel,generate,save,verify:overrides.verifyEnhancement}))return;
+    if(e.type==='background'&&task.analysisStrategy==='dense'){
+      const local=await pixel({operation:'source-layout-plate',input:task.source,output,elements:task.elements},signal);
+      e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;e.backgroundQualityIssues=local.issues||[];
+      task.sourcePlateFallbackIds=local.unresolvedTextIds||[];return;
+    }
     if (e.type==='text' && !e.nativeText) {
       const local=await pixel({operation:'source-text',input:task.source,output,element:e},signal);
       e.sourceTextFallback=true;e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;
       return;
     }
-    if (e.type === 'shape' || e.extractionMode === 'photo') {
+    if (e.type === 'shape' || e.extractionMode === 'photo' || e.sourceRegion) {
       const local = await pixel({ operation:'render-structure',input:task.source,output,element:e,elements:task.elements },signal);
       e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;
       e.placementQualityIssues=local.placementIssues||[];return;
@@ -272,7 +284,11 @@ export function createLayeredImageService(h, overrides = {}) {
   async function exportArtifact(task, kind, signal, openAfterExport = false) {
         const prepared = task.elements.map(e => ({ ...e, ...(e.nativeText ? { geometry: textLayerGeometry(e) } : {}) }));
         const manifest = await pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: prepared }, signal);
-        const signature = hash({exporterRevision:2,layers:prepared.map(e => ({ id:e.id, assetKey:e.assetKey, z:e.z, enabled:e.enabled, bounds:e.bounds })),composite:hash(await readFile(manifest.composite))});
+        const highDensity=[];
+        for(const e of prepared.filter(e=>e.enabled&&e.enhancementCheck?.accepted===true&&e.enhancedFile&&isPathWithin(task.directory,e.enhancedFile))){
+          if(await exists(e.enhancedFile))highDensity.push({id:e.id,hash:hash(await readFile(e.enhancedFile))});
+        }
+        const signature = hash({exporterRevision:3,highDensity,layers:prepared.map(e => ({ id:e.id, assetKey:e.assetKey, z:e.z, enabled:e.enabled, bounds:e.bounds })),composite:hash(await readFile(manifest.composite))});
         const checkpoint = task.exportCheckpoint;
         let output, published;
         if (checkpoint?.kind === kind && checkpoint.signature === signature && await exists(checkpoint.published?.path)) {
@@ -287,7 +303,9 @@ export function createLayeredImageService(h, overrides = {}) {
             // ASCII temporary names also avoid legacy Adobe path encodings.
             const elements = [];
             for (const [i, b] of prepared.filter(e => e.enabled).entries()) {
-              const file = join(work, 'layer-' + i + '.png'); await copyFile(b.contentFile || b.file, file); elements.push({ ...b, file });
+              const file = join(work, 'layer-' + i + '.png');
+              const enhanced=b.enhancementCheck?.accepted===true&&b.enhancedFile&&isPathWithin(task.directory,b.enhancedFile)&&await exists(b.enhancedFile)?b.enhancedFile:'';
+              await copyFile(enhanced || b.contentFile || b.file, file); elements.push({ ...b, file });
             }
             const target = join(work, 'layers.ai'), jsxPath = join(work, 'layers.jsx');
             const jsx = buildLayeredIllustratorJsx({ width: task.width, height: task.height, elements, output: target });
@@ -362,7 +380,15 @@ export function createLayeredImageService(h, overrides = {}) {
 
   async function prepareRun(task, body, signal) {
       signal?.throwIfAborted();
+      if(task.analysisStrategy==='dense'&&task.imageGeometryVersion===1){
+        const plan=await refineLayerSourceRegions(ctx,{...task,elements:body.elements||task.elements},pixel,signal);
+        body={...body,elements:plan.elements};task.imageGeometryVersion=plan.version;
+      }
       let elements = normalizeLayerElements(body.elements || task.elements, task.width, task.height);
+      if(task.analysisStrategy==='dense'){
+        const resolved=denseSourceStructure(elements);elements=normalizeLayerElements(resolved.elements,task.width,task.height);
+        task.analysisWarnings=[...new Set([...(task.analysisWarnings||[]),...resolved.warnings])];
+      }
       if (!task.flat && elements.some(e=>e.enabled && e.type==='text' &&
         (/\r|\n/.test(e.text) || (!e.nativeText && e.textMode!=='image' && !e.sourceTextFallback && task.autoRefine)))) {
         // Old paused tasks and edited fonts use the same automatic local policy
@@ -411,7 +437,7 @@ export function createLayeredImageService(h, overrides = {}) {
         if(previous?.requestState==='unknown')e.requestState='unknown';
         if (e.type === 'background' && previous?.rawFile && removalKey(task.elements)===removalKey(elements) && previous.description===e.description && previous.revision===e.revision && task.engine===engine && task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel) && isPathWithin(task.directory,previous.rawFile)) e.reusedRawFile=previous.rawFile;
         if (previous?.assetKey === key) Object.assign(e, { file: previous.file, rawFile: previous.rawFile, status: previous.status, requestState: previous.requestState,
-          extractionEngine: previous.extractionEngine, platePrepared: previous.platePrepared, plateVersion: previous.plateVersion, alignment: previous.alignment, actualPixels: previous.actualPixels, returnedFraming: previous.returnedFraming, placementQualityIssues: previous.placementQualityIssues, assetTime: previous.assetTime, contentFile: previous.contentFile, bounds: previous.bounds });
+          extractionEngine: previous.extractionEngine, enhancedFile:previous.enhancedFile,enhancementCheck:previous.enhancementCheck,platePrepared: previous.platePrepared, plateVersion: previous.plateVersion, alignment: previous.alignment, actualPixels: previous.actualPixels, returnedFraming: previous.returnedFraming, placementQualityIssues: previous.placementQualityIssues, assetTime: previous.assetTime, contentFile: previous.contentFile, bounds: previous.bounds });
       }
       if (!body.retryUnknown && elements.some(e => e.enabled && e.requestState === 'unknown')) throw new Error('有请求结果未知，请先核对服务记录；确认仍需重试时勾选“接受未知请求可能重复消耗额度”');
       task.elements = elements; task.engine = engine; task.retryUnknown = body.retryUnknown === true;
@@ -451,7 +477,7 @@ export function createLayeredImageService(h, overrides = {}) {
         const failed = order.filter(e => e.status !== 'complete');
         if (failed.length) throw new Error('已保存 '+done+'/'+order.length+' 个图层；以下步骤无法自动完成：'+failed.map(e => e.name+'：'+e.error).join('；').slice(0,1000));
         const layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
-        const overlapping=new Set(layoutIssues.flatMap(i=>[i.id,i.otherId]).filter(Boolean));
+        const overlapping=new Set([...layoutIssues.flatMap(i=>[i.id,i.otherId]).filter(Boolean),...(task.sourcePlateFallbackIds||[])]);
         for (const e of order.filter(e=>e.nativeText && overlapping.has(e.id))) {
           e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;
           await extract(task,e,settings,signal);
@@ -459,8 +485,44 @@ export function createLayeredImageService(h, overrides = {}) {
           e.assetTime=(await stat(e.contentFile)).mtimeMs;
           task.warnings.push('“'+e.name+'”文字排版超界或重叠，已自动改用原图文字区域，避免重复排版');
         }
-        const manifest = await recoverLocal(task, '图层装配', () => pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: enabled }, signal), signal);
-        const issues = [...new Map([...(task.quality?.issues || []).filter(i => i.severity === 'warning' && !['layer-content-bounds-review','background-size-adapted','covered-photo-region-local-fill'].includes(i.code)), ...layoutIssues,
+        let manifest = await recoverLocal(task, '图层装配', () => pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: enabled }, signal), signal);
+        if(task.analysisStrategy==='dense'&&(overrides.readback||ctx.llm?.prepareCall)){
+          const signature=hash({readbackRevision:2,image:hash(await readFile(manifest.preview))});
+          if(task.assemblyCheck?.signature!==signature){
+            task.stage='verification';task.message='正在对照原图检查装配后的文字、价格和版式…';await save(task);
+            try{
+              const discardExactCopies=async checked=>{
+                const copies=task.elements.filter(e=>checked.issues.some(i=>i.id===e.id)&&((e.type==='text'&&!e.nativeText)||(e.sourceRegion&&!e.enhancedFile)));
+                if(!copies.length)return checked;
+                const result=await pixel({operation:'verify-source-regions',source:task.source,input:manifest.preview,elements:copies},signal);
+                return {...checked,issues:checked.issues.filter(i=>!(result.exact||[]).includes(i.id)),exactSourceIds:result.exact||[]};
+              };
+              const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)])));
+              await writeFile(join(task.directory,'assembly-check.json'),JSON.stringify(checked,null,2));
+              const repaired=[];
+              for(const issue of checked.issues){
+                const e=task.elements.find(e=>e.enabled&&e.id===issue.id);
+                if(!e||e.type==='background')continue;
+                if(e.type==='text'&&e.nativeText){e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;}
+                else if(e.type==='shape'||e.enhancedFile){e.type='image';e.sourceRegion=true;e.modeLocked=true;e.extractionMode='photo';e.resolutionPolicy='preserve';delete e.enhancedFile;e.enhancementCheck={accepted:false,reason:issue.reason};}
+                else continue;
+                await extract(task,e,settings,signal);
+                const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;
+                repaired.push(e.id);task.warnings.push('“'+e.name+'”装配对照发现问题，已自动保留原图区域：'+issue.reason);
+              }
+              if(repaired.length){
+                const bg=task.elements.find(e=>e.enabled&&e.type==='background');await extract(task,bg,settings,signal);const crop=await pixel({operation:'crop-layer',input:bg.file,output:bg.contentFile},signal);bg.bounds=crop.bounds;
+                manifest=await pixel({operation:'assemble',directory:task.directory,width:task.width,height:task.height,elements:enabled},signal);
+              }
+              let finalCheck=checked;
+              if(repaired.length)finalCheck=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)])));
+              task.assemblyCheck={signature:hash({readbackRevision:2,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],verified:finalCheck.issues.length===0};
+              if(finalCheck.issues.length)task.warnings.push('装配对照仍有 '+finalCheck.issues.length+' 项视觉差异，详情已保留在任务记录中');
+            }catch(error){signal.throwIfAborted();task.warnings.push('装配视觉核验未完成，已保留文件与说明：'+String(error.message||error));}
+          }
+        }
+        const issues = [...new Map([...(task.quality?.issues || []).filter(i => i.severity === 'warning' && !['layer-content-bounds-review','background-size-adapted','covered-photo-region-local-fill','assembly-readback-difference'].includes(i.code)), ...layoutIssues,
+          ...(task.assemblyCheck?.remainingIssues||[]).map(i=>({id:i.id,code:'assembly-readback-difference',severity:'warning',message:i.reason})),
           ...task.elements.flatMap(e => [...(e.backgroundQualityIssues || []), ...(e.placementQualityIssues || [])])].map(issue => [[issue.id,issue.otherId,issue.code].join(':'),issue])).values()];
         task.quality = automaticLayerQuality({ ...(task.quality || {}), issues });
         task.preview = manifest.preview; task.status = 'ready'; task.stage = 'complete'; task.progress = 100;
@@ -471,6 +533,45 @@ export function createLayeredImageService(h, overrides = {}) {
         if (task.autoExportFormat) {
           signal.throwIfAborted(); task.status = 'running'; task.stage = 'export'; task.message = '正在自动导出 ' + task.autoExportFormat.toUpperCase() + '…'; await save(task);
           await recoverLocal(task, '导出文件', () => exportArtifact(task, task.autoExportFormat, signal, task.openAfterExport), signal);
+        }
+  }
+
+  async function executeAnalysis(task,body,signal,automaticSettings=null) {
+        const result = body.flat ? { elements: [{ id: 'original', type: 'background', name: '原图（普通PSD转换）', x: 0, y: 0, width: task.width, height: task.height }], warnings: [] }
+          : await analyze(ctx, { bytes: await readFile(task.source), mime: 'image/png' }, body, task.width, task.height, AbortSignal.any([signal, AbortSignal.timeout(900000)]),{
+            directory:task.directory,
+            ocr:signal=>runLayerRefinementScript(h,{input:task.source,lang:'chi_sim+eng',psm:'11'},signal,'ocr_image.py'),
+            crop:(region,signal)=>pixel({operation:'analysis-crop',input:task.source,output:region.output,region,exclude:region.exclude||[]},signal),
+            refineImages:(elements,signal)=>refineLayerSourceRegions(ctx,{...task,elements},pixel,signal),
+            progress:async value=>{task.analysisProgress=value;task.stage='analysis';task.message=value.message;task.progress=4;await save(task);}
+          });
+        signal.throwIfAborted();
+        task.elements = normalizeLayerElements(result.elements, task.width, task.height);
+        for(const e of task.elements)if(e.type==='text')e.recognitionBounds={x:e.x,y:e.y,width:e.width,height:e.height};
+        task.analysisWarnings = result.warnings || []; task.warnings = [...task.analysisWarnings]; task.analysisAttempts = result.analysisAttempts || (body.flat ? 0 : 1);
+        task.semanticPolicyVersion=result.semanticPolicyVersion||1;
+        task.analysisComplete=true;task.analysisStrategy=result.analysisStrategy||'whole';
+        task.imageGeometryVersion=result.imageGeometryVersion||0;
+        if (result.rawAnalysis) await writeFile(join(task.directory, 'model-analysis.json'), JSON.stringify(result.rawAnalysis, null, 2));
+        if (task.autoRefine && !body.flat) {
+          task.stage = 'calibration'; task.message = '正在校准原图文字位置、候选字体和基线…'; await save(task);
+          try { await calibrate(task, {...body,editableText:task.editableText}, signal); }
+          catch (error) {
+            signal.throwIfAborted();
+            task.elements=task.elements.map(e=>e.type==='text'?{...e,nativeText:false,fontAccepted:false,sourceTextFallback:true}:e);
+            task.quality=automaticLayerQuality({issues:[{code:'calibration-failed',severity:'review',message:'本地文字校准未完成，已自动保留原字形区域：'+String(error.message||error).slice(0,400)}]});
+          }
+        }
+        task.status = task.automatic ? 'running' : 'review'; task.stage = task.automatic ? 'preparing' : 'review'; task.progress = task.automatic ? 10 : 100;
+        task.message = task.automatic ? '已建立原图坐标清单，正在自动处理图层' : '已建立清单，可调整或直接生成';
+        if (task.automatic) {
+          if (hasBlockingLayerQuality(task.quality)) {
+            task.status = 'needs_review'; task.stage = 'quality'; task.message = '图层结构存在无效数据，已保留原因，请重新分析'; return;
+          }
+          automaticSettings=automaticSettings||{...await settingsFor(),dshCodexModel:dshCodexImageModel(ctx)};
+          const imageSettingsOverride = {...Object.fromEntries(['apiBaseUrl','apiModel','dshCodexModel'].map(key => [key,automaticSettings[key]])),...(body.imageSettingsOverride||{})};
+          const settings = await prepareRun(task, { ...body,elements:undefined, storageScope: undefined, engine: body.engine || automaticSettings.engine, imageSettingsOverride },signal);
+          await save(task); await executeRun(task, settings, signal);
         }
   }
 
@@ -490,36 +591,10 @@ export function createLayeredImageService(h, overrides = {}) {
         width: dimensions.width, height: dimensions.height, sourceCheckerboard: dimensions.checkerboard === true, status: 'running', stage: 'analysis', message: '正在分析图层与前后关系…', progress: 3,
         createdAt: Date.now(), elements: [], exports: [], warnings: [], error: '', generationAttempts: 0,
         analysisModel: body.flat ? null : { provider: body.provider, model: body.model, reasoningEffort: body.reasoningEffort || '' },
+        analysisComplete:false,analysisOptions:{editableText:body.editableText!==false,fontPolicy:body.fontPolicy||'substitute',localOnly:body.localOnly===true},
         automatic: body.autoRun === true, autoRefine: body.autoRefine === true, editableText:body.editableText!==false, flat: body.flat === true, workspaceRoot: body.storageScope === 'workspace' ? body.cwd : projectDirectory(body.cwd, body.project) };
       cache.set(directory, task);
-      start(task, async signal => {
-        const result = body.flat ? { elements: [{ id: 'original', type: 'background', name: '原图（普通PSD转换）', x: 0, y: 0, width: task.width, height: task.height }], warnings: [] }
-          : await analyze(ctx, { bytes: await readFile(source), mime: 'image/png' }, body, task.width, task.height, AbortSignal.any([signal, AbortSignal.timeout(480000)]));
-        signal.throwIfAborted();
-        task.elements = normalizeLayerElements(result.elements, task.width, task.height);
-        task.analysisWarnings = result.warnings || []; task.warnings = [...task.analysisWarnings]; task.analysisAttempts = result.analysisAttempts || (body.flat ? 0 : 1);
-        task.semanticPolicyVersion=result.semanticPolicyVersion||1;
-        if (result.rawAnalysis) await writeFile(join(task.directory, 'model-analysis.json'), JSON.stringify(result.rawAnalysis, null, 2));
-        if (task.autoRefine && !body.flat) {
-          task.stage = 'calibration'; task.message = '正在校准原图文字位置、候选字体和基线…'; await save(task);
-          try { await calibrate(task, {...body,editableText:task.editableText}, signal); }
-          catch (error) {
-            signal.throwIfAborted();
-            task.elements=task.elements.map(e=>e.type==='text'?{...e,nativeText:false,fontAccepted:false,sourceTextFallback:true}:e);
-            task.quality=automaticLayerQuality({issues:[{code:'calibration-failed',severity:'review',message:'本地文字校准未完成，已自动保留原字形区域：'+String(error.message||error).slice(0,400)}]});
-          }
-        }
-        task.status = task.automatic ? 'running' : 'review'; task.stage = task.automatic ? 'preparing' : 'review'; task.progress = task.automatic ? 10 : 100;
-        task.message = task.automatic ? '已建立原图坐标清单，正在自动处理图层' : '已建立清单，可调整或直接生成';
-        if (task.automatic) {
-          if (hasBlockingLayerQuality(task.quality)) {
-            task.status = 'needs_review'; task.stage = 'quality'; task.message = '图层结构存在无效数据，已保留原因，请重新分析'; return;
-          }
-          const imageSettingsOverride = Object.fromEntries(['apiBaseUrl','apiModel','dshCodexModel'].map(key => [key,automaticSettings[key]]));
-          const settings = await prepareRun(task, { ...body, storageScope: undefined, engine: body.engine || automaticSettings.engine, imageSettingsOverride },signal);
-          await save(task); await executeRun(task, settings, signal);
-        }
-      });
+      start(task,signal=>executeAnalysis(task,body,signal,automaticSettings));
       return present(task);
     },
     async get(body) { return present(await load(body, body.id)); },
@@ -533,6 +608,11 @@ export function createLayeredImageService(h, overrides = {}) {
     },
     async run(body) {
       const task = await load(body, body.id); ensureIdle(task);
+      if(!task.elements.length && task.analysisModel && !task.flat){
+        task.automatic=true;task.status='running';task.stage='analysis';task.error='';task.message='正在恢复原任务的结构与文字分区分析…';
+        const options={...(task.analysisOptions||{editableText:task.editableText!==false,fontPolicy:'substitute'}),...task.analysisModel,...body,autoRun:true};
+        task.autoRefine=true;start(task,signal=>executeAnalysis(task,options,signal));return present(task);
+      }
       const controller=new AbortController();preparing.set(task.directory,controller);
       let settings;
       try { settings = await prepareRun(task, body,controller.signal); } finally { preparing.delete(task.directory); }
@@ -562,6 +642,11 @@ export function createLayeredImageService(h, overrides = {}) {
       const task = await load(body, body.id); ensureIdle(task); task.autoRefine = true;
       task.status = 'running'; task.stage = 'calibration'; task.message = '正在按原图重新校准文字和布局…';
       start(task, async signal => {
+        if(task.analysisStrategy==='dense'&&task.imageGeometryVersion!==2&&ctx.llm?.prepareCall){
+          task.message='正在按局部原像素复查完整商品边界…';await save(task);
+          try{const plan=await refineLayerSourceRegions(ctx,task,pixel,signal);task.elements=plan.elements;task.imageGeometryVersion=plan.version;task.analysisWarnings=[...(task.analysisWarnings||[]),...plan.warnings];}
+          catch(error){signal.throwIfAborted();task.warnings.push('局部商品边界复查未完成：'+String(error.message||error));}
+        }
         await calibrate(task, body, signal);
         task.status = 'review'; task.stage = 'review'; task.message = '校准完成，可直接生成；成功素材会按内容复用';
       });

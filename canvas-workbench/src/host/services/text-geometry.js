@@ -25,7 +25,7 @@ export function refineTextGeometry(blocks, lines, selections = [], { minLength =
     if (text.length < minLength) return block;
     const candidates = available.filter((line) => {
       const value = compact(line.text);
-      const nearby = Math.abs(line.y - block.y) <= Math.max(100, Number(block.height || 0) * 2);
+      const nearby = Math.abs(line.y - block.y) <= Math.max(12, Math.min(Number(block.height || 0), Number(line.height || 0)) * .8);
       const matches = text.length < 3 ? value === text : value.includes(text) || similarLine(value, text);
       return nearby && matches && intersects({ ...block, y: line.y, height: line.height }, line);
     }).sort((a, b) => Number(!compact(a.text).includes(text)) - Number(!compact(b.text).includes(text)) || Math.abs(a.y - block.y) - Math.abs(b.y - block.y));

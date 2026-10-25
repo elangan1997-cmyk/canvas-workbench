@@ -120,7 +120,12 @@ def source_text(spec):
     The original region includes its local backdrop, explicitly reported as a
     raster fallback rather than pretending it is editable or recovered glyphs.
     """
-    source=load(spec['input']);e=spec['element'];b=e.get('cleanupBounds') or e
+    source=load(spec['input']);e=spec['element'];b=dict(e.get('cleanupBounds') or e)
+    # The measured ink cluster may cover only a dot or part of a word. Raster
+    # fallback must preserve the entire recognized region as well as that ink.
+    if e.get('cleanupBounds'):
+        right=max(b['x']+b['width'],e['x']+e['width']);bottom=max(b['y']+b['height'],e['y']+e['height'])
+        b['x']=min(b['x'],e['x']);b['y']=min(b['y'],e['y']);b['width']=right-b['x'];b['height']=bottom-b['y']
     values=[b.get(k) for k in ('x','y','width','height')]
     if any(not isinstance(v,(int,float)) or isinstance(v,bool) or not math.isfinite(v) for v in values):raise ValueError('文字区域坐标无效')
     x,y,w,h=values
@@ -329,6 +334,44 @@ def run(spec):
         if spec.get('output'):
             save(im, spec['output'])
         return info(im)
+    if op == 'enhanced-region':
+        from PIL import ImageOps
+        im=load(spec['input']);source=load(spec['source']);e=spec['element']
+        x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
+        if min(w,h)<1 or x<0 or y<0 or x+w>source.width or y+h>source.height:raise ValueError('高清区域无效')
+        if abs(math.log((im.width/im.height)/(w/h)))>.12:raise ValueError('高清素材构图比例与原区域不符')
+        scale=max(im.width/w,im.height/h);size=(max(w,round(w*scale)),max(h,round(h*scale)))
+        if size[0]*size[1]>MAX_PIXELS:raise ValueError('高清素材超过2000万像素')
+        # Small aspect rounding differences use original edge pixels as padding,
+        # never stretch the subject or crop it. AI keeps this high-density PNG.
+        tile=source.crop((x,y,x+w,y+h)).resize(size,Image.Resampling.LANCZOS)
+        sharp=ImageOps.contain(im,size,Image.Resampling.LANCZOS);tile.alpha_composite(sharp,((size[0]-sharp.width)//2,(size[1]-sharp.height)//2))
+        save(tile,spec['highOutput']);placed=Image.new('RGBA',source.size);placed.paste(tile.resize((w,h),Image.Resampling.LANCZOS),(x,y));save(placed,spec['output'])
+        return {**info(placed),'highResolutionPixels':list(size)}
+    if op == 'verify-source-regions':
+        from PIL import ImageChops
+        source=load(spec['source']);preview=load(spec['input'])
+        if source.size!=preview.size:raise ValueError('核验画布尺寸不同')
+        exact=[]
+        for e in spec['elements']:
+            b=e.get('bounds') or e;x,y,w,h=[int(b[k]) for k in ('x','y','width','height')]
+            if min(w,h)>0 and x>=0 and y>=0 and x+w<=source.width and y+h<=source.height:
+                delta=ImageChops.difference(source.crop((x,y,x+w,y+h)),preview.crop((x,y,x+w,y+h)))
+                if not any(channel.getbbox() for channel in delta.split()):exact.append(e['id'])
+        return {'exact':exact}
+    if op == 'source-object-region':
+        from layered_structure import source_object_region
+        return source_object_region(spec)
+    if op == 'analysis-crop':
+        im=load(spec['input']);r=spec['region'];x,y,w,h=[int(r[k]) for k in ('x','y','width','height')]
+        if x<0 or y<0 or w<1 or h<1 or x+w>im.width or y+h>im.height:raise ValueError('分析区域无效')
+        crop=im.crop((x,y,x+w,y+h));draw=ImageDraw.Draw(crop)
+        for e in spec.get('exclude',[]):
+            if e.get('enabled',True):draw.rectangle((e['x']-x,e['y']-y,e['x']+e['width']-x-1,e['y']+e['height']-y-1),fill='white')
+        save(crop,spec['output']);return info(crop)
+    if op == 'source-layout-plate':
+        from layered_source_plate import source_plate
+        return source_plate(spec)
     if op == 'structure':
         from layered_structure import inspect_structure
         return inspect_structure(spec)

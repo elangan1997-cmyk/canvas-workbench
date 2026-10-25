@@ -22,14 +22,15 @@ export function automationToolSpec(service, getContext) {
       project_name: { type: 'string' }, recursive: { type: 'boolean' }, max_files: { type: 'integer', description: '默认100，最高500；超出时拒绝静默截断' },
       formats: { type: 'array', items: { type: 'string', enum: ['psd', 'ai', 'svg'] } },
       editable_text: { type: 'boolean', description: '拆层时默认true，识别普通文字为可编辑文字层' },
-      font_policy: { type: 'string', enum: ['substitute', 'strict'], description: '默认substitute，使用已安装的近似字体并记录差异；strict低置信时等待复核' },
+      font_policy: { type: 'string', enum: ['substitute', 'strict'], description: '默认substitute，使用已安装的近似字体并记录差异；strict低置信时自动保留原字形区域' },
       prompt: { type: 'string' }, region: box,
       allow_generation: { type: 'boolean', description: '是否允许当前工作台图像引擎重建素材；默认false' },
       max_image_requests: { type: 'integer', description: '本批任务累计的图像请求硬上限，默认0；恢复任务时可提高，未知请求也计入' },
       retry_unknown: { type: 'boolean', description: '仅在核对上次未知请求后才设为true，可能重复消耗额度' },
       open_canvas: { type: 'boolean', description: '完成后自动展示结果项目，默认true；false仅后台生成' },
       job_id: { type: 'string' }, wait_ms: { type: 'integer', description: 'status可等待0至10000毫秒，减少频繁查询' },
-      item_id: { type: 'string', description: 'review时指定任务中的item编号；返回完整图层、字体候选及质量问题，默认打开插件核对面板，open_canvas=false仅读取' },
+      item_id: { type: 'string', description: 'review时指定查看的文件；resume且reprocess=true时指定重做的文件编号，省略则重做整批' },
+      reprocess: { type: 'boolean', description: 'resume时显式重做已完成项，保留历史和累计请求额度，更新原画布结果；默认false，仅继续未完成项' },
       request_id: { type: 'string', description: '提交幂等编号；请求响应未知时使用相同编号重试可取回原任务，不会重复处理' },
       base_revision: { type: 'number', description: 'arrange需提交inspect所返回的revision，防止覆盖较新的画布操作' },
       patches: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
@@ -48,7 +49,7 @@ export function automationToolSpec(service, getContext) {
         sourceProject: args.source_project, project: args.source_project || current.project, outputParent: args.output_parent, outputProject: args.output_project,
         projectName: args.project_name, recursive: args.recursive, maxFiles: args.max_files, formats: args.formats, editableText: args.editable_text,
         fontPolicy: args.font_policy, prompt: args.prompt, region: args.region, allowGeneration: args.allow_generation, maxImageRequests: args.max_image_requests,
-        retryUnknown: args.retry_unknown, openCanvas: args.open_canvas, id: args.job_id, itemId: args.item_id, requestId: args.request_id, patches: args.patches, baseRevision: args.base_revision };
+        retryUnknown: args.retry_unknown, openCanvas: args.open_canvas, id: args.job_id, itemId: args.item_id, reprocess: args.reprocess, requestId: args.request_id, patches: args.patches, baseRevision: args.base_revision };
       let value;
       if (args.action === 'capabilities') value = { operations: ['layered_export', 'flat_psd', 'remove_background', 'edit_image'], limits: { maxFiles: 500, imageBytes: 32 * 1024 * 1024 },
         currentProject: current.project || '', currentWorkspace: current.cwd || '', defaultOutputParent: current.cwd || '', currentModel: current.modelSelection || null, background: true, restartRecovery: true, originalsPreserved: true };

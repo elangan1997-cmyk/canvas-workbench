@@ -30,6 +30,12 @@ test('folder plans exclude hidden/symlink files, freeze exact counts, reject tru
   await assert.rejects(f.service.plan({ ...f.body, folder: '', paths: [join(f.input, 'missing.png')] }), /没有可处理/);
 });
 
+test('extensionless image attachments are accepted by their real header without renaming the input',async t=>{
+ const f=await fixture(t),path=join(f.input,'attachment-no-extension'),data=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6unwAAAAASUVORK5CYII=','base64');await writeFile(path,data);await writeFile(join(f.input,'notes-no-extension'),'not an image');
+ const plan=await f.service.plan({...f.body,folder:'',paths:[path]});assert.equal(plan.count,1);assert.equal(plan.files[0].mime,'image/png');assert.equal(plan.files[0].path,path);assert.deepEqual(await readFile(path),data);
+ assert.equal((await f.service.plan(f.body)).count,3);
+});
+
 test('batch isolates failures, preserves originals, resumes only failed files and emits one persistent project event', async t => {
   let fail = true; const calls = [];
   const f = await fixture(t, async (job, item) => {
@@ -60,6 +66,26 @@ test('queued cancellation prevents execution; active cancellation stops followin
   const a = await f.service.submit(f.body); await start;
   const b = await f.service.submit({ ...f.body, projectName: 'second job' }); await f.service.cancel(b); await f.service.cancel(a);
   assert.equal((await f.service.settled(a)).status, 'cancelled'); assert.equal((await f.service.settled(b)).status, 'cancelled'); assert.equal(calls, 1);
+});
+
+test('explicit item reprocess updates its existing canvas object without rerunning adjacent completed files', async t => {
+  const calls=[];
+  const f=await fixture(t,async(job,item)=>{
+    calls.push(item.id); const path=join(job.project,'assets',item.id+'-'+calls.length+'.ai');await writeFile(path,'result');
+    return [{path,kind:'ai',width:200,height:100}];
+  });
+  const created=await f.service.submit(f.body);let job=await f.service.settled(created);
+  const before=await readAutomationCanvas(job.project),old=before.elements[0],neighbor=before.elements[1];
+  await patchAutomationCanvas(f.h,job.project,[{id:old.id,x:420,y:300,width:640,height:320}],before.dshMeta.revision);
+  await f.service.resume(created);assert.deepEqual(calls,['item-1','item-2']);
+  await assert.rejects(f.service.resume({...created,reprocess:true,itemId:'missing'}),/不存在/);
+  await f.service.resume({...created,reprocess:true,itemId:'item-1'});job=await f.service.settled(created);
+  assert.equal(job.status,'completed');assert.deepEqual(calls,['item-1','item-2','item-1']);
+  const after=await readAutomationCanvas(job.project),updated=after.elements.find(e=>e.id===old.id);
+  assert.equal(after.elements.length,2);assert.equal(updated.x,420);assert.equal(updated.y,300);assert.equal(updated.width,640);assert.equal(updated.height,320);
+  assert.notEqual(updated.fileId,old.fileId);assert.equal(after.files[old.fileId],undefined);
+  assert.equal(updated.customData.dshSourcePath,job.items[0].outputs[0].path);assert.deepEqual(after.elements[1],neighbor);
+  assert.equal(job.items[0].previousOutputs[0].path,old.customData.dshSourcePath);assert.equal(job.imageRequestsUsed,0);
 });
 
 test('restart marks submitted edits unknown, never resends without explicit retry and keeps request budget', async t => {

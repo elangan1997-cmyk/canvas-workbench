@@ -5,6 +5,7 @@ import { PLUGIN_ROOT } from '../vendor-assets.js';
 import { runPythonSpec } from './python-launch.js';
 import { refineTextGeometry } from './text-geometry.js';
 import { verifyLayerTextContent } from './layered-image-model.js';
+import { MAX_LAYER_ELEMENTS } from './layered-image-limits.js';
 
 export async function runLayerRefinementScript(h, spec, signal, script = 'refine_layered_text.py') {
   signal?.throwIfAborted();
@@ -31,20 +32,44 @@ export function hasBlockingLayerQuality(quality) {
 }
 
 export function splitLayerTextLines(elements) {
-  let room = 40-elements.length;
+  let room = MAX_LAYER_ELEMENTS-elements.length;
   const ids = new Set(elements.map(e=>e.id));
   return elements.flatMap(e=>{
     const lines=String(e.text||'').replace(/\r\n?/g,'\n').split('\n');
     if (e.type!=='text' || lines.length<2 || lines.some(line=>!line.trim()) || lines.length-1>room || Math.abs(e.rotation||0)>2) return [e];
     const children=lines.map((text,i)=>{
       const baseId=e.id.slice(0,45)+'-line-'+(i+1);let id=baseId,serial=1;while(ids.has(id))id=baseId+'-'+(++serial);ids.add(id);
-      const {cleanupBounds,textFit,fontCandidates,...base}=e;
+      const {cleanupBounds,textFit,fontCandidates,recognitionBounds,...base}=e;
       return {...base,id,text:text.trim(),name:e.name+'·第'+(i+1)+'行',textGroupId:e.textGroupId||e.id,
         y:e.y+Math.floor(e.height*i/lines.length),height:Math.max(1,Math.floor(e.height*(i+1)/lines.length)-Math.floor(e.height*i/lines.length)),
         z:e.z+i*.001,fontAccepted:false};
     });
     room-=lines.length-1;return children;
   });
+}
+
+export async function restoreRecognitionGeometry(elements,directory,ocr=[]){
+  const compact=s=>String(s||'').normalize('NFKC').replace(/\s+/g,'');let candidates=[];
+  if(elements.some(e=>e.type==='text'&&!e.recognitionBounds&&!e.geometryLocked)){
+    try{
+      const manifest=JSON.parse(await readFile(join(directory,'analysis','manifest.json'),'utf8'));
+      for(const id of manifest.completed||[])if(/^tile-\d+-\d+(?:-[ab])*$/.test(id)){
+        const tile=JSON.parse(await readFile(join(directory,'analysis',id+'.json'),'utf8'));if(Array.isArray(tile.result))candidates.push(...tile.result);
+      }
+    }catch{}
+  }
+  for(const e of elements){
+    if(e.type!=='text'||e.geometryLocked)continue;
+    let b=e.recognitionBounds;
+    if(!b){
+      const pool=e.textMode==='image'?ocr:candidates;
+      b=pool.filter(r=>compact(r.text)===compact(e.text)&&Math.abs(r.y-e.y)<=Math.max(60,e.height*2))
+        .sort((a,b)=>(Math.abs(a.y-e.y)*5+Math.abs(a.x-e.x))-(Math.abs(b.y-e.y)*5+Math.abs(b.x-e.x)))[0]||e;
+      e.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,b[k]]));
+    }
+    Object.assign(e,e.recognitionBounds);
+  }
+  return elements;
 }
 
 export function layerTextConflicts(elements,lines) {
@@ -63,12 +88,30 @@ export function layerTextConflicts(elements,lines) {
   });
 }
 
+export function suppressOverlappingOcrRows(elements){
+  const compact=s=>String(s||'').normalize('NFKC').replace(/\s+/g,'');let count=0;
+  const native=elements.filter(e=>e.enabled&&e.type==='text'&&e.nativeText);
+  for(const e of elements){
+    if(!e.enabled||e.type!=='text'||e.modeLocked||!(e.sourceTextSupplement||e.textMode==='image'))continue;
+    const row=e.cleanupBounds||e;
+    if(!native.some(n=>{
+      const b=n.cleanupBounds||n,area=Math.max(0,Math.min(row.x+row.width,b.x+b.width)-Math.max(row.x,b.x))*Math.max(0,Math.min(row.y+row.height,b.y+b.height)-Math.max(row.y,b.y));
+      return compact(e.text).includes(compact(n.text))&&area>=b.width*b.height*.4;
+    }))continue;
+    e.enabled=false;e.retainedInBackground=true;count++;
+  }
+  return count;
+}
+
 /** OCR supplies geometry, while the selected chat model owns text content and object semantics. */
 export async function calibrateLayeredAnalysis(h, task, options, signal) {
   let elements = splitLayerTextLines(task.elements), warnings = [], issues = [], refinedCount = 0;
-  const unresolvedContent=new Set();
+  const unresolvedContent=new Set(); let ocrLines=[];
   try {
-    const local = await runLayerRefinementScript(h, { input: task.source, lang: 'chi_sim+eng', psm: '11' }, signal, 'ocr_image.py');
+    let local;try{local=JSON.parse(await readFile(join(task.directory,'local-ocr.json'),'utf8'));if(!Array.isArray(local.blocks))local=null;}catch{}
+    if(!local)local=await runLayerRefinementScript(h, { input: task.source, lang: 'chi_sim+eng', psm: '11' }, signal, 'ocr_image.py');
+    ocrLines=local.blocks||[];
+    await restoreRecognitionGeometry(elements,task.directory,ocrLines);
     await writeFile(join(task.directory, 'local-ocr.json'), JSON.stringify(local, null, 2));
     const text = elements.filter(e => e.type === 'text');
     const refined = refineTextGeometry(text, local.blocks || [], [], { minLength: 2 }); refinedCount = refined.refinedCount;
@@ -108,7 +151,8 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
     warnings.push(decorations.length + ' 个细线或小装饰已合并到背景，保留原图像素');
   }
   if (elements.some(e => e.type === 'text')) {
-    const refined = await runLayerRefinementScript(h, { operation: 'refine', input: task.source, elements }, signal);
+    const refined = await runLayerRefinementScript(h, { operation: 'refine', input: task.source, elements,
+      ...(task.analysisStrategy==='dense'?{ocrLines}: {}) }, signal);
     elements = refined.elements; issues.push(...(refined.issues || [])); warnings.push(...(refined.warnings || []));
     for (const e of elements) if (e.type === 'text' && e.enabled) {
         const errors = issues.filter(i => i.id === e.id && ['error', 'review'].includes(i.severity));
@@ -120,6 +164,10 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
         } else delete e.sourceTextFallback;
     }
   }
+  if(task.analysisStrategy==='dense'){
+    const count=suppressOverlappingOcrRows(elements);
+    if(count)warnings.push(count+' 个OCR补漏整行不再覆盖已校准的独立文字；未拆出的原字仍保留在原背景');
+  }
   for (const e of elements) if (e.geometryIssues?.length) issues.push({ id: e.id, code: 'invalid-geometry', severity: 'error', message: '元素坐标或尺寸缺失，请重新识别' });
   const quality = automaticLayerQuality({ issues, refinedCount, fontPolicy: options.fontPolicy === 'strict' ? 'strict' : 'substitute', decorationsMerged: decorations.map(e => ({ id: e.id, name: e.name })) });
   await writeFile(join(task.directory, 'calibration.json'), JSON.stringify({ elements, quality, warnings }, null, 2));
@@ -128,12 +176,13 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
 
 export function checkLayerLayout(elements, width, height) {
   const issues = [];
-  const texts = elements.filter(e => e.enabled && e.nativeText && e.bounds);
+  const texts = elements.filter(e => e.enabled && e.type==='text' && e.bounds);
   for (let i = 0; i < texts.length; i++) {
     const a = texts[i].bounds;
-    if (a.x < 0 || a.y < 0 || a.x + a.width > width || a.y + a.height > height) issues.push({ id: texts[i].id, code: 'text-outside-canvas', severity: 'error', message: '文字超出画布' });
+    if (texts[i].nativeText&&(a.x < 0 || a.y < 0 || a.x + a.width > width || a.y + a.height > height)) issues.push({ id: texts[i].id, code: 'text-outside-canvas', severity: 'error', message: '文字超出画布' });
     for (let j = i + 1; j < texts.length; j++) {
       const b = texts[j].bounds, area = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+      if(!texts[i].nativeText&&!texts[j].nativeText)continue;
       if (area > Math.min(a.width * a.height, b.width * b.height) * .04) issues.push({ id: texts[i].id, otherId: texts[j].id, code: 'text-overlap', severity: 'review', message: texts[i].name + ' 与 ' + texts[j].name + ' 可能重叠，请核对排版' });
     }
   }

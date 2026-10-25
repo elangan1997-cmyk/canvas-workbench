@@ -80,7 +80,8 @@ async function analyzeTextWithCurrentModel(ctx, uploaded, body, simplified, sign
   const attachment = await ctx.attachments.saveImage({ data: new Uint8Array(uploaded.bytes), mediaType, name: String(body.name || '画布图片') });
   const info = await ctx.llm.resolveModelInfo(provider, model, AbortSignal.timeout(15000));
   if (info && info.capabilities && info.capabilities.imageInput === false) throw new Error('当前聊天模型不支持图片输入');
-  const prepared = await ctx.llm.prepareCall({ provider, model, maxTokens: 12000, ...(body.reasoningEffort ? { reasoningEffort: String(body.reasoningEffort) } : {}) }, signal);
+  const prepared = await ctx.llm.prepareCall({ provider, model, maxTokens:body.compactText?16000:12000,
+    ...(body.compactText?{reasoningEffort:'low'}:body.reasoningEffort?{reasoningEffort:String(body.reasoningEffort)}:{}) }, signal);
   const crops = Array.isArray(body.crops) ? body.crops : [];
   const normalized = crops.map((item, index) => ({ id: index + 1,
     x: Math.round(Math.max(0, Number(item.x || 0)) * 1000 / Math.max(1, attachment.width)),
@@ -100,8 +101,9 @@ async function analyzeTextWithCurrentModel(ctx, uploaded, body, simplified, sign
   // v4 的 producer-owned source 形态;该消息发给模型调用不落会话,但统一新写法防后续 API 收紧。
   const message = createUserMessage({ source: Object.freeze({ kind: 'plugin:' + name }), content: [{ type: 'text', text: instruction }, { type: 'image', attachment }] });
   const assembler = new BlockAssembler();
-  const system = pixels ? TEXT_VISION_SYSTEM.replace('x/y/width/height 是 0-1000 的整图归一化坐标；fontSize 是相对整图高度 0-1000 的估算值；',
+  let system = pixels ? TEXT_VISION_SYSTEM.replace('x/y/width/height 是 0-1000 的整图归一化坐标；fontSize 是相对整图高度 0-1000 的估算值；',
     'x/y/width/height/fontSize 均为当前裁图像素坐标，禁止归一化；') : TEXT_VISION_SYSTEM;
+  if(body.compactText)system+='\n本轮为密集菜单分区，只返回简洁JSON {"blocks":[{"text":"原文","x":0,"y":0,"width":100,"height":20,"fontSize":20,"color":"#112233"}]}。不用输出字体解释、backgroundHint、erasePrompt。菜名、价格、容量、备注与英文逐项完整输出，菜名与右侧价格是不同对象，不合并相隔很远的列。商品包装/完整摄影海报内部的装饰文字不拆，普通菜单文字不能漏。';
   for await (const chunk of prepared.stream({ ...prepared.config, messages: [message], system, signal, purpose: 'canvas-text-analysis' })) assembler.push(chunk);
   const finish = assembler.finish;
   if (finish.kind !== 'stop') throw new Error('当前聊天模型识别未正常完成：' + finish.kind);
