@@ -88,3 +88,12 @@ test('a complete empty model issue array preserves visible source ink as an hone
  assert.equal(result.unresolved.length,0);if(ink){assert.equal(result.elements[0].unresolvedAsGlyph,true);assert.equal(result.elements[0].typographyKind,'unreadable');}else assert.equal(result.elements[0].enabled,false);
  }
 });
+
+
+test('source OCR substring and superseded artwork do not survive as duplicate characters after visual classification',()=>{
+ const rows=[{id:'word',type:'text',enabled:true,text:'自然',x:10,y:10,width:100,height:60},{id:'char',type:'text',sourceTextSupplement:true,enabled:true,text:'然',x:60,y:10,width:45,height:60},
+ {id:'other',type:'text',sourceTextSupplement:true,enabled:true,text:'然',x:160,y:10,width:45,height:60},
+ {id:'old-art',type:'image',visualKind:'graphic',enabled:true,name:'装饰字绿',x:20,y:100,width:90,height:90},
+ {id:'verified-art',type:'image',visualKind:'graphic',typographyKind:'handwriting',enabled:true,text:'绿',x:24,y:102,width:82,height:85}];
+ deduplicateCompleteText(rows);assert.equal(rows[1].enabled,false);assert.equal(rows[2].enabled,true);assert.equal(rows[3].enabled,false);assert.equal(rows[4].enabled,true);
+});

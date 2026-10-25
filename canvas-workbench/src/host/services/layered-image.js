@@ -336,7 +336,7 @@ export function createLayeredImageService(h, overrides = {}) {
       let enteredGenerator=false;
       try {
         let reference=task.reconstruction==='complete'&&task.analysisSource?[await readFile(task.referenceSource||task.source),await readFile(task.analysisSource)]:await readFile(task.source),prompt=extractionPrompt(e,task.elements,task.width,task.height);
-        if(e.forceModelCutout){const crop=join(task.directory,'analysis',e.id+'-extraction-source.png');await pixel({operation:'analysis-crop',input:task.source,output:crop,region:e},signal);reference=await readFile(crop);prompt='保持输入裁图的画布比例、目标在裁图中的原位置和四周留白，不居中、不移动、不放大；只从这张原图裁切中提取透明PNG，不重新设计，不改变目标造型、品牌或包装文字。保留原来裁图中目标的比例与完整内容、自然接触阴影，去掉绿色/白色等背景和所有海报排版文字。其他已独立产品也要去掉且补全遮挡。只提取：'+e.name+'；详细归属：'+e.description+'。真实Alpha，不得留下矩形色块、擦除洞、棋盘格或添加文字。'+sourceBrandConstraint(task);}
+        if(e.forceModelCutout){const crop=join(task.directory,'analysis',e.id+'-extraction-source.png');await pixel({operation:'analysis-crop',input:task.source,output:crop,region:e},signal);reference=await readFile(crop);prompt='保持输入裁图的画布比例、目标在裁图中的原位置和四周留白，不居中、不移动、不放大；只从这张原图裁切中提取透明PNG，不重新设计，不改变目标造型、品牌或包装文字。保留原来裁图中目标的比例与完整内容、自然接触阴影，去掉绿色/白色等背景和所有海报排版文字。其他已独立产品也要去掉且补全遮挡。只提取：'+e.name+'；详细归属：'+e.description+'。名称和描述仅作定位线索；若与裁图冲突，以原图实际物件为准，不得按名称换成另一种水果或商品。真实Alpha，不得留下矩形色块、擦除洞、棋盘格或添加文字。'+sourceBrandConstraint(task);}
         enteredGenerator=true;const result = await generate({ ctx, image:reference, prompt:prompt+(e.type==='image'?sourceBrandConstraint(task):''),
           engine: task.engine, signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
           background: e.type === 'background' ? 'opaque' : 'transparent', maxAttempts: 1, settingsOverride: settings });

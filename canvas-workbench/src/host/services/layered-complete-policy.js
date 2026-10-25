@@ -22,12 +22,16 @@ export function completeLayerPlan(elements){
   }
   return e;
  });
- const words=plan.filter(e=>e.enabled&&['handwriting','display'].includes(e.typographyKind));
- for(const group of plan.filter(e=>e.enabled&&e.type==='image'&&e.visualKind==='graphic'&&!e.typographyKind&&/手写|书法|艺术字|装饰字/.test(e.name||''))){
+ deduplicateArtwork(plan);
+ return plan;
+}
+
+function deduplicateArtwork(elements){
+ const words=elements.filter(e=>e.enabled&&['handwriting','display'].includes(e.typographyKind));
+ for(const group of elements.filter(e=>e.enabled&&e.type==='image'&&e.visualKind==='graphic'&&!e.typographyKind&&/手写|书法|艺术字|装饰字/.test(e.name||''))){
   const inside=words.filter(e=>e.x>=group.x-8&&e.y>=group.y-8&&e.x+e.width<=group.x+group.width+8&&e.y+e.height<=group.y+group.height+8);
   if(inside.length){const x=Math.min(...inside.map(e=>e.x)),y=Math.min(...inside.map(e=>e.y)),r=Math.max(...inside.map(e=>e.x+e.width)),b=Math.max(...inside.map(e=>e.y+e.height));if((r-x)*(b-y)>group.width*group.height*.35){group.enabled=false;group.typographySuperseded=true;}}
  }
- return plan;
 }
 
 export function completeLayerAudit(elements){
@@ -50,6 +54,7 @@ export function reuseCompleteMaterials(elements,previous,fixedLayout){
 }
 
 export function deduplicateCompleteText(elements){
+ deduplicateArtwork(elements);
  const compact=s=>String(s||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase();
  const texts=elements.filter(e=>e.enabled&&e.type==='text').sort((a,b)=>Number(a.sourceTextSupplement)-Number(b.sourceTextSupplement)||Number(b.contentVerified)-Number(a.contentVerified));
  const kept=[];
@@ -59,7 +64,10 @@ export function deduplicateCompleteText(elements){
   if(prior){e.enabled=false;e.duplicateOf=prior.id;delete e.retainedInBackground;}else kept.push(e);
  }
  for(const e of texts.filter(e=>e.enabled&&e.sourceTextSupplement)){
-  const a=e.cleanupBounds||e,parts=texts.filter(n=>n.enabled&&n.id!==e.id&&!n.sourceTextSupplement&&(()=>{const b=n.cleanupBounds||n;return b.x>=a.x-4&&b.y>=a.y-4&&b.x+b.width<=a.x+a.width+4&&b.y+b.height<=a.y+a.height+4;})());
+  const a=e.recognitionBounds||e;
+  const owner=texts.find(n=>n.enabled&&n.id!==e.id&&!n.sourceTextSupplement&&compact(n.text).includes(compact(e.text))&&(()=>{const b=n.recognitionBounds||n,area=Math.max(0,Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x))*Math.max(0,Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y));return area>a.width*a.height*.8;})());
+  if(owner){e.enabled=false;e.duplicateOf=owner.id;delete e.retainedInBackground;continue;}
+  const parts=texts.filter(n=>n.enabled&&n.id!==e.id&&!n.sourceTextSupplement&&(()=>{const b=n.cleanupBounds||n;return b.x>=a.x-4&&b.y>=a.y-4&&b.x+b.width<=a.x+a.width+4&&b.y+b.height<=a.y+a.height+4;})());
   let rest=compact(e.text);for(const p of parts.sort((a,b)=>b.text.length-a.text.length))rest=rest.replace(compact(p.text),'');
   if(parts.length&&!rest){e.enabled=false;e.duplicateOf=parts[0].id;delete e.retainedInBackground;}
  }
