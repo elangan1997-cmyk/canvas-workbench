@@ -55,3 +55,5 @@
 - [茶作云沧菜单-横版-拆层-1792909026817.ai](/Volumes/Elements/skill学习/排版优化/茶作云沧菜单-AI转换-mvn9pld4-9af77a7384af/assets/茶作云沧菜单-横版-拆层-1792909026817.ai) SHA256 `63b53182b5fb5b60143c485c2354c02d74f8a7fa5190344a2edcb92b4b98a1d4`。
 
 机器可读验收：验证目录 final-acceptance.json；Adobe副本及实际渲染 native-ai-1/、native-ai-2/；完整自动检查 tests.txt；运行副本比对 runtime-integrity.json。
+
+交付前已关闭9335调试端口并恢复普通启动；桌面主进程及Host进程正常存在，原任务仍completed、累计5请求、两份文件存在。该次启动后的屏幕复查遇Mac锁屏，未完成；重启前实际画布截图、项目展示回执及Illustrator检查已完成，不能将此描述成普通冷启动界面再次验收通过。
