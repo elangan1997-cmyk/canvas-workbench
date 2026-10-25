@@ -52,6 +52,10 @@ with tempfile.TemporaryDirectory() as temp:
  paper=p/'paper.png';plate=p/'plate.png';im=Image.new('RGBA',(200,100),'white');ImageDraw.Draw(im).rectangle((10,10,60,80),fill='green');ImageDraw.Draw(im).rectangle((90,30,100,40),fill='black');im.save(paper);Image.new('RGBA',(200,100),'green').save(plate)
  result=run({'operation':'preserve-canvas-margin','source':str(paper),'input':str(plate),'output':str(plate)});im=Image.open(plate)
  assert result['applied'] and im.getpixel((0,0))[:3]==(255,255,255) and im.getpixel((95,35))[:3]==(255,255,255) and im.getpixel((30,30))[:3]==(0,128,0)
+ # Near-white original ink must never be copied into the clean interior.
+ im=Image.new('RGBA',(200,100),'white');ImageDraw.Draw(im).text((80,40),'OLD',fill=(244,244,244));im.save(paper);Image.new('RGBA',(200,100),(250,249,247)).save(plate)
+ run({'operation':'preserve-canvas-margin','source':str(paper),'input':str(plate),'output':str(plate)})
+ assert Image.open(plate).crop((65,30,140,70)).getextrema()==((255,255),(255,255),(255,255),(255,255)), 'clean interior must not acquire source ghost glyphs'
  print('PASS: real HD pixels, ownership, alpha and installed-font substitution')
 `],{cwd:new URL('../..',import.meta.url),encoding:'utf8'});
  assert.equal(run.status,0,run.stdout+run.stderr);

@@ -384,8 +384,10 @@ def preserve_flat_canvas_margin(spec):
     for g in components(1-mask):
         if not g['edge'] and g['area']<source.width*source.height*.025:
             for y,x,end in g['runs']:mask[y,x:end]=1
-    tile=Image.new('RGBA',source.size,tuple(map(int,color))+(255,));generated.paste(tile,(0,0),Image.fromarray(mask*255))
-    generated.paste(source,(0,0),Image.fromarray((mask&flat)*255));save(generated,spec['output'])
+    tile=Image.new('RGBA',source.size,tuple(map(int,color))+(255,));generated.paste(tile,(0,0),Image.fromarray(mask*255).filter(ImageFilter.GaussianBlur(2)))
+    # Never copy source RGB: near-white antialiased ink otherwise survives as
+    # ghost glyphs. Only the verified paper colour is restored, with soft edges.
+    save(generated,spec['output'])
     return {'applied':True,'restoredPixels':int(mask.sum()),**info(generated)}
 
 

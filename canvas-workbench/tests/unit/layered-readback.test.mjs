@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {inspectLayerReadback,parseReadbackResult} from '../../src/host/services/layered-image-readback.js';
+import {inspectLayerReadback,parseReadbackResult,layerReadbackTimeout} from '../../src/host/services/layered-image-readback.js';
 
 test('readback accepts multiple complete JSON blocks without dropping issues, while rejecting truncated output',()=>{
  assert.deepEqual(parseReadbackResult('<think>reason {ignored}</think>```json\n{"issues":[{"id":"a","reason":"a {brace} and \\\"quote\\\""}]}\n```\n{"issues":[{"id":"b","reason":"错字"}]}').issues.map(i=>i.id),['a','b']);
@@ -34,9 +34,9 @@ test('dense readback isolates token limits and caches unchanged verification reg
 
 test('known text repairs retain source positions, colors, vertical parts and explicit removals',async t=>{
  const root=await mkdtemp(join(tmpdir(),'readback-typed-'));t.after(()=>rm(root,{recursive:true,force:true}));
- const ctx={attachments:{saveImage:async()=>({id:'crop'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:JSON.stringify({issues:[{id:'t',text:'棒打鲜橙',x:10,y:20,width:60,height:50,color:'#111111',parts:[{text:'棒打',layout:'vertical',x:10,y:20,width:20,height:50},{text:'鲜橙',layout:'vertical',x:40,y:20,width:20,height:50}]},{id:'fake',absent:true,reason:'原图无此底框'}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
- const result=await inspectLayerReadback(ctx,{directory:root,source:'source',width:100,height:100,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[{id:'t',enabled:true,type:'text',x:10,y:20,width:60,height:50},{id:'fake',enabled:true,type:'shape',x:0,y:0,width:10,height:10}]},'preview',new AbortController().signal,{pixel:async spec=>writeFile(spec.output,spec.input)});
- assert.equal(result.issues[0].sourceConfirmed,true);assert.equal(result.issues[0].parts.length,2);assert.equal(result.issues[0].parts[1].layout,'vertical');assert.equal(result.issues[0].color,'#111111');assert.equal(result.issues[1].absent,true);
+ const ctx={attachments:{saveImage:async()=>({id:'crop'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:JSON.stringify({issues:[{id:'t',text:'棒打鲜橙',x:10,y:20,width:60,height:50,color:'#111111',parts:[{text:'棒打',layout:'vertical',x:10,y:20,width:20,height:50},{text:'鲜橙',layout:'vertical',x:40,y:20,width:20,height:50}]},{id:'fake',absent:true,reason:'原图无此底框'},{id:'art',text:'推荐',typographyKind:'handwriting',x:10,y:5,width:30,height:15,color:'#101010'}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const result=await inspectLayerReadback(ctx,{directory:root,source:'source',width:100,height:100,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[{id:'t',enabled:true,type:'text',x:10,y:20,width:60,height:50},{id:'fake',enabled:true,type:'shape',x:0,y:0,width:10,height:10},{id:'art',enabled:true,type:'text',x:10,y:5,width:30,height:15}]},'preview',new AbortController().signal,{pixel:async spec=>writeFile(spec.output,spec.input)});
+ assert.equal(result.issues[0].sourceConfirmed,true);assert.equal(result.issues[0].parts.length,2);assert.equal(result.issues[0].parts[1].layout,'vertical');assert.equal(result.issues[0].color,'#111111');assert.equal(result.issues[1].absent,true);assert.equal(result.issues[2].typographyKind,'handwriting');
 });
 
 test('unplanned images and shapes are retained; an unlocated issue cannot silently pass verification',async t=>{
@@ -45,3 +45,5 @@ test('unplanned images and shapes are retained; an unlocated issue cannot silent
  const result=await inspectLayerReadback(ctx,{directory:root,source:'source',width:100,height:100,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[]},'preview',new AbortController().signal,{pixel:async spec=>writeFile(spec.output,spec.input)});
  assert.equal(result.issues.length,2);assert.equal(result.issues[0].kind,'missing-image');assert.equal(result.issues[1].kind,'missing-shape');assert.notEqual(result.issues[0].id,result.issues[1].id);assert.equal(result.complete,false);assert.equal(result.incompleteRegions.length,1);
 });
+
+test('dense complete verification has time for independent source regions instead of timing out the whole menu at four minutes',()=>{assert.equal(layerReadbackTimeout({width:100,height:100,reconstruction:'complete'}),240000);assert.equal(layerReadbackTimeout({width:2807,height:1992,reconstruction:'complete'}),900000);assert.equal(layerReadbackTimeout({width:2807,height:1992,reconstruction:'preserve'}),240000);});

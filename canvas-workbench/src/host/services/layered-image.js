@@ -15,7 +15,7 @@ import { buildLayeredIllustratorJsx, buildLayeredPsd, buildLayeredSvg } from './
 import { calibrateLayeredAnalysis, checkLayerLayout, runLayerRefinementScript, hasBlockingLayerQuality, automaticLayerQuality, partitionReadbackTypography } from './layered-image-refinement.js';
 import { denseSourceStructure } from './layered-source-policy.js';
 import { enhanceLayerRegion,verifyEnhancedRegion } from './layered-image-enhancement.js';
-import { inspectLayerReadback } from './layered-image-readback.js';
+import { inspectLayerReadback,layerReadbackTimeout } from './layered-image-readback.js';
 import { refineLayerSourceRegions } from './layered-image-regions.js';
 import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials} from './layered-complete-policy.js';
 import {prepareLayerSourceHd,identifySourceBrands,sourceBrandConstraint} from './layered-source-hd.js';
@@ -148,7 +148,7 @@ export function createLayeredImageService(h, overrides = {}) {
   const ensureIdle = task => { if (active.has(task.directory) || preparing.has(task.directory)) throw new Error('当前步骤仍在执行，请稍候'); };
 
   const cleanPlate = async (task, element, signal) => {
-    if(task.reconstruction==='complete')await pixel({operation:'preserve-canvas-margin',source:task.source,input:element.file,output:element.file},signal);
+    if(task.reconstruction==='complete'){await pixel({operation:'preserve-canvas-margin',source:task.source,input:element.file,output:element.file},signal);element.backgroundQualityIssues=[];return;}
     if (!task.autoRefine || !task.elements.some(e => e.enabled && e.nativeText)) return;
     const spec = { operation: 'clean-background', input: element.file, source: task.source, output: element.file, elements: task.elements };
     const result = overrides.refinement ? await overrides.refinement(spec, signal) : await runLayerRefinementScript(h, spec, signal);
@@ -294,7 +294,7 @@ export function createLayeredImageService(h, overrides = {}) {
       }
       e.file = output; e.status = 'complete'; e.requestState = 'local'; return;
     }
-    if (await exists(output) && !e.forceModelCutout && !(e.type === 'background' && e.plateVersion !== 4 && await exists(raw))) {
+    if (await exists(output) && !e.forceModelCutout && !(e.type === 'background' && e.plateVersion !== 5 && await exists(raw))) {
       let checked;
       try { checked = await pixel({ operation: 'normalize', input: output, output, width: task.width, height: task.height, background: e.type === 'background', element: e, preserve_placement: true, allow_checkerboard: task.sourceCheckerboard === true }, signal); }
       catch (error) {
@@ -310,7 +310,7 @@ export function createLayeredImageService(h, overrides = {}) {
         e.extractionEngine=e.extractionEngine||(e.nativeText?'local-native-text':'model-reconstruction');
         if (checked.aligned) { e.alignment = checked.aligned; task.warnings.push('“' + e.name + '”已按原图区域回位，请核对边缘与字号'); }
         if (e.type === 'background') {
-          if (!e.platePrepared) { await pixel({ operation: 'background-plate', source: task.source, input: output, output, elements: task.elements }, signal); e.platePrepared = true; e.plateVersion = 4; }
+          if (!e.platePrepared) { await pixel({ operation: 'background-plate', source: task.source, input: output, output, elements: task.elements }, signal); e.platePrepared = true; e.plateVersion = 5; }
           await cleanPlate(task, e, signal);
         }
         return;
@@ -361,7 +361,7 @@ export function createLayeredImageService(h, overrides = {}) {
       if (!task.warnings.includes('部分素材由本地抠图生成透明边缘，请检查半透明细节及残影')) task.warnings.push('部分素材由本地抠图生成透明边缘，请检查半透明细节及残影');
     }
     e.file = output; e.error = '';
-    if (e.type === 'background') { await pixel({ operation: 'background-plate', source: task.source, input: output, output, elements: task.elements }, signal); e.platePrepared = true; e.plateVersion = 4; }
+    if (e.type === 'background') { await pixel({ operation: 'background-plate', source: task.source, input: output, output, elements: task.elements }, signal); e.platePrepared = true; e.plateVersion = 5; }
     if (e.type === 'background') await cleanPlate(task, e, signal);
     e.status = 'complete'; e.extractionEngine = 'model-reconstruction';
     e.actualPixels = inspected.actualPixels || [inspected.width, inspected.height];
@@ -591,6 +591,7 @@ export function createLayeredImageService(h, overrides = {}) {
         }
         if(task.reconstruction!=='complete'&&order.some(e=>!e.nativeText&&overlapping.has(e.id)))await separateRasterText(true);
         let manifest = await recoverLocal(task, '图层装配', () => pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: enabled }, signal), signal);
+        const inspectAssembly=()=> (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(layerReadbackTimeout(task))]),{pixel,onProgress:async p=>{task.message='正在对照原图核对版式分区 '+p.completed+'/'+p.total+'，已检查 '+p.checked+' 个局部…';await save(task);}});
         if(task.analysisStrategy==='dense'&&(overrides.readback||ctx.llm?.prepareCall)){
           const signature=hash({readbackRevision:4,image:hash(await readFile(manifest.preview))});
           if(task.assemblyCheck?.signature!==signature||task.assemblyCheck?.complete===false||task.assemblyCheck?.verified===false){
@@ -604,7 +605,7 @@ export function createLayeredImageService(h, overrides = {}) {
                 const result=await pixel({operation:'verify-source-regions',source:task.source,input:manifest.preview,elements:copies},signal);
                 return {...checked,issues:checked.issues.filter(i=>!(result.exact||[]).includes(i.id)),exactSourceIds:result.exact||[]};
               };
-              const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
+              const checked=await discardExactCopies(await inspectAssembly());
               await writeFile(join(task.directory,'assembly-check.json'),JSON.stringify(checked,null,2));
               const repaired=[];
               const restoreIssues=async issues=>{const restored=[],targets=new Map(),direct=new Set();
@@ -631,6 +632,7 @@ export function createLayeredImageService(h, overrides = {}) {
                 if(task.reconstruction==='complete'){
                   if(issue.absent===true||(issue.embedded===true&&e.type==='text')){e.enabled=false;e.absentFromSource=issue.absent===true;e.embeddedInMaterial=issue.embedded===true;restored.push(e.id);continue;}
                   if(issue.frontOf){const other=task.elements.find(n=>n.id===issue.frontOf);if(other)e.z=other.z+.1;if(issue.strategy==='reorder'){restored.push(e.id);continue;}}
+                  if(issue.typographyKind&&issue.sourceConfirmed){e.typographyKind=issue.typographyKind;e.type='image';e.visualKind='graphic';e.nativeText=false;e.foregroundColors=[issue.color||e.sourceTextColor||e.color];delete e.unresolvedAsGlyph;}
                   if(e.typographyKind&&!e.unresolvedAsGlyph&&issue.sourceConfirmed){
                     for(const key of ['x','y','width','height','text'])e[key]=issue[key];e.useOriginalRegion=true;e.assetKey=hash({previous:e.assetKey,issue});e.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,e[k]]));await extract(task,e,settings,signal);const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;restored.push(e.id);continue;
                   }
@@ -686,7 +688,7 @@ export function createLayeredImageService(h, overrides = {}) {
               repaired.push(...restored);return restored;};
               await restoreIssues(checked.issues);
               let finalCheck=checked;
-              if(repaired.length)finalCheck=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
+              if(repaired.length)finalCheck=await discardExactCopies(await inspectAssembly());
               let finalSourceFallback=[];
               if(task.reconstruction!=='complete'&&visualPass===1&&finalCheck.issues.length){
                 finalSourceFallback=await restoreIssues(finalCheck.issues);
