@@ -393,9 +393,9 @@ def preserve_flat_canvas_margin(spec):
 
 def run(spec):
     op = spec.get('operation', 'inspect')
-    if op in ['text-colors','matte-quality','text-material-ownership']:
-        from layered_quality import text_colors,matte_quality,text_material_ownership
-        return {'text-colors':text_colors,'matte-quality':matte_quality,'text-material-ownership':text_material_ownership}[op](spec)
+    if op in ['text-colors','matte-quality','text-material-ownership','shape-evidence']:
+        from layered_quality import text_colors,matte_quality,text_material_ownership,shape_evidence
+        return {'text-colors':text_colors,'matte-quality':matte_quality,'text-material-ownership':text_material_ownership,'shape-evidence':shape_evidence}[op](spec)
     if op=='preserve-canvas-margin':return preserve_flat_canvas_margin(spec)
     if op == 'text-presence':
         from infer_text_style import pixel_foreground

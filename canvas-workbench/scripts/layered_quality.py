@@ -55,3 +55,11 @@ def text_material_ownership(spec):
             if tile.size and int(np.count_nonzero(tile>=160))/max(1,w*h)>.8:owners.append(p['id'])
         if owners:result.append({'id':e['id'],'productIds':owners})
     return {'candidates':result}
+
+
+def shape_evidence(spec):
+    im=Image.open(spec['input']).convert('RGB');e=spec['element'];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
+    tile=np.asarray(im.crop((x,y,x+w,y+h))).astype('int16');fill=e.get('fill') or '#FFFFFF';color=np.array([int(fill[i:i+2],16) for i in (1,3,5)])
+    expected=Image.new('L',(w,h));ImageDraw.Draw(expected).rounded_rectangle((0,0,w-1,h-1),radius=max(0,e.get('radius',0)),fill=255);mask=np.asarray(expected)>0
+    coverage=float(np.mean(np.max(np.abs(tile-color),axis=2)[mask]<=45)) if mask.any() else 0
+    return {'nativeEligible':coverage>=.78,'fillCoverage':coverage,'reason':'原图实心矩形/圆角填充覆盖率' if coverage>=.78 else '原图不是对应实心矩形，保留实际图形轮廓'}

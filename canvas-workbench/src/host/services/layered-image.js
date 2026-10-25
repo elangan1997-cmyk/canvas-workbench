@@ -270,6 +270,14 @@ export function createLayeredImageService(h, overrides = {}) {
       e.sourceTextFallback=true;e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;
       return;
     }
+    if(e.type==='shape'&&task.reconstruction==='complete'){
+      const evidence=await pixel({operation:'shape-evidence',input:task.source,element:e},signal);e.sourceShapeEvidence=evidence;
+      if(evidence.nativeEligible===false){
+        const graphic={...e,foregroundColors:[e.fill||'#FFFFFF']},local=await pixel({operation:'graphic-cutout',input:task.source,output,element:graphic},signal);
+        if(!local.eligible)throw new Error('原图没有对应实心图形，且原图轮廓尚未可靠提取：'+e.name);
+        Object.assign(e,{type:'image',visualKind:'graphic',extractionMode:'cutout',modeLocked:true,preserveSource:false,useOriginalRegion:true,foregroundColors:graphic.foregroundColors,sourceShapeFallback:true,file:output,status:'complete',error:'',requestState:'local',extractionEngine:'source-graphic-shape-evidence'});return;
+      }
+    }
     if (e.type === 'shape' || e.extractionMode === 'photo' || e.sourceRegion) {
       const local = await pixel({ operation:'render-structure',input:task.reconstruction==='complete'&&task.analysisSource&&!e.useOriginalRegion?task.analysisSource:task.source,output,element:e,elements:task.elements },signal);
       e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;

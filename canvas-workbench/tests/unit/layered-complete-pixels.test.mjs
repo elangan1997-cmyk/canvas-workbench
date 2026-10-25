@@ -56,6 +56,10 @@ with tempfile.TemporaryDirectory() as temp:
  im=Image.new('RGBA',(200,100),'white');ImageDraw.Draw(im).text((80,40),'OLD',fill=(244,244,244));im.save(paper);Image.new('RGBA',(200,100),(250,249,247)).save(plate)
  run({'operation':'preserve-canvas-margin','source':str(paper),'input':str(plate),'output':str(plate)})
  assert Image.open(plate).crop((65,30,140,70)).getextrema()==((255,255),(255,255),(255,255),(255,255)), 'clean interior must not acquire source ghost glyphs'
+ im=Image.new('RGBA',(200,100),'white');ImageDraw.Draw(im).line((10,80,180,10),fill='#F47700',width=8);im.save(source)
+ assert not run({'operation':'shape-evidence','input':str(source),'element':{'x':0,'y':0,'width':200,'height':100,'fill':'#F47700'}})['nativeEligible'], 'an irregular brush stroke is not a filled rectangle'
+ ImageDraw.Draw(im).rectangle((20,30,80,60),fill='#F47700');im.save(source)
+ assert run({'operation':'shape-evidence','input':str(source),'element':{'x':20,'y':30,'width':60,'height':30,'fill':'#F47700'}})['nativeEligible']
  print('PASS: real HD pixels, ownership, alpha and installed-font substitution')
 `],{cwd:new URL('../..',import.meta.url),encoding:'utf8'});
  assert.equal(run.status,0,run.stdout+run.stderr);

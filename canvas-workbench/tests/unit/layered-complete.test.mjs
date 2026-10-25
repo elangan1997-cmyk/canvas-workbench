@@ -77,3 +77,14 @@ test('physical-print classification accepts a single flat model decision without
  const result=await recoverCompleteText(ctx,task,['brand'],async spec=>writeFile(spec.output,'source'),new AbortController().signal,{roleOnly:true});
  assert.equal(result.elements[1].enabled,false);assert.equal(result.elements[1].embeddedInMaterial,true);assert.equal(task.elements[1].enabled,true,'caller commits the independent decision');
 });
+
+
+test('a complete empty model issue array preserves visible source ink as an honest glyph instead of failing the whole document',async t=>{
+ for(const ink of [true,false]){
+ const dir=await mkdtemp(join(tmpdir(),'empty-text-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const ctx={attachments:{saveImage:async()=>({id:'source'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:'{"issues":[],"uncertain":true}'};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const task={directory:dir,source:'original',width:100,height:100,analysisModel:{provider:'ds',model:'current'},elements:[{id:'text-1',type:'text',enabled:true,x:20,y:20,width:30,height:15,text:'旧识别'}]};
+ const result=await recoverCompleteText(ctx,task,['text-1'],async spec=>spec.output?writeFile(spec.output,'crop'):{hasVisibleInk:ink},new AbortController().signal);
+ assert.equal(result.unresolved.length,0);if(ink){assert.equal(result.elements[0].unresolvedAsGlyph,true);assert.equal(result.elements[0].typographyKind,'unreadable');}else assert.equal(result.elements[0].enabled,false);
+ }
+});
