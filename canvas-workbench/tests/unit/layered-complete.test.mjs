@@ -105,3 +105,10 @@ test('tool-shaped non-JSON model output is data and gets a bounded schema retry 
  const task={directory:dir,source:'original',width:200,height:200,analysisModel:{provider:'ds',model:'current'},elements:[{id:'text-1',type:'text',enabled:true,x:50,y:50,width:30,height:15,text:'旧识别'}]};
  const result=await recoverCompleteText(ctx,task,['text-1'],async spec=>spec.output?writeFile(spec.output,'crop'):{hasVisibleInk:true},new AbortController().signal);assert.equal(calls,2);assert.equal(result.elements[0].text,'奶茶');assert.equal(result.elements[0].contentVerified,true);
 });
+
+
+test('practical layout grouping expands to whole intersected words and leaves separate editable prices intact',async()=>{
+ const {practicalLayoutGroups}=await import('../../src/host/services/layered-complete-policy.js');
+ const rows=[{id:'a',type:'text',enabled:true,x:10,y:10,width:20,height:10},{id:'b',type:'text',enabled:true,x:20,y:10,width:20,height:10},{id:'c',type:'text',enabled:true,x:39,y:10,width:15,height:10},{id:'price',type:'text',enabled:true,x:80,y:10,width:10,height:10}];
+ const groups=practicalLayoutGroups(rows,[{id:'a',otherId:'b',code:'text-overlap'}],100,100);assert.equal(groups.length,1);assert.deepEqual(groups[0].ids,['a','b','c']);assert.ok(groups[0].x+groups[0].width<80);
+});

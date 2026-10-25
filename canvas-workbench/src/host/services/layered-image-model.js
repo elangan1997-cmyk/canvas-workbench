@@ -40,6 +40,7 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
       ...(/^#[0-9a-f]{6}$/i.test(b.sourceTextColor||'')?{sourceTextColor:b.sourceTextColor}:{}),
       ...(b.contentUncertain===true?{contentUncertain:true}:{}),
       ...(b.useOriginalRegion===true?{useOriginalRegion:true}:{}),
+      ...(b.sourceShapeFallback===true?{sourceShapeFallback:true}:{}),
       ...(b.sourceFallbackGroup===true?{sourceFallbackGroup:true,sourceGlyphReason:String(b.sourceGlyphReason||'实用拆分保留原图小区域').slice(0,500)}:{}),
       ...(b.forceSourceCutout===true?{forceSourceCutout:true}:{}),
       ...(b.forceModelCutout===true?{forceModelCutout:true}:{}),
@@ -89,7 +90,7 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
   if (!background) items.unshift({ id: ids.has('background') ? 'background-base' : 'background', type: 'background', name: '完整背景',
     description: '移除所选前景及文字，补全其背后的背景', x: 0, y: 0, width, height, z: -10000, enabled: true, status: 'pending' });
   if (items.length > MAX_LAYER_ELEMENTS) throw new Error('包含背景时最多支持 '+MAX_LAYER_ELEMENTS+' 个图层');
-  if(items.filter(e=>['image','background'].includes(e.type)&&e.enabled&&!e.typographyKind).length>MAX_LAYER_IMAGES)throw new Error('独立图像与背景最多支持 '+MAX_LAYER_IMAGES+' 层；文字、独立字形和形状不计入图像上限');
+  if(items.filter(e=>['image','background'].includes(e.type)&&e.enabled&&!e.typographyKind&&!e.sourceShapeFallback&&!e.sourceFallbackGroup).length>MAX_LAYER_IMAGES)throw new Error('独立图像与背景最多支持 '+MAX_LAYER_IMAGES+' 层；文字、独立字形、本地图形和原图分组不计入图像上限');
   for (const item of items) for (const id of item.mergedIds || []) {
     const child = items.find(e => e.id === id);
     if (id === item.id || !child || child.type !== 'image' || item.type !== 'image') throw new Error('合并图层的关联无效，请重新核对清单');

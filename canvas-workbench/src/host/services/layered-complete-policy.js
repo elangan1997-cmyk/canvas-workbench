@@ -80,3 +80,18 @@ export function deduplicateCompleteText(elements){
 export function layeredDeliveryAccepted(task){
  return task.completeness?.complete===true&&task.assemblyCheck?.verified===true||task.completionPolicy==='practical'&&task.completeness?.practicalAccepted===true;
 }
+
+/** Keep unresolved overlapping lettering as one faithful original region.
+ * Expand to whole intersected text objects so a patch never covers half a word. */
+export function practicalLayoutGroups(elements,issues,width,height){
+ const text=elements.filter(e=>e.enabled&&(e.type==='text'||e.typographyKind));
+ const boxes=e=>[e,e.bounds,e.recognitionBounds,e.cleanupBounds].filter(Boolean);
+ const union=rows=>{const x=Math.max(0,Math.floor(Math.min(...rows.map(r=>r.x))-2)),y=Math.max(0,Math.floor(Math.min(...rows.map(r=>r.y))-2));return{x,y,width:Math.min(width,Math.ceil(Math.max(...rows.map(r=>r.x+r.width))+2))-x,height:Math.min(height,Math.ceil(Math.max(...rows.map(r=>r.y+r.height))+2))-y};};
+ const intersects=(a,b)=>a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&a.y+a.height>b.y;
+ const pending=new Set(issues.filter(i=>i.code==='text-overlap').flatMap(i=>[i.id,i.otherId]).filter(Boolean)),groups=[];
+ while(pending.size){const first=text.find(e=>pending.has(e.id));if(!first){break;}const ids=new Set([first.id]);let region=union(boxes(first)),changed=true;
+  while(changed){changed=false;for(const e of text)if(!ids.has(e.id)&&boxes(e).some(b=>intersects(region,b))){ids.add(e.id);region=union([region,...boxes(e)]);changed=true;}}
+  for(const id of ids)pending.delete(id);groups.push({...region,ids:[...ids]});
+ }
+ return groups;
+}

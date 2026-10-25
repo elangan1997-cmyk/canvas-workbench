@@ -17,7 +17,7 @@ import { denseSourceStructure } from './layered-source-policy.js';
 import { enhanceLayerRegion,verifyEnhancedRegion } from './layered-image-enhancement.js';
 import { inspectLayerReadback,layerReadbackTimeout } from './layered-image-readback.js';
 import { refineLayerSourceRegions } from './layered-image-regions.js';
-import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials,layeredDeliveryAccepted} from './layered-complete-policy.js';
+import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials,layeredDeliveryAccepted,practicalLayoutGroups} from './layered-complete-policy.js';
 import {prepareLayerSourceHd,identifySourceBrands,sourceBrandConstraint} from './layered-source-hd.js';
 import {recoverCompleteText} from './layered-complete-text.js';
 
@@ -575,7 +575,7 @@ export function createLayeredImageService(h, overrides = {}) {
       return settings;
   }
   async function validateAssembly(task,settings,signal,order){
-        const enabled=task.elements.filter(e=>e.enabled);
+        let enabled=task.elements.filter(e=>e.enabled);
         const separateRasterText=async(refresh=false)=>{
           const confirmedNative=order.filter(e=>e.nativeText&&e.geometrySource==='source-ocr-token');
           for(const e of order.filter(e=>e.enabled&&e.type==='text'&&!e.nativeText)){
@@ -594,6 +594,14 @@ export function createLayeredImageService(h, overrides = {}) {
         };
         if(task.reconstruction!=='complete')await separateRasterText();
         let layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
+        if(task.completionPolicy==='practical'){
+          for(const [index,region] of practicalLayoutGroups(task.elements,layoutIssues,task.width,task.height).entries()){
+            for(const e of task.elements)if(region.ids.includes(e.id)){e.enabled=false;e.practicalGrouped=true;}
+            const id='practical-layout-'+index+'-'+hash(region).slice(0,10),group={id,type:'image',name:'原图排版组合 '+(index+1),description:'重叠文字按原图区域保留',...region,enabled:true,nativeText:false,visualKind:'graphic',sourceFallbackGroup:true,sourceRegion:true,useOriginalRegion:true,preserveSource:true,extractionMode:'photo',modeLocked:true,z:9000+index,assetKey:hash({source:task.sourceHash,region}),sourceGlyphReason:'重叠文字/复杂排版保留原图组合，不声明逐字可编辑'};
+            await extract(task,group,settings,signal);group.contentFile=join(task.directory,'layers',id+'.png');const crop=await pixel({operation:'crop-layer',input:group.file,output:group.contentFile},signal);group.bounds=crop.bounds;group.assetTime=(await stat(group.contentFile)).mtimeMs;task.elements.push(group);
+          }
+          enabled=task.elements.filter(e=>e.enabled);layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
+        }
         const overlapping=new Set([...layoutIssues.flatMap(i=>[i.id,i.otherId]).filter(Boolean),...(task.sourcePlateFallbackIds||[])]);
         if(task.reconstruction==='complete'&&overlapping.size&&!ctx.llm?.prepareCall&&!overrides.readback){
           await fixCompleteText(task,[...overlapping].filter(id=>task.elements.some(e=>e.id===id&&e.type==='text')),settings,signal,true);

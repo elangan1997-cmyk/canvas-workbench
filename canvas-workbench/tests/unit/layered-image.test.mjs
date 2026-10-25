@@ -536,3 +536,12 @@ test('explicit practical delivery keeps a tiny failed decoration as an original 
  const grouped=result.elements.find(e=>e.id==='object');assert.equal(grouped.sourceFallbackGroup,true);assert.equal(grouped.extractionMode,'photo');assert.equal(result.completeness.fallbackGroups[0].id,'object');
  const psd=readPsd(await readFile(result.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.equal(psd.children.length,2);
 });
+
+
+test('recovered local shapes and practical source groups do not consume independent model image slots',()=>{
+ const images=Array.from({length:39},(_,i)=>({id:'p'+i,type:'image',enabled:true,x:0,y:0,width:1,height:1}));
+ const shapes=Array.from({length:5},(_,i)=>({id:'s'+i,type:'image',sourceShapeFallback:true,x:0,y:0,width:1,height:1}));
+ const group={id:'g',type:'image',sourceFallbackGroup:true,x:0,y:0,width:1,height:1};
+ const plan=normalizeLayerElements([...images,...shapes,group],100,100);assert.equal(plan.filter(e=>e.sourceShapeFallback).length,5);assert.equal(plan.find(e=>e.id==='g').sourceFallbackGroup,true);
+ assert.throws(()=>normalizeLayerElements([...images,{id:'extra',type:'image',x:0,y:0,width:1,height:1}],100,100),/40/);
+});
