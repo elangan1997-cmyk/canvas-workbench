@@ -103,6 +103,20 @@ export function suppressOverlappingOcrRows(elements){
   return count;
 }
 
+export function partitionReadbackTypography(elements,checked,fontPolicy='substitute'){
+  const typographyNotes=[];
+  const issues=checked.issues.filter(issue=>{
+    if(fontPolicy==='strict')return true;
+    const e=elements.find(e=>e.id===issue.id&&e.nativeText),reason=String(issue.reason||'');
+    if(!e||!e.bounds||!e.cleanupBounds||!/字体|字号|字重|变粗|变细|字距|空格|颜色.*变浅|发灰|发虚/.test(reason)||/错字|错价|价格变化|变成|重影|叠|遮|覆盖|擦除|漏字|缺失|截断|错位|越界|消失|新增/.test(reason))return true;
+    const a=e.bounds,b=e.cleanupBounds,hex=e.color||'';
+    const dark=/^#[0-9a-f]{6}$/i.test(hex)&&[1,3,5].reduce((sum,i)=>sum+parseInt(hex.slice(i,i+2),16),0)/3<=160;
+    if(!dark||Math.abs(a.x-b.x)>4||Math.abs(a.y-b.y)>4||a.width>b.width*1.2||a.height>b.height*1.3||a.width<b.width*.75||a.height<b.height*.75)return true;
+    typographyNotes.push(issue);return false;
+  });
+  return {...checked,issues,typographyNotes};
+}
+
 /** OCR supplies geometry, while the selected chat model owns text content and object semantics. */
 export async function calibrateLayeredAnalysis(h, task, options, signal) {
   let elements = splitLayerTextLines(task.elements), warnings = [], issues = [], refinedCount = 0;

@@ -25,7 +25,7 @@ const exists=async p=>{try{await access(p);return true;}catch{return false;}};
  * shared request ledger. A rejected/unchecked candidate retains source pixels. */
 export async function enhanceLayerRegion(task,e,settings,signal,{ctx,pixel,generate,save,verify=verifyEnhancedRegion}){
   if(e.resolutionPolicy==='enhance')delete e.enhancedFile;
-  if(e.type!=='image'||e.resolutionPolicy!=='enhance'||task.localOnly)return false;
+  if(e.type!=='image'||e.resolutionPolicy!=='enhance'||task.localOnly||(e.modeLocked&&e.extractionMode==='cutout'))return false;
   if(!e.qualityReason){task.warnings.push('“'+e.name+'”没有高清重绘依据，保留原图');return false;}
   const stem=join(task.directory,'assets',e.id+'-'+e.assetKey.slice(0,20)+'-enhanced');
   const original=stem+'-source.png',raw=stem+'.original',candidate=stem+'.png',report=stem+'-check.json';

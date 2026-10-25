@@ -60,3 +60,12 @@ test('recalibration starts from immutable recognition geometry rather than a pri
  await restoreRecognitionGeometry(es,root);assert.equal(es[0].width,130);assert.equal(es[0].x,100);
  es[0].x=120;es[0].width=40;await restoreRecognitionGeometry(es,root);assert.equal(es[0].width,130);assert.equal(es[0].x,100);assert.equal(es[1].x,9);
 });
+
+test('substitute fonts may differ in weight within verified geometry; missing text and overflow still require repair',async()=>{
+ const {partitionReadbackTypography}=await import('../../src/host/services/layered-image-refinement.js');
+ const e={id:'price',nativeText:true,color:'#666666',cleanupBounds:{x:10,y:20,width:43,height:18},bounds:{x:9,y:20,width:45,height:19}};
+ const good={id:'price',reason:'价格16/M字号放大且变粗'},bad={id:'price',reason:'价格16/M有重影、缺失'};
+ const r=partitionReadbackTypography([e],{issues:[good,bad]});assert.deepEqual(r.issues,[bad]);assert.deepEqual(r.typographyNotes,[good]);
+ assert.equal(partitionReadbackTypography([{...e,bounds:{...e.bounds,width:100}}],{issues:[good]}).issues.length,1);
+ assert.equal(partitionReadbackTypography([e],{issues:[good]},'strict').issues.length,1);
+});

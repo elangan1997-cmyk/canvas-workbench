@@ -35,7 +35,7 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
       ...(b.classificationReason ? { classificationReason:String(b.classificationReason).slice(0,700) } : {}),
       ...(b.framingEvidence ? { framingEvidence:String(b.framingEvidence).slice(0,500) } : {}),
       ...(b.shadowMode === 'preserve' ? { shadowMode:'preserve' } : {}),
-      ...(b.sourceRegion===true?{sourceRegion:true}:{}),
+      ...(b.sourceRegion===true&&!(b.modeLocked&&b.extractionMode==='cutout')?{sourceRegion:true}:{}),
       ...(b.resolutionPolicy==='enhance'?{resolutionPolicy:'enhance',qualityReason:String(b.qualityReason||'').slice(0,500)}:{}),
       ...(b.sourceParentId?{sourceParentId:String(b.sourceParentId).slice(0,64)}:{}),
       ...(b.sourceTextFallback === true ? { sourceTextFallback:true } : {}),

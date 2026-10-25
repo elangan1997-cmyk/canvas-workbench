@@ -12,7 +12,7 @@ import { runPythonSpec } from './python-launch.js';
 import { textLayerGeometry } from './native-text-psd.js';
 import { analyzeLayeredImage, extractionPrompt, normalizeLayerElements } from './layered-image-model.js';
 import { buildLayeredIllustratorJsx, buildLayeredPsd, buildLayeredSvg } from './layered-image-export.js';
-import { calibrateLayeredAnalysis, checkLayerLayout, runLayerRefinementScript, hasBlockingLayerQuality, automaticLayerQuality } from './layered-image-refinement.js';
+import { calibrateLayeredAnalysis, checkLayerLayout, runLayerRefinementScript, hasBlockingLayerQuality, automaticLayerQuality, partitionReadbackTypography } from './layered-image-refinement.js';
 import { denseSourceStructure } from './layered-source-policy.js';
 import { enhanceLayerRegion } from './layered-image-enhancement.js';
 import { inspectLayerReadback } from './layered-image-readback.js';
@@ -476,8 +476,11 @@ export function createLayeredImageService(h, overrides = {}) {
         }
         const failed = order.filter(e => e.status !== 'complete');
         if (failed.length) throw new Error('已保存 '+done+'/'+order.length+' 个图层；以下步骤无法自动完成：'+failed.map(e => e.name+'：'+e.error).join('；').slice(0,1000));
-        const confirmedNative=order.filter(e=>e.nativeText&&e.geometrySource==='source-ocr-token');
-        for(const e of order.filter(e=>e.type==='text'&&!e.nativeText)){
+        const separateRasterText=async(refresh=false)=>{
+          const confirmedNative=order.filter(e=>e.nativeText&&e.geometrySource==='source-ocr-token');
+          for(const e of order.filter(e=>e.enabled&&e.type==='text'&&!e.nativeText)){
+          if(refresh){await extract(task,e,settings,signal);const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;}
+          delete e.excludedNativeIds;
           const a=e.bounds;
           const overlaps=confirmedNative.filter(n=>{const b=n.cleanupBounds||n;return a.x<b.x+b.width+3&&a.x+a.width>b.x-3&&a.y<b.y+b.height+3&&a.y+a.height>b.y-3;});
           if(!overlaps.length)continue;
@@ -488,6 +491,8 @@ export function createLayeredImageService(h, overrides = {}) {
           if(masked.empty){e.enabled=false;e.retainedInBackground=false;continue;}
           const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.excludedNativeIds=overlaps.map(n=>n.id);e.assetTime=(await stat(e.contentFile)).mtimeMs;
         }
+        };
+        await separateRasterText();
         const layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
         const overlapping=new Set([...layoutIssues.flatMap(i=>[i.id,i.otherId]).filter(Boolean),...(task.sourcePlateFallbackIds||[])]);
         for (const e of order.filter(e=>e.nativeText && overlapping.has(e.id))) {
@@ -497,41 +502,55 @@ export function createLayeredImageService(h, overrides = {}) {
           e.assetTime=(await stat(e.contentFile)).mtimeMs;
           task.warnings.push('“'+e.name+'”文字排版超界或重叠，已自动改用原图文字区域，避免重复排版');
         }
+        if(order.some(e=>!e.nativeText&&overlapping.has(e.id)))await separateRasterText(true);
         let manifest = await recoverLocal(task, '图层装配', () => pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: enabled }, signal), signal);
         if(task.analysisStrategy==='dense'&&(overrides.readback||ctx.llm?.prepareCall)){
-          const signature=hash({readbackRevision:3,image:hash(await readFile(manifest.preview))});
-          if(task.assemblyCheck?.signature!==signature||task.assemblyCheck?.complete===false){
+          const signature=hash({readbackRevision:4,image:hash(await readFile(manifest.preview))});
+          if(task.assemblyCheck?.signature!==signature||task.assemblyCheck?.complete===false||task.assemblyCheck?.verified===false){
+            for(let visualPass=0;visualPass<2;visualPass++){
             task.stage='verification';task.message='正在对照原图检查装配后的文字、价格和版式…';await save(task);
             try{
-              const discardExactCopies=async checked=>{
-                const copies=task.elements.filter(e=>checked.issues.some(i=>i.id===e.id)&&((e.type==='text'&&!e.nativeText)||(e.sourceRegion&&!e.enhancedFile)));
+              const discardExactCopies=async input=>{
+                const checked=partitionReadbackTypography(task.elements,input,task.quality?.fontPolicy||'substitute');
+                const copies=task.elements.filter(e=>!e.excludedNativeIds?.length&&checked.issues.some(i=>i.id===e.id)&&((e.type==='text'&&!e.nativeText)||(e.sourceRegion&&!e.enhancedFile)));
                 if(!copies.length)return checked;
                 const result=await pixel({operation:'verify-source-regions',source:task.source,input:manifest.preview,elements:copies},signal);
                 return {...checked,issues:checked.issues.filter(i=>!(result.exact||[]).includes(i.id)),exactSourceIds:result.exact||[]};
               };
               const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
               await writeFile(join(task.directory,'assembly-check.json'),JSON.stringify(checked,null,2));
-              const repaired=[];
+              const repaired=[],targets=new Map();
               for(const issue of checked.issues){
-                const e=task.elements.find(e=>e.enabled&&e.id===issue.id);
-                if(!e||e.type==='background')continue;
-                if(e.type==='text'&&e.nativeText){e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;}
-                else if(e.type==='shape'||e.enhancedFile){e.type='image';e.sourceRegion=true;e.modeLocked=true;e.extractionMode='photo';e.resolutionPolicy='preserve';delete e.enhancedFile;e.enhancementCheck={accepted:false,reason:issue.reason};}
+                const e=task.elements.find(e=>e.enabled&&e.id===issue.id);if(!e||e.type==='background')continue;
+                targets.set(e.id,issue.reason);
+                const a=e.bounds||e;
+                for(const n of task.elements.filter(n=>n.enabled&&n.nativeText&&n.id!==e.id)){
+                  const b=n.bounds||n;if(e.excludedNativeIds?.includes(n.id)||(a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&a.y+a.height>b.y))targets.set(n.id,issue.reason);
+                }
+              }
+              for(const [id,reason] of targets){
+                const e=task.elements.find(e=>e.id===id);
+                if(e.type==='text'){e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;}
+                else if(e.type==='shape'||e.enhancedFile){e.type='image';e.sourceRegion=true;e.modeLocked=true;e.extractionMode='photo';e.resolutionPolicy='preserve';delete e.enhancedFile;e.enhancementCheck={accepted:false,reason};}
                 else continue;
                 await extract(task,e,settings,signal);
                 const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;
-                repaired.push(e.id);task.warnings.push('“'+e.name+'”装配对照发现问题，已自动保留原图区域：'+issue.reason);
+                repaired.push(e.id);task.warnings.push('“'+e.name+'”装配对照发现问题，已自动保留原图区域：'+reason);
               }
               if(repaired.length){
+                await separateRasterText(true);
                 const bg=task.elements.find(e=>e.enabled&&e.type==='background');await extract(task,bg,settings,signal);const crop=await pixel({operation:'crop-layer',input:bg.file,output:bg.contentFile},signal);bg.bounds=crop.bounds;
                 manifest=await pixel({operation:'assemble',directory:task.directory,width:task.width,height:task.height,elements:enabled},signal);
               }
               let finalCheck=checked;
               if(repaired.length)finalCheck=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
-              task.assemblyCheck={signature:hash({readbackRevision:3,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],complete:finalCheck.complete!==false,incompleteRegions:finalCheck.incompleteRegions||[],verified:finalCheck.complete!==false&&finalCheck.issues.length===0};
+              task.assemblyCheck={signature:hash({readbackRevision:4,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],typographyNotes:finalCheck.typographyNotes||[],complete:finalCheck.complete!==false,incompleteRegions:finalCheck.incompleteRegions||[],verified:finalCheck.complete!==false&&finalCheck.issues.length===0};
+              if(finalCheck.typographyNotes?.length)task.warnings.push(finalCheck.typographyNotes.length+' 处替代字体/字重差异已记录；原文字区域与内容仍通过，保留可编辑文字');
               if(finalCheck.complete===false)task.warnings.push('装配核验有未完成分区，已保留成功分区与说明；可原任务继续');
               if(finalCheck.issues.length)task.warnings.push('装配对照仍有 '+finalCheck.issues.length+' 项视觉差异，详情已保留在任务记录中');
             }catch(error){signal.throwIfAborted();task.assemblyCheck={signature:'',verified:false,complete:false,error:String(error.message||error)};task.warnings.push('装配视觉核验未完成，已保留文件与说明：'+String(error.message||error));}
+            if(task.assemblyCheck?.verified)break;
+            }
           }
         }
         const issues = [...new Map([...(task.quality?.issues || []).filter(i => i.severity === 'warning' && !['layer-content-bounds-review','background-size-adapted','covered-photo-region-local-fill','assembly-readback-difference'].includes(i.code)), ...layoutIssues,

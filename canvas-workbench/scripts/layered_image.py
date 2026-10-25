@@ -368,7 +368,9 @@ def run(spec):
     if op == 'exclude-native-text':
         im=load(spec['input']);alpha=im.getchannel('A');draw=ImageDraw.Draw(alpha)
         for e in spec['elements']:
-            b=e.get('cleanupBounds') or e
+            b=dict(e.get('cleanupBounds') or e)
+            if e.get('bounds'):
+                actual=e['bounds'];right=max(b['x']+b['width'],actual['x']+actual['width']);bottom=max(b['y']+b['height'],actual['y']+actual['height']);b['x']=min(b['x'],actual['x']);b['y']=min(b['y'],actual['y']);b['width']=right-b['x'];b['height']=bottom-b['y']
             draw.rectangle((max(0,math.floor(b['x']-3)),max(0,math.floor(b['y']-3)),min(im.width,math.ceil(b['x']+b['width']+3)),min(im.height,math.ceil(b['y']+b['height']+3))),fill=0)
         im.putalpha(alpha);save(im,spec['output']);return {**info(im),'empty':alpha.getbbox() is None}
     if op == 'analysis-crop':

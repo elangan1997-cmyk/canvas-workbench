@@ -375,5 +375,19 @@ test('dense assembled-picture readback restores a flagged native word locally an
  f.overrides.analyze=async()=>({analysisStrategy:'dense',elements:[{id:'bg',type:'background',name:'背景',z:-100},{id:'word',type:'text',text:'奶茶',name:'菜名',x:0,y:0,width:3,height:2,z:1,nativeText:true,fontAccepted:true}]});
  f.overrides.readback=async()=>({issues:++checks===1?[{id:'word',reason:'局部原字重影'}]:[]});
  const s=createLayeredImageService(f.h,f.overrides);const a=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(a);
- await s.run({id:a.id});const result=await s.settled(a);assert.equal(result.status,'ready',result.error);assert.equal(checks,2);assert.equal(sourceText,1);assert.equal(result.elements.find(e=>e.id==='word').nativeText,false);assert.equal(f.generated.length,0);
+ await s.run({id:a.id});const result=await s.settled(a);assert.equal(result.status,'ready',result.error);assert.equal(checks,2);assert.equal(sourceText,2);assert.equal(result.elements.find(e=>e.id==='word').nativeText,false);assert.equal(f.generated.length,0);
+});
+
+test('newly exposed visual defects receive a second bounded local correction without another user retry',async t=>{
+ const f=await fixture(t),basePixel=f.overrides.pixel;let checks=0;
+ f.overrides.pixel=async spec=>{
+  if(spec.operation==='source-layout-plate'){await writeFile(spec.output,'background');return {engine:'source-layout-plate'};}
+  const r=await basePixel(spec);
+  if(spec.operation==='crop-layer')r.bounds=spec.input.includes('word1-')?{x:0,y:0,width:1,height:1}:spec.input.includes('word2-')?{x:2,y:2,width:1,height:1}:r.bounds;
+  return r;
+ };
+ f.overrides.analyze=async()=>({analysisStrategy:'dense',elements:[{id:'bg',type:'background',name:'背景'},...['word1','word2'].map((id,i)=>({id,type:'text',name:id,text:'奶茶',x:i*2,y:i*2,width:1,height:1,nativeText:true,fontAccepted:true}))]});
+ f.overrides.readback=async()=>({issues:++checks===1?[{id:'word1',reason:'重影'}]:checks<4?[{id:'word2',reason:'缺字'}]:[]});
+ const s=createLayeredImageService(f.h,f.overrides),created=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(created);
+ await s.run({id:created.id});const result=await s.settled(created);assert.equal(result.status,'ready',result.error);assert.equal(checks,4);assert.equal(result.assemblyCheck.verified,true);assert.equal(f.generated.length,0);assert.ok(result.elements.filter(e=>e.type==='text').every(e=>!e.nativeText));
 });
