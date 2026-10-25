@@ -24,6 +24,7 @@ async function fixture(t, generation) {
     if (spec.operation === 'text-material-ownership') return {candidates:[]};
     if (spec.operation === 'structure') return {elements:spec.elements,structureChanges:[]};
     if (spec.operation === 'render-structure') { await writeFile(spec.output,'local'); return {engine:spec.element.type==='shape'?'local-vector-shape':'source-photo-rectangle'}; }
+    if (spec.operation === 'source-layout-plate') { await writeFile(spec.output,'source-layout');return {engine:'source-layout-plate'}; }
     if (spec.operation === 'source-flat') return { eligible: false };
     if (spec.operation === 'inspect') {
       if (spec.output) await writeFile(spec.output, await readFile(spec.input));

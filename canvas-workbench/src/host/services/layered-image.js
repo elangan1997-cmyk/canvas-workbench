@@ -266,7 +266,7 @@ export function createLayeredImageService(h, overrides = {}) {
     }
     if(e.forceModelCutout&&!wasModelCutout)raw=join(task.directory,'assets',e.id+'-'+e.assetKey.slice(0,20)+'-source-crop.original');
     if(await enhanceLayerRegion(task,e,settings,signal,{ctx,pixel,generate,save,verify:overrides.verifyEnhancement}))return;
-    if(e.type==='background'&&task.analysisStrategy==='dense'&&task.reconstruction!=='complete'){
+    if(e.type==='background'&&(task.completionPolicy==='practical'||task.analysisStrategy==='dense'&&task.reconstruction!=='complete')){
       const local=await pixel({operation:'source-layout-plate',input:task.source,output,elements:task.elements},signal);
       e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;e.backgroundQualityIssues=local.issues||[];
       task.sourcePlateFallbackIds=local.unresolvedTextIds||[];return;
@@ -403,7 +403,7 @@ export function createLayeredImageService(h, overrides = {}) {
         for(const e of prepared.filter(e=>e.enabled&&e.enhancementCheck?.accepted===true&&e.enhancedFile&&isPathWithin(task.directory,e.enhancedFile))){
           if(await exists(e.enhancedFile))highDensity.push({id:e.id,hash:hash(await readFile(e.enhancedFile))});
         }
-        const signature = hash({exporterRevision:4,highDensity,layers:prepared.map(e => ({ id:e.id, assetKey:e.assetKey, type:e.type,nativeText:e.nativeText, native:e.nativeText?nativeRepresentation(e):undefined,z:e.z, enabled:e.enabled, bounds:e.bounds })),composite:hash(await readFile(manifest.composite))});
+        const signature = hash({exporterRevision:5,highDensity,layers:prepared.map(e => ({ id:e.id, assetKey:e.assetKey, type:e.type,nativeText:e.nativeText, native:e.nativeText?nativeRepresentation(e):undefined,z:e.z, enabled:e.enabled, bounds:e.bounds })),composite:hash(await readFile(manifest.composite))});
         const checkpoint = task.exportCheckpoint;
         let output, published;
         if (checkpoint?.kind === kind && checkpoint.signature === signature && await exists(checkpoint.published?.path)) {
