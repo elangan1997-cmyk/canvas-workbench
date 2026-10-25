@@ -354,3 +354,22 @@ with tempfile.TemporaryDirectory() as tmp:
 print('PASS: embedded high density, exact frame, opaque photo, no anisotropic scaling')
 `],{cwd:new URL('../..',import.meta.url),encoding:'utf8'});assert.equal(r.status,0,r.stdout+r.stderr);
 });
+
+test('overlapping raster coverage leaves a transparent opening for independently editable confirmed type',t=>{
+ const python=process.env.DSH_TEST_PYTHON||join(homedir(),'.dsh/canvas-workbench/psd-runtime',process.platform==='win32'?'Scripts/python.exe':'bin/python');
+ if(spawnSync(python,['-c','from PIL import Image']).status!==0)return t.skip('Python/Pillow unavailable');
+ const r=spawnSync(python,['-c',`
+import sys,tempfile
+from pathlib import Path
+sys.path.insert(0,'scripts')
+from PIL import Image,ImageDraw
+from layered_image import run
+with tempfile.TemporaryDirectory() as tmp:
+ p=Path(tmp);im=Image.new('RGBA',(200,100));d=ImageDraw.Draw(im);d.rectangle((10,20,160,60),fill='white');d.rectangle((20,30,70,45),fill='black');d.rectangle((120,30,140,45),fill='black');im.save(p/'row.png')
+ out=run({'operation':'exclude-native-text','input':str(p/'row.png'),'output':str(p/'out.png'),'elements':[{'cleanupBounds':{'x':120,'y':30,'width':21,'height':16}}]})
+ a=Image.open(p/'out.png');assert a.getpixel((125,35))[3]==0,'the old printed price must not cover live type'
+ assert a.getpixel((25,35))==(0,0,0,255),'the neighboring original word must remain exact'
+ assert not out['empty']
+print('PASS: source word preserved, confirmed live price has its own transparent opening')
+`],{cwd:new URL('../..',import.meta.url),encoding:'utf8'});assert.equal(r.status,0,r.stdout+r.stderr);
+});

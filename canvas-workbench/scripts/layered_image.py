@@ -357,11 +357,20 @@ def run(spec):
             b=e.get('bounds') or e;x,y,w,h=[int(b[k]) for k in ('x','y','width','height')]
             if min(w,h)>0 and x>=0 and y>=0 and x+w<=source.width and y+h<=source.height:
                 delta=ImageChops.difference(source.crop((x,y,x+w,y+h)),preview.crop((x,y,x+w,y+h)))
+                if e.get('file'):
+                    mask=load(e['file']).getchannel('A').crop((x,y,x+w,y+h))
+                    delta=Image.merge('RGBA',tuple(ImageChops.multiply(channel,mask) for channel in delta.split()))
                 if not any(channel.getbbox() for channel in delta.split()):exact.append(e['id'])
         return {'exact':exact}
     if op == 'source-object-region':
         from layered_structure import source_object_region
         return source_object_region(spec)
+    if op == 'exclude-native-text':
+        im=load(spec['input']);alpha=im.getchannel('A');draw=ImageDraw.Draw(alpha)
+        for e in spec['elements']:
+            b=e.get('cleanupBounds') or e
+            draw.rectangle((max(0,math.floor(b['x']-3)),max(0,math.floor(b['y']-3)),min(im.width,math.ceil(b['x']+b['width']+3)),min(im.height,math.ceil(b['y']+b['height']+3))),fill=0)
+        im.putalpha(alpha);save(im,spec['output']);return {**info(im),'empty':alpha.getbbox() is None}
     if op == 'analysis-crop':
         im=load(spec['input']);r=spec['region'];x,y,w,h=[int(r[k]) for k in ('x','y','width','height')]
         if x<0 or y<0 or w<1 or h<1 or x+w>im.width or y+h>im.height:raise ValueError('分析区域无效')

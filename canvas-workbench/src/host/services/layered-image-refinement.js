@@ -183,6 +183,7 @@ export function checkLayerLayout(elements, width, height) {
     for (let j = i + 1; j < texts.length; j++) {
       const b = texts[j].bounds, area = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
       if(!texts[i].nativeText&&!texts[j].nativeText)continue;
+      if(texts[i].nativeText&&texts[j].excludedNativeIds?.includes(texts[i].id)||texts[j].nativeText&&texts[i].excludedNativeIds?.includes(texts[j].id))continue;
       if (area > Math.min(a.width * a.height, b.width * b.height) * .04) issues.push({ id: texts[i].id, otherId: texts[j].id, code: 'text-overlap', severity: 'review', message: texts[i].name + ' 与 ' + texts[j].name + ' 可能重叠，请核对排版' });
     }
   }

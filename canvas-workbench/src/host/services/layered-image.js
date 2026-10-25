@@ -476,6 +476,18 @@ export function createLayeredImageService(h, overrides = {}) {
         }
         const failed = order.filter(e => e.status !== 'complete');
         if (failed.length) throw new Error('已保存 '+done+'/'+order.length+' 个图层；以下步骤无法自动完成：'+failed.map(e => e.name+'：'+e.error).join('；').slice(0,1000));
+        const confirmedNative=order.filter(e=>e.nativeText&&e.geometrySource==='source-ocr-token');
+        for(const e of order.filter(e=>e.type==='text'&&!e.nativeText)){
+          const a=e.bounds;
+          const overlaps=confirmedNative.filter(n=>{const b=n.cleanupBounds||n;return a.x<b.x+b.width+3&&a.x+a.width>b.x-3&&a.y<b.y+b.height+3&&a.y+a.height>b.y-3;});
+          if(!overlaps.length)continue;
+          // Keep the original raster word, but remove the price/label that is
+          // now represented by independent live type. Rectangle overlap alone
+          // must not flatten that already-confirmed editable text.
+          const masked=await pixel({operation:'exclude-native-text',input:e.file,output:e.file,elements:overlaps},signal);
+          if(masked.empty){e.enabled=false;e.retainedInBackground=false;continue;}
+          const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.excludedNativeIds=overlaps.map(n=>n.id);e.assetTime=(await stat(e.contentFile)).mtimeMs;
+        }
         const layoutIssues=checkLayerLayout(task.elements,task.width,task.height);
         const overlapping=new Set([...layoutIssues.flatMap(i=>[i.id,i.otherId]).filter(Boolean),...(task.sourcePlateFallbackIds||[])]);
         for (const e of order.filter(e=>e.nativeText && overlapping.has(e.id))) {
@@ -487,8 +499,8 @@ export function createLayeredImageService(h, overrides = {}) {
         }
         let manifest = await recoverLocal(task, '图层装配', () => pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: enabled }, signal), signal);
         if(task.analysisStrategy==='dense'&&(overrides.readback||ctx.llm?.prepareCall)){
-          const signature=hash({readbackRevision:2,image:hash(await readFile(manifest.preview))});
-          if(task.assemblyCheck?.signature!==signature){
+          const signature=hash({readbackRevision:3,image:hash(await readFile(manifest.preview))});
+          if(task.assemblyCheck?.signature!==signature||task.assemblyCheck?.complete===false){
             task.stage='verification';task.message='正在对照原图检查装配后的文字、价格和版式…';await save(task);
             try{
               const discardExactCopies=async checked=>{
@@ -497,7 +509,7 @@ export function createLayeredImageService(h, overrides = {}) {
                 const result=await pixel({operation:'verify-source-regions',source:task.source,input:manifest.preview,elements:copies},signal);
                 return {...checked,issues:checked.issues.filter(i=>!(result.exact||[]).includes(i.id)),exactSourceIds:result.exact||[]};
               };
-              const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)])));
+              const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
               await writeFile(join(task.directory,'assembly-check.json'),JSON.stringify(checked,null,2));
               const repaired=[];
               for(const issue of checked.issues){
@@ -515,10 +527,11 @@ export function createLayeredImageService(h, overrides = {}) {
                 manifest=await pixel({operation:'assemble',directory:task.directory,width:task.width,height:task.height,elements:enabled},signal);
               }
               let finalCheck=checked;
-              if(repaired.length)finalCheck=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)])));
-              task.assemblyCheck={signature:hash({readbackRevision:2,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],verified:finalCheck.issues.length===0};
+              if(repaired.length)finalCheck=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
+              task.assemblyCheck={signature:hash({readbackRevision:3,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],complete:finalCheck.complete!==false,incompleteRegions:finalCheck.incompleteRegions||[],verified:finalCheck.complete!==false&&finalCheck.issues.length===0};
+              if(finalCheck.complete===false)task.warnings.push('装配核验有未完成分区，已保留成功分区与说明；可原任务继续');
               if(finalCheck.issues.length)task.warnings.push('装配对照仍有 '+finalCheck.issues.length+' 项视觉差异，详情已保留在任务记录中');
-            }catch(error){signal.throwIfAborted();task.warnings.push('装配视觉核验未完成，已保留文件与说明：'+String(error.message||error));}
+            }catch(error){signal.throwIfAborted();task.assemblyCheck={signature:'',verified:false,complete:false,error:String(error.message||error)};task.warnings.push('装配视觉核验未完成，已保留文件与说明：'+String(error.message||error));}
           }
         }
         const issues = [...new Map([...(task.quality?.issues || []).filter(i => i.severity === 'warning' && !['layer-content-bounds-review','background-size-adapted','covered-photo-region-local-fill','assembly-readback-difference'].includes(i.code)), ...layoutIssues,
