@@ -69,6 +69,8 @@ def refine(spec):
         e['cleanupBounds']={'x':x1,'y':y1,'width':x2-x1,'height':y2-y1}
         if not str(e.get('text','')).strip():
             issues.append({'id':e['id'],'code':'empty-text','severity':'error','message':'文字为空，请核对识别结果'});result.append(e);continue
+        if spec.get('complete') and '\n' not in e['text'] and '\r' not in e['text'] and has_cjk(e['text']) and len(e['text'])>=2 and e['height']/e['width']>=len(e['text'])*.65:
+            e['text']='\n'.join(e['text'])
         if ('\n' in e['text'] or '\r' in e['text'] or abs(float(e.get('rotation',0)))>2) and not spec.get('complete'):
             e['fontAccepted']=False
             issues.append({'id':e['id'],'code':'unsupported-text-geometry','severity':'review','message':'此文字含复杂行式或旋转，自动保留原字形区域'});result.append(e);continue
@@ -115,13 +117,21 @@ def refine(spec):
         color=fitted.get('color','#111111');rgb=tuple(int(color[k:k+2],16) for k in (1,3,5))
         if ambiguous or max(abs(rgb[k]-bg[k]) for k in range(3))<40:
             fitted.pop('textFit',None)
+        if spec.get('complete') and fitted.get('textFit'):
+            fit=fitted['textFit'];font=strict_font(fitted['fontPostScript'],fitted['fontSize'],e['text']);boxes=[];dx=0
+            for ch in e['text']:
+                box=font.getbbox(ch,anchor='ls');boxes.append((dx+box[0],box[1],dx+box[2],box[3]));dx+=font.getlength(ch)+float(fitted.get('tracking',0))*fitted['fontSize']/1000
+            if boxes:
+                left=min(b[0] for b in boxes)+fit['originOffsetX'];right=max(b[2] for b in boxes)+fit['originOffsetX']
+                top=min(b[1] for b in boxes)+fit['baselineOffset'];bottom=max(b[3] for b in boxes)+fit['baselineOffset']
+                if left < -2 or top < -2 or right > e['width']+2 or bottom > e['height']+2:fitted.pop('textFit',None)
         if spec.get('complete') and not fitted.get('textFit'):
             # An explicit reconstruction may replace the font; a low original
             # font-match score is not a reason to bake readable copy into PNG.
             choices=font_candidates(has_cjk(e['text']))
             for family,ps,weight,_ in choices:
                 try:
-                    target=e if multiline else fitted.get('cleanupBounds') or e
+                    target=e
                     tw,th=target['width'],target['height'];probe=strict_font(ps,48,e['text']);lines=e['text'].replace('\r','\n').split('\n')
                     boxes=[probe.getbbox(line or ' ',anchor='ls') for line in lines]
                     bb=(min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes))

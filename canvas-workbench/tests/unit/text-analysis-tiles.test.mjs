@@ -2,13 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startHost } from '../integration/host-harness.mjs';
 
 const exec = promisify(execFile);
+test('isolated acceptance Host cannot read or interrupt the desktop durable queue',async()=>{
+ const home=await mkdtemp(join(tmpdir(),'real-queue-sentinel-')),previous=process.env.DSH_HOME;let host;
+ const queue=join(home,'canvas-workbench','automation-jobs'),id='auto-test-0123456789ab',file=join(queue,id+'.json');await mkdir(queue,{recursive:true});
+ const data=JSON.stringify({id,project:home,status:'running',items:[]});await writeFile(file,data);process.env.DSH_HOME=home;
+ try{host=await startHost({pluginDir:fileURLToPath(new URL('../../',import.meta.url))});const response=await(await fetch(host.baseUrl+'/dsh-canvas/automation/jobs')).json();assert.equal(response.ok,true);assert.deepEqual(response.value,[]);assert.equal(await readFile(file,'utf8'),data);}
+ finally{if(host)await host.close();if(previous===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previous;await rm(home,{recursive:true,force:true});}
+});
 test('vision tile calls use original pixels, retry independently and retain later/empty tiles', async (t) => {
   try { await exec('python3', ['-c', 'from PIL import Image']); }
   catch { return t.skip('Python/Pillow unavailable'); }

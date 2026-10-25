@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText} from '../../src/host/services/layered-complete-policy.js';
+import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials} from '../../src/host/services/layered-complete-policy.js';
 import {prepareLayerSourceHd} from '../../src/host/services/layered-source-hd.js';
 import {codexImageRequestOptions} from '../../src/providers/image/dsh-codex.provider.js';
 
@@ -60,4 +60,11 @@ test('ignored single-image resolution triggers bounded resumable model tiles, ne
  await assert.rejects(prepareLayerSourceHd(task,{},new AbortController().signal,runtime),/额度/);
  assert.equal(calls,2);task.maxImageRequests=4;await prepareLayerSourceHd(task,{},new AbortController().signal,runtime);
  assert.equal(calls,4,'already returned sibling tiles are reused');assert.equal(task.generationAttempts,4);assert.equal(task.sourceHd.resolutionGoalMet,true);assert.equal(task.sourceHd.tiled,true);
+});
+
+test('renumbered artwork text never inherits an unrelated old price cache',()=>{
+ const cup={id:'cup',type:'image',name:'原杯',file:'/cached-cup.png'},oldPrice={id:'text-011',type:'text',text:'元',x:800,y:200,file:'/old-price.png'};
+ const art={id:'text-011',type:'image',name:'Nature',text:'Nature',typographyKind:'handwriting',x:100,y:300};
+ const result=reuseCompleteMaterials([{id:'cup',type:'image'},art],[cup,oldPrice],[cup]);
+ assert.equal(result[0].file,cup.file);assert.deepEqual(result[1],art);assert.equal(result[1].file,undefined);
 });

@@ -32,7 +32,7 @@ async function fixture(t, generation) {
     }
     if (spec.operation === 'text' || spec.operation === 'source-text') { await writeFile(spec.output, 'text'); return { success: true,engine:spec.operation==='source-text'?'source-text-region':undefined }; }
     if (spec.operation === 'crop-layer') { await mkdir(join(spec.output, '..'), {recursive:true}); await writeFile(spec.output, await readFile(spec.input)); return { success:true, bounds:{x:0,y:0,width:4,height:4} }; }
-    if (spec.operation === 'background-plate') return {success:true};
+    if (['background-plate','preserve-canvas-margin'].includes(spec.operation)) return {success:true};
     if (spec.operation === 'assemble') {
       const layers = [];
       for (const [i, e] of spec.elements.filter(e => e.enabled).sort((a, b) => a.z - b.z).entries()) {
@@ -65,6 +65,18 @@ test('layer plan enforces a unique background, coordinates, review and stable ID
   assert.equal(normalizeLayerElements([{ id: 't', type: 'text', text: '文', nativeText: true }], 100, 100)[1].fontAccepted,false,'font approval is performed automatically by the executor');
   const prompt = extractionPrompt(plan[1], plan, 900, 1200);
   assert.match(prompt, /真实Alpha/); assert.match(prompt, /禁止居中/);
+});
+
+test('local preflight rejections consume no image requests, and migration never clears an actual unknown network request',async t=>{
+ const f=await fixture(t,async()=>{const e=Error('图片输入格式无效');e.imageRequestNotSent=true;throw e;});
+ await f.service.run({...f.body,maxImageRequests:2});const failed=await f.service.settled(f.body);
+ assert.equal(failed.generationAttempts,0);assert.ok(failed.elements.every(e=>e.requestState==='not-submitted'));
+ const file=join(failed.outputDirectory,'task.json'),record=JSON.parse(await readFile(file,'utf8'));record.reconstruction='complete';record.generationAttempts=2;
+ record.elements[0].requestState='unknown';record.elements[0].error='network timeout';
+ record.elements[1].requestState='unknown';record.elements[1].error='图片输入格式无效';await writeFile(file,JSON.stringify(record));
+ const recovered=await createLayeredImageService(f.h,f.overrides).get(f.body);
+ assert.equal(recovered.generationAttempts,1);assert.equal(recovered.elements[0].requestState,'unknown');assert.equal(recovered.elements[1].requestState,'not-submitted');
+ assert.equal((await createLayeredImageService(f.h,f.overrides).get(f.body)).generationAttempts,1,'migration is idempotent');
 });
 
 test('layer extraction freezes the chosen Codex image model per run and invalidates generated assets when it changes', async t => {

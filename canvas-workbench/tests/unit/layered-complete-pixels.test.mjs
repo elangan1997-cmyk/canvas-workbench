@@ -39,6 +39,9 @@ with tempfile.TemporaryDirectory() as temp:
  before=source.read_bytes();glyph=p/'source-glyph.png';run({'operation':'source-glyph-cutout','input':str(source),'output':str(glyph),'element':e})
  image=Image.open(glyph);assert image.getchannel('A').getbbox() is not None and image.getpixel((0,0))[3]==0
  assert image.getchannel('A').getbbox()[2]<image.width and source.read_bytes()==before
+ paper=p/'paper.png';plate=p/'plate.png';im=Image.new('RGBA',(200,100),'white');ImageDraw.Draw(im).rectangle((10,10,60,80),fill='green');ImageDraw.Draw(im).rectangle((90,30,100,40),fill='black');im.save(paper);Image.new('RGBA',(200,100),'green').save(plate)
+ result=run({'operation':'preserve-canvas-margin','source':str(paper),'input':str(plate),'output':str(plate)});im=Image.open(plate)
+ assert result['applied'] and im.getpixel((0,0))[:3]==(255,255,255) and im.getpixel((95,35))[:3]==(255,255,255) and im.getpixel((30,30))[:3]==(0,128,0)
  print('PASS: real HD pixels, ownership, alpha and installed-font substitution')
 `],{cwd:new URL('../..',import.meta.url),encoding:'utf8'});
  assert.equal(run.status,0,run.stdout+run.stderr);

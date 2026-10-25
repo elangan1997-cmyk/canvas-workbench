@@ -36,6 +36,13 @@ export function completeLayerAudit(elements){
   editableText:visible.filter(e=>e.type==='text'&&e.nativeText).length,independentImages:visible.filter(e=>e.type==='image').length};
 }
 
+/** Re-analysis numbers text again. Text IDs are not reusable material owners,
+ * even when a new text candidate becomes an independent artwork glyph. */
+export function reuseCompleteMaterials(elements,previous,fixedLayout){
+ const owners=new Set(fixedLayout.map(e=>e.id)),prior=new Map(previous.map(e=>[e.id,e]));
+ return elements.map(e=>owners.has(e.id)&&prior.has(e.id)?{...e,...prior.get(e.id)}:e);
+}
+
 export function deduplicateCompleteText(elements){
  const compact=s=>String(s||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase();
  const texts=elements.filter(e=>e.enabled&&e.type==='text').sort((a,b)=>Number(a.sourceTextSupplement)-Number(b.sourceTextSupplement)||Number(b.contentVerified)-Number(a.contentVerified));

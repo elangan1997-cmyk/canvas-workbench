@@ -143,7 +143,11 @@ export async function startHost({ pluginDir, port = 0, workspaceRoot = null, nod
   const mod = await import(pathToFileURL(join(stage, 'lib', 'index.js')).href + '?t=' + Date.now());
   const apply = mod.apply || (mod.default && mod.default.apply) || mod.default;
   if (typeof apply !== 'function') throw new Error('lib/index.js 未导出 apply');
-  apply(ctx);
+  // apply constructs durable queues synchronously. Never let an isolated Host
+  // scan the desktop user's queue and mark a genuinely running job interrupted.
+  const previousDshHome=process.env.DSH_HOME;
+  process.env.DSH_HOME=join(stageRoot,'isolated-dsh-home');
+  try{apply(ctx);}finally{if(previousDshHome===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previousDshHome;}
   if (!handlerSpec) throw new Error('apply(ctx) 没有注册 webServer 处理器');
 
   const server = createServer((req, res) => {

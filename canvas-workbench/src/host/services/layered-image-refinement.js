@@ -6,6 +6,7 @@ import { runPythonSpec } from './python-launch.js';
 import { refineTextGeometry } from './text-geometry.js';
 import { verifyLayerTextContent } from './layered-image-model.js';
 import { MAX_LAYER_ELEMENTS } from './layered-image-limits.js';
+import {createHash} from 'node:crypto';
 
 export async function runLayerRefinementScript(h, spec, signal, script = 'refine_layered_text.py') {
   signal?.throwIfAborted();
@@ -122,7 +123,8 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
   let elements = splitLayerTextLines(task.elements), warnings = [], issues = [], refinedCount = 0;
   const unresolvedContent=new Set(); let ocrLines=[];
   try {
-    let local;try{local=JSON.parse(await readFile(join(task.directory,'local-ocr.json'),'utf8'));if(!Array.isArray(local.blocks))local=null;}catch{}
+    const ocrName=task.reconstruction==='complete'?'local-ocr-original-'+createHash('sha256').update(await readFile(task.source)).digest('hex').slice(0,12)+'.json':'local-ocr.json';
+    let local;try{local=JSON.parse(await readFile(join(task.directory,ocrName),'utf8'));if(!Array.isArray(local.blocks))local=null;}catch{}
     if(!local)local=await runLayerRefinementScript(h, { input: task.source, lang: 'chi_sim+eng', psm: '11' }, signal, 'ocr_image.py');
     ocrLines=local.blocks||[];
     await restoreRecognitionGeometry(elements,task.directory,ocrLines);
@@ -165,7 +167,7 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
     warnings.push(decorations.length + ' 个细线或小装饰已合并到背景，保留原图像素');
   }
   if (elements.some(e => e.type === 'text')) {
-    const refined = await runLayerRefinementScript(h, { operation: 'refine', input: task.analysisSource||task.source, elements,complete:task.reconstruction==='complete',
+    const refined = await runLayerRefinementScript(h, { operation: 'refine', input: task.reconstruction==='complete'?task.source:task.analysisSource||task.source, elements,complete:task.reconstruction==='complete',
       ...(task.analysisStrategy==='dense'?{ocrLines}: {}) }, signal);
     elements = refined.elements; issues.push(...(refined.issues || [])); warnings.push(...(refined.warnings || []));
     for (const e of elements) if (e.type === 'text' && e.enabled) {

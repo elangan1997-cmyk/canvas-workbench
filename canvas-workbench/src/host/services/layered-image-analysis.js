@@ -23,17 +23,22 @@ export function layerAnalysisRegions(width,height){
 export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,signal,runtime){
   const directory=join(runtime.directory,'analysis');await mkdir(directory,{recursive:true});
   const signature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:5,reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
+  const textSignature=runtime.textSourceHash?createHash('sha256').update(signature).update(runtime.textSourceHash).digest('hex'):signature;
   const legacyLayoutSignature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:4,reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
   const stored=await readJson(join(directory,'manifest.json'));
   const manifest=stored?.signature===signature?stored:{signature,calls:0,completed:[],failures:[]};
+  if(runtime.textSourceHash&&manifest.textSignature!==textSignature)manifest.completed=[];
+  manifest.textSignature=textSignature;manifest.completed=[...new Set(manifest.completed)];
   const initialCalls=manifest.calls;
   let progressWrites=Promise.resolve();
   const progress=(message,extra={})=>{Object.assign(manifest,extra);const snapshot=JSON.parse(JSON.stringify(manifest));
     progressWrites=progressWrites.catch(()=>{}).then(async()=>{await writeJson(join(directory,'manifest.json'),snapshot);await runtime.progress?.({message,strategy:snapshot.strategy||'routing',calls:snapshot.calls,completedTiles:snapshot.completed.length,...extra});});return progressWrites;};
-  const checkpoint=async(name)=>{const value=await readJson(join(directory,name+'.json'));return value?.signature===signature||(['layout','image-regions'].includes(name)&&value?.signature===legacyLayoutSignature)?value.result:null;};
-  const retain=async(name,result)=>writeJson(join(directory,name+'.json'),{signature,result});
-  let ocr=await readJson(join(runtime.directory,'local-ocr.json'));
-  if(!ocr)try{ocr=await runtime.ocr(signal);await writeJson(join(runtime.directory,'local-ocr.json'),ocr);}catch(error){signal.throwIfAborted();ocr={blocks:[],warning:String(error.message||error)};}
+  const keyFor=name=>['layout','image-regions','whole'].includes(name)?signature:textSignature;
+  const checkpoint=async(name)=>{const value=await readJson(join(directory,name+'.json'));return value?.signature===keyFor(name)||(['layout','image-regions'].includes(name)&&value?.signature===legacyLayoutSignature)?value.result:null;};
+  const retain=async(name,result)=>writeJson(join(directory,name+'.json'),{signature:keyFor(name),result});
+  const ocrFile=join(runtime.directory,runtime.textSourceHash?'local-ocr-original-'+runtime.textSourceHash.slice(0,12)+'.json':'local-ocr.json');
+  let ocr=await readJson(ocrFile);
+  if(!ocr)try{ocr=await runtime.ocr(signal);await writeJson(ocrFile,ocr);}catch(error){signal.throwIfAborted();ocr={blocks:[],warning:String(error.message||error)};}
   const diagnostics=[];
   const part=async(structureOnly)=>{
     const name=structureOnly?'layout':'whole';const cached=await checkpoint(name);if(cached)return cached;
@@ -45,16 +50,16 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
     await retain(name,result);return result;
   };
   let whole;
-  const dense=(ocr.blocks||[]).filter(b=>b.text&&b.confidence>=45).length>=28 || manifest.strategy==='dense';
+  const dense=body.reconstruction==='complete'||!!runtime.fixedLayout||(ocr.blocks||[]).filter(b=>b.text&&b.confidence>=45).length>=28 || manifest.strategy==='dense';
   if(!dense)try{whole=await part(false);}catch(error){
     signal.throwIfAborted();if(!error.analysisTruncated)throw error;
     manifest.failures.push({stage:'whole',reason:'max-tokens'});await progress('整图分析达到输出上限，正在自动改为分区分析…',{strategy:'dense'});
   }
   if(whole)return{...whole,analysisStrategy:'whole',analysisCalls:manifest.calls};
   manifest.strategy='dense';
-  const layout=await part(true);
+  const layout=runtime.fixedLayout?{elements:runtime.fixedLayout,warnings:[]}:await part(true);
   let sourceLayout=body.reconstruction==='complete'?{elements:completeLayerPlan(layout.elements),warnings:[]}:denseSourceStructure(layout.elements);
-  const regionPlan=await checkpoint('image-regions');
+  const regionPlan=runtime.fixedLayout?{elements:runtime.fixedLayout,warnings:[]}:await checkpoint('image-regions');
   if(regionPlan)sourceLayout={...sourceLayout,elements:regionPlan.elements,warnings:[...sourceLayout.warnings,...regionPlan.warnings]};
   else if(runtime.refineImages){await progress('正在核对独立主体的完整边界，保留已生成的高清素材…');const refined=await runtime.refineImages(sourceLayout.elements,signal);await retain('image-regions',refined);sourceLayout={...sourceLayout,elements:refined.elements,warnings:[...sourceLayout.warnings,...refined.warnings]};}
   const images=sourceLayout.elements.filter(e=>e.type==='image'&&e.enabled!==false);

@@ -337,9 +337,58 @@ def exclude_owned_regions(im,e,elements):
             draw.rectangle((max(0,x-2),max(0,y-2),min(im.width,x+w+1),min(im.height,y+h+1)),fill=0)
     im.putalpha(alpha)
 
+def preserve_flat_canvas_margin(spec):
+    """Restore a real, border-connected flat canvas (e.g. menu paper).
+    No source foreground is pasted back. Large coloured/photographic regions
+    keep the generated clean plate; small enclosed ink holes are background.
+    """
+    import numpy as np
+    source=load(spec['source']);generated=load(spec['input'])
+    if source.size!=generated.size:raise ValueError('底稿与原图画布尺寸不一致')
+    a=np.asarray(source.convert('RGB'));best=None
+    for inset in sorted(set([0,2,4,8,min(16,int(min(source.size)*.015))])):
+        if inset*2>=min(source.size):continue
+        border=np.concatenate((a[inset,inset:source.width-inset or None],a[source.height-1-inset,inset:source.width-inset or None],a[inset:source.height-inset or None,inset],a[inset:source.height-inset or None,source.width-1-inset]))
+        quant=border//8;colors,counts=np.unique(quant,axis=0,return_counts=True);winner=colors[counts.argmax()];score=counts.max()/len(border)
+        if best is None or score>best[0]:best=(score,inset,border,quant,winner)
+    score,inset,border,quant,winner=best
+    if score<.7:return {'applied':False,**info(generated)}
+    samples=border[np.all(quant==winner,axis=1)];color=np.median(samples,axis=0).astype('uint8')
+    flat=(np.max(np.abs(a.astype('int16')-color),axis=2)<=12).astype('uint8')
+    # Scanline components keep this available in the existing NumPy/Pillow
+    # runtime; no new OpenCV/SciPy installation is needed on Windows or Mac.
+    def components(binary):
+        parents=[];runs=[];previous=[]
+        def find(i):
+            while parents[i]!=i:parents[i]=parents[parents[i]];i=parents[i]
+            return i
+        for y,row in enumerate(binary):
+            changes=np.diff(np.pad(row.astype('int8'),(1,1)));starts=np.flatnonzero(changes==1);ends=np.flatnonzero(changes==-1);current=[];cursor=0
+            for x,end in zip(starts,ends):
+                i=len(parents);parents.append(i);runs.append((y,int(x),int(end),i));current.append((int(x),int(end),i))
+                while cursor<len(previous) and previous[cursor][1]<x:cursor+=1
+                j=cursor
+                while j<len(previous) and previous[j][0]<=end:
+                    left,right=find(i),find(previous[j][2]);parents[left]=right;j+=1
+            previous=current
+        groups={}
+        for y,x,end,i in runs:
+            root=find(i);g=groups.setdefault(root,{'runs':[],'area':0,'edge':False});g['runs'].append((y,x,end));g['area']+=end-x;g['edge']|=y<=inset or y>=binary.shape[0]-1-inset or x<=inset or end>=binary.shape[1]-inset
+        return groups.values()
+    mask=np.zeros_like(flat)
+    for g in components(flat):
+        if g['edge']:
+            for y,x,end in g['runs']:mask[y,x:end]=1
+    for g in components(1-mask):
+        if not g['edge'] and g['area']<source.width*source.height*.025:
+            for y,x,end in g['runs']:mask[y,x:end]=1
+    tile=Image.new('RGBA',source.size,tuple(map(int,color))+(255,));generated.paste(tile,(0,0),Image.fromarray(mask*255));save(generated,spec['output'])
+    return {'applied':True,'restoredPixels':int(mask.sum()),**info(generated)}
+
 
 def run(spec):
     op = spec.get('operation', 'inspect')
+    if op=='preserve-canvas-margin':return preserve_flat_canvas_margin(spec)
     if op == 'text-presence':
         from infer_text_style import pixel_foreground
         im=load(spec['input']);e=spec['element'];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]

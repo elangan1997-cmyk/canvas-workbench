@@ -17,7 +17,7 @@ import { denseSourceStructure } from './layered-source-policy.js';
 import { enhanceLayerRegion,verifyEnhancedRegion } from './layered-image-enhancement.js';
 import { inspectLayerReadback } from './layered-image-readback.js';
 import { refineLayerSourceRegions } from './layered-image-regions.js';
-import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText} from './layered-complete-policy.js';
+import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials} from './layered-complete-policy.js';
 import {prepareLayerSourceHd,identifySourceBrands,sourceBrandConstraint} from './layered-source-hd.js';
 import {recoverCompleteText} from './layered-complete-text.js';
 
@@ -72,7 +72,7 @@ export function createLayeredImageService(h, overrides = {}) {
     warnings: task.warnings || [], engine: task.engine || '', imageModel: task.imageModel || '', localOnly: task.localOnly === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
     quality: task.quality ? { ...task.quality, reviewAcknowledged: task.qualityAcknowledged === true } : null, analysisModel: task.analysisModel || null, analysisAttempts: task.analysisAttempts || 0,
     analysisProgress:task.analysisProgress||null,analysisStrategy:task.analysisStrategy||'',analysisComplete:task.analysisComplete===true,
-    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',sourceHd:task.sourceHd||null,completeness:task.completeness||null,
+    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',textTruthVersion:task.textTruthVersion||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
     generationAttempts: task.generationAttempts || 0, maxImageRequests: task.maxImageRequests ?? 40,
     sourceUrl: previewUrl(task.source, task.createdAt), previewUrl: task.preview ? previewUrl(task.preview, task.updatedAt) : '',
     outputDirectory: task.directory, storageProject: join(task.directory, '..', '..', '..'),
@@ -139,6 +139,7 @@ export function createLayeredImageService(h, overrides = {}) {
   const ensureIdle = task => { if (active.has(task.directory) || preparing.has(task.directory)) throw new Error('当前步骤仍在执行，请稍候'); };
 
   const cleanPlate = async (task, element, signal) => {
+    if(task.reconstruction==='complete')await pixel({operation:'preserve-canvas-margin',source:task.source,input:element.file,output:element.file},signal);
     if (!task.autoRefine || !task.elements.some(e => e.enabled && e.nativeText)) return;
     const spec = { operation: 'clean-background', input: element.file, source: task.source, output: element.file, elements: task.elements };
     const result = overrides.refinement ? await overrides.refinement(spec, signal) : await runLayerRefinementScript(h, spec, signal);
@@ -181,7 +182,7 @@ export function createLayeredImageService(h, overrides = {}) {
     // Narrow upright CJK columns are multiple baselines, not one horizontal
     // word squeezed into a character-wide rectangle. Keep native text in both
     // Adobe formats and measure the same line spacing in the preview.
-    for(const e of targets)if(!/[\r\n]/.test(e.text)&&/[\u3400-\u9fff]/.test(e.text)&&e.text.length>=3&&e.height/e.width>=e.text.length*.65)e.text=Array.from(e.text).join('\n');
+    for(const e of targets)if(!/[\r\n]/.test(e.text)&&/[\u3400-\u9fff]/.test(e.text)&&e.text.length>=2&&e.height/e.width>=e.text.length*.65)e.text=Array.from(e.text).join('\n');
     if(targets.length){
       const refined=await (overrides.completeRefinement||((spec,s)=>runLayerRefinementScript(h,spec,s)))({operation:'refine',input:task.source,elements:targets,complete:true},signal);
       for(const next of refined.elements){const e=task.elements.find(e=>e.id===next.id);Object.assign(e,next);e.nativeText=!!(e.fontAvailable&&e.textFit);e.fontAccepted=e.nativeText;if(!e.nativeText)throw new Error('完整拆分的替代字体无法显示：'+e.name);
@@ -211,7 +212,7 @@ export function createLayeredImageService(h, overrides = {}) {
   async function extract(task, e, settings, signal) {
     const output = join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.png');
     const raw = e.reusedRawFile || join(task.directory, 'assets', e.id + '-' + e.assetKey.slice(0, 20) + '.original');
-    if(e.unresolvedAsGlyph){
+    if(e.unresolvedAsGlyph||e.typographyKind){
       await pixel({operation:'source-glyph-cutout',input:task.source,output,element:e},signal);e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine='source-unconfirmed-glyph';return;
     }
     if(task.reconstruction==='complete'&&e.type==='image'&&task.analysisSource&&!e.useOriginalRegion){
@@ -222,13 +223,16 @@ export function createLayeredImageService(h, overrides = {}) {
       if(!checked){checked={...await (overrides.verifyEnhancement||verifyEnhancedRegion)(ctx,task.analysisModel,original,candidate,signal,task.sourceFacts?.brands||[]),signature};await writeFile(report,JSON.stringify(checked,null,2));}
       e.hdSourceCheck=checked;if(!checked.accepted){e.useOriginalRegion=true;task.warnings.push('“'+e.name+'”高清版本未通过身份/品牌核对，改从原图透明提取：'+checked.reason);}
     }
-    if(task.reconstruction==='complete'&&e.type==='image'&&e.extractionMode==='cutout'&&!await exists(raw)){
+    if(task.reconstruction==='complete'&&e.type==='image'&&e.extractionMode==='cutout'&&(!await exists(raw)||e.forceSourceCutout)){
       const source=e.useOriginalRegion?task.source:task.analysisSource||task.source;
       if(e.visualKind==='graphic'){
         const local=await pixel({operation:'graphic-cutout',input:source,output,element:e,elements:task.elements},signal);
         if(local.eligible){e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;return;}
+        if(e.forceSourceCutout&&/文字|书法|标题|标识|logo|印章/.test(e.name)){
+          await pixel({operation:'source-glyph-cutout',input:source,output,element:e},signal);e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine='source-graphic-alpha';return;
+        }
       }
-      if(e.visualKind==='product'||e.visualKind==='graphic'&&!/文字|书法|标题|标识|logo|印章/.test(e.name+' '+e.description)){
+      if(e.visualKind==='product'||e.visualKind==='graphic'&&!/文字|书法|标题|标识|logo|印章/.test(e.name)){
         const input=output+'.matte-input.png',matte=output+'.local-matte.png';
         await pixel({operation:'analysis-crop',input:source,output:input,region:e},signal);
         try{
@@ -238,7 +242,7 @@ export function createLayeredImageService(h, overrides = {}) {
           }
           await pixel({operation:'place-cutout',input:matte,output,element:e,elements:task.elements,width:task.width,height:task.height},signal);
           e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine='hd-product-local-matte';return;
-        }catch(error){signal.throwIfAborted();task.warnings.push('“'+e.name+'”本地透明提取未通过，继续模型提取：'+String(error.message||error));}
+        }catch(error){signal.throwIfAborted();if(e.forceSourceCutout)throw error;task.warnings.push('“'+e.name+'”本地透明提取未通过，继续模型提取：'+String(error.message||error));}
       }
     }
     if(await enhanceLayerRegion(task,e,settings,signal,{ctx,pixel,generate,save,verify:overrides.verifyEnhancement}))return;
@@ -505,7 +509,7 @@ export function createLayeredImageService(h, overrides = {}) {
         extractionMode:e.extractionMode,visualKind:e.visualKind,shadowMode:e.shadowMode,
         ...(e.nativeText ? { nativeText: true, cleanupBounds: e.cleanupBounds } : {}) }));
       const backgroundSelectionKey=hash([...selected].sort((a,b)=>a.id.localeCompare(b.id)));
-      const removalKey=list=>hash(list.filter(e=>e.type==='image'||e.type==='shape').map(e=>({id:e.id,type:e.type,description:e.description,enabled:e.enabled,x:e.x,y:e.y,width:e.width,height:e.height,revision:e.revision,extractionMode:e.extractionMode,visualKind:e.visualKind,shadowMode:e.shadowMode})).sort((a,b)=>a.id.localeCompare(b.id)));
+      const removalKey=list=>hash(list.filter(e=>(e.type==='image'&&!e.typographyKind)||e.type==='shape').map(e=>({id:e.id,type:e.type,description:e.description,enabled:e.enabled,x:e.x,y:e.y,width:e.width,height:e.height,revision:e.revision,extractionMode:e.extractionMode,visualKind:e.visualKind,shadowMode:e.shadowMode})).sort((a,b)=>a.id.localeCompare(b.id)));
       for (const e of elements) {
         // Layer ordering is assembly metadata; moving a layer must not buy
         // another extraction of the same pixels.
@@ -608,7 +612,7 @@ export function createLayeredImageService(h, overrides = {}) {
                 const e=task.elements.find(e=>e.id===id);
                 if(task.reconstruction==='complete'&&e.type==='text')continue;
                 if(task.reconstruction==='complete'&&e.type==='image'&&e.extractionMode==='cutout'){
-                  e.useOriginalRegion=true;e.assetKey=hash({previous:e.assetKey,originalRepair:true});
+                  e.useOriginalRegion=true;e.forceSourceCutout=true;e.assetKey=hash({previous:e.assetKey,originalRepair:true});
                   await extract(task,e,settings,signal);const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;restored.push(e.id);continue;
                 }
                 if(e.type==='text'){e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;}
@@ -696,6 +700,26 @@ export function createLayeredImageService(h, overrides = {}) {
         }
   }
 
+  async function refreshCompleteSourceText(task,signal){
+    if(task.reconstruction!=='complete'||task.textTruthVersion===3||task.analysisStrategy!=='dense'||!task.analysisSource||!ctx.llm?.prepareCall)return;
+    task.stage='analysis';task.message='正在从原图重新核对全部菜单文字；已生成的高清素材和背景保留';await save(task);
+    const previous=task.elements,body={...task.analysisModel,reconstruction:'complete',localOnly:task.localOnly===true};
+    const fixedLayout=task.elements.filter(e=>e.type!=='text'&&!e.typographyKind);
+    const result=await analyze(ctx,{bytes:await readFile(task.analysisSource),mime:'image/png'},body,task.width,task.height,signal,{
+      directory:task.directory,textSourceHash:hash(await readFile(task.source)),
+      fixedLayout,
+      ocr:s=>runLayerRefinementScript(h,{input:task.source,lang:'chi_sim+eng',psm:'11'},s,'ocr_image.py'),
+      crop:(region,s)=>pixel({operation:'analysis-crop',input:task.source,output:region.output,region,exclude:[]},s),
+      progress:async value=>{task.analysisProgress=value;task.message=value.message;await save(task);}
+    });
+    task.elements=reuseCompleteMaterials(normalizeLayerElements(result.elements,task.width,task.height),previous,fixedLayout);
+    for(const e of task.elements)if(e.type==='text')e.recognitionBounds={x:e.x,y:e.y,width:e.width,height:e.height};
+    task.analysisWarnings=[...new Set([...(task.analysisWarnings||[]),...(result.warnings||[]),'文字内容由原图独立识别；高清重绘仅供素材与结构参考，不能作为文案事实'])];
+    task.stage='calibration';task.message='原图文字分区已保存，正在校准文字框与原生字体…';await save(task);
+    await calibrate(task,{...body,editableText:true,fontPolicy:task.quality?.fontPolicy||'substitute'},signal);
+    task.textTruthVersion=3;await save(task);
+  }
+
   async function executeAnalysis(task,body,signal,automaticSettings=null) {
         if((task.enhanceSource||task.reconstruction==='complete')&&!task.sourceFacts&&ctx.llm?.prepareCall){
           task.message='正在从原图核实主品牌，防止高清重绘换成其他品牌…';await save(task);
@@ -707,11 +731,13 @@ export function createLayeredImageService(h, overrides = {}) {
           task.stage='enhancement';task.message='正在生成高清识别母版，原图继续用于内容核对…';await save(task);
           await prepareLayerSourceHd(task,settings,signal,{ctx,pixel,generate,save});
         }
+        const textSource=task.reconstruction==='complete'?task.source:task.analysisSource||task.source;
         const result = body.flat ? { elements: [{ id: 'original', type: 'background', name: '原图（普通PSD转换）', x: 0, y: 0, width: task.width, height: task.height }], warnings: [] }
           : await analyze(ctx, { bytes: await readFile(task.analysisSource||task.source), mime: 'image/png' }, body, task.width, task.height, AbortSignal.any([signal, AbortSignal.timeout(900000)]),{
             directory:task.directory,
-            ocr:signal=>runLayerRefinementScript(h,{input:task.analysisSource||task.source,lang:'chi_sim+eng',psm:'11'},signal,'ocr_image.py'),
-            crop:(region,signal)=>pixel({operation:'analysis-crop',input:task.analysisSource||task.source,output:region.output,region,exclude:region.exclude||[]},signal),
+            ...(task.reconstruction==='complete'?{textSourceHash:hash(await readFile(textSource))}:{}),
+            ocr:signal=>runLayerRefinementScript(h,{input:textSource,lang:'chi_sim+eng',psm:'11'},signal,'ocr_image.py'),
+            crop:(region,signal)=>pixel({operation:'analysis-crop',input:textSource,output:region.output,region,exclude:region.exclude||[]},signal),
             refineImages:(elements,signal)=>refineLayerSourceRegions(ctx,{...task,elements},pixel,signal),
             progress:async value=>{task.analysisProgress=value;task.stage='analysis';task.message=value.message;task.progress=4;await save(task);}
           });
@@ -721,6 +747,7 @@ export function createLayeredImageService(h, overrides = {}) {
         task.analysisWarnings = result.warnings || []; task.warnings = [...task.analysisWarnings]; task.analysisAttempts = result.analysisAttempts || (body.flat ? 0 : 1);
         task.semanticPolicyVersion=result.semanticPolicyVersion||1;
         task.analysisComplete=true;task.analysisStrategy=result.analysisStrategy||'whole';
+        if(task.reconstruction==='complete')task.textTruthVersion=3;
         task.imageGeometryVersion=result.imageGeometryVersion||0;
         if (result.rawAnalysis) await writeFile(join(task.directory, 'model-analysis.json'), JSON.stringify(result.rawAnalysis, null, 2));
         if (task.autoRefine && !body.flat) {
@@ -792,7 +819,7 @@ export function createLayeredImageService(h, overrides = {}) {
       const controller=new AbortController();preparing.set(task.directory,controller);
       let settings;
       task.status='running';task.stage='preparing';task.error='';task.message='正在准备原任务，已有图层和高清分区会复用';await save(task);
-      try { settings = await prepareRun(task, body,controller.signal); }
+      try { await refreshCompleteSourceText(task,controller.signal);settings = await prepareRun(task, body,controller.signal); }
       catch(error){task.status=controller.signal.aborted?'cancelled':'failed';task.stage=task.status==='cancelled'?'cancelled':'error';task.error=controller.signal.aborted?'':String(error.message||error);task.message=task.error||'已取消准备，成功素材保留';await save(task);throw error;}
       finally { preparing.delete(task.directory); }
       start(task, signal => executeRun(task, settings, signal));
@@ -813,6 +840,10 @@ export function createLayeredImageService(h, overrides = {}) {
       if (!task.elements.length || task.elements.some(e => e.enabled && (e.status !== 'complete' || !e.file))) throw new Error('请先完成所有已选图层的提取');
       task.status = 'running'; task.stage = 'export'; task.progress = 10; task.error = ''; task.message = '正在生成 ' + body.format.toUpperCase() + ' 文件…';
       start(task, async signal => {
+        if(task.reconstruction==='complete'&&task.textTruthVersion!==3&&task.analysisSource&&task.analysisStrategy==='dense'&&ctx.llm?.prepareCall){
+          await refreshCompleteSourceText(task,signal);
+          const settings=await prepareRun(task,{...body,engine:task.engine,autoExportFormat:'',maxImageRequests:task.maxImageRequests},signal);await executeRun(task,settings,signal);
+        }
         await recoverLocal(task, '导出文件', () => exportArtifact(task, body.format, signal, body.openAfterExport === true), signal);
       });
       return present(task);

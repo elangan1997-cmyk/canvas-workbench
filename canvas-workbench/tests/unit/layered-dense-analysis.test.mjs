@@ -26,6 +26,12 @@ test('dense layout separates 80 text objects, splits only truncated cores and re
  const count=calls.length;const replay=await analyzeLayeredDocument(ctx,uploaded,body,2000,1400,new AbortController().signal,runtime);assert.equal(calls.length,count,'same task resumes every completed tile without another model request');assert.equal(replay.elements.length,result.elements.length);
  const text=result.elements.filter(e=>e.type==='text');assert.ok(text.every(e=>!e.geometryIssues));
  assert.equal(result.elements.find(e=>e.id==='band').type,'image','unsupported gradients are preserved as source artwork, never a knowingly wrong rectangle');
+ for(const row of rows)row.text='原文'+row.text;
+ const sourceRuntime={...runtime,textSourceHash:'original-content-v2',fixedLayout:result.elements.filter(e=>e.type!=='text')},completeBody={...body,reconstruction:'complete'};
+ const corrected=await analyzeLayeredDocument(ctx,uploaded,completeBody,2000,1400,new AbortController().signal,sourceRuntime);
+ assert.ok(corrected.elements.filter(e=>e.type==='text').every(e=>e.text.startsWith('原文')),'HD text checkpoints cannot override original-source text');
+ assert.equal(calls.filter(n=>n==='图片拆层分析').length,0);assert.equal(corrected.elements.find(e=>e.id==='band').id,'band','material ownership remains stable');
+ const after=calls.length;await analyzeLayeredDocument(ctx,uploaded,completeBody,2000,1400,new AbortController().signal,sourceRuntime);assert.equal(calls.length,after,'original-source text checkpoints resume independently');
 });
 
 test('max-token completion receives a bounded standalone retry and records the discarded response',async()=>{
