@@ -1,4 +1,5 @@
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm';
+import {buildLayerProductionPlan} from './layered-production-plan.js';
 import { name } from '../plugin-meta.js';
 import { MAX_LAYER_ELEMENTS, MAX_LAYER_IMAGES } from './layered-image-limits.js';
 
@@ -33,6 +34,7 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
       ...(['photo','cutout'].includes(b.extractionMode) || ['product','photo-panel','screenshot'].includes(b.visualKind) ? {
         extractionMode: b.modeLocked ? b.extractionMode : b.visualKind === 'product' ? 'cutout' : ['photo-panel','screenshot'].includes(b.visualKind) ? 'photo' : b.extractionMode } : {}),
       ...(['product','photo-panel','screenshot','graphic'].includes(b.visualKind) ? { visualKind:b.visualKind } : {}),
+      ...Object.fromEntries(['frontOf','occludedBy'].filter(k=>Array.isArray(b[k])).map(k=>[k,[...new Set(b[k].filter(id=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(id)))].slice(0,40)])),
       ...(b.classificationReason ? { classificationReason:String(b.classificationReason).slice(0,700) } : {}),
       ...(b.framingEvidence ? { framingEvidence:String(b.framingEvidence).slice(0,500) } : {}),
       ...(Array.isArray(b.foregroundColors)?{foregroundColors:b.foregroundColors.filter(c=>/^#[0-9a-f]{6}$/i.test(c)).slice(0,5)}:{}),
@@ -133,6 +135,7 @@ export async function analyzeLayeredImagePart(ctx, uploaded, body, width, height
     if(body.reconstruction==='complete')instruction+='\n本任务是完整重建，覆盖上面的保守合并规则：严禁把含普通文字、商品和背景的宣传主视觉合并成image。大幅摄影中的产品/水果/手部组合提成透明主体，普通标题、正文、价格逐行独立；特殊书法/装饰字可作为单独透明graphic，必须说明准确文字且紧贴字形，不含周围商品/背景，并填foregroundColors列出字形/标识的实际前景色HEX（不含底色）。每个杯子独立；印在杯上的包装字随杯保留。全部线条、标签底框和色块独立shape；复杂渐变是背景，不得覆盖或合并其内部元素。背景描述仅包含底色/渐变/台面/环境，不含任何商品、文字或独立形状。只输出真实可见元素，尽量拆全。';
     if(body.reconstruction==='complete'&&body.structureOnly)instruction+='本轮不输出任何手写字、艺术字、标题文字图像，它们由下一步文字识别统一拥有；只规划真实商品、环境、独立图形和形状，避免整组艺术字与逐字图层重复。';
     if(body.localOnly)instruction+='\n本任务禁止生图，必须保留原始照片、插图、宣传主视觉的实际像素。识别准确矩形范围供本地裁切，商品组合仍记录product但描述需含完整可见背景和阴影；不要提出重绘、补造商品或重新设计。普通菜单文字仍独立。';
+    if(body.splitMode==='detailed')instruction+='\n精细拆分流程：先判断每个区域的制作路径，再建立元素清单。普通字即使带简单描边、阴影、斜体也优先text，不能仅因有装饰就整体转image；description同时记录描边/阴影等效果，现有导出器不支持的效果明确记录近似，不能静默省略；真正无法以现有原生文字复现的字标才单独graphic并说明原因。边框、标签底形、线条分开；原生solid shape只表达可证实的单色闭合形状，渐变/纹理需记录实际色彩和方向，当前不支持的原生效果标成独立图像并说明近似，不假装原生渐变。照片面板须有真实边界证据，连续场景中的商品与背景分离。遮挡不能按类别或生成先后排序：有明确遮挡时给元素添加frontOf:[被它遮住的元素id]或occludedBy:[遮住它的元素id]，只引用本轮清单中真实参与输出的id，不给普通文字或尚未识别的id编造关联。交错遮挡拆成共享sourceCompositeId的前后子层，各自定位真实位置，禁止形成循环。坐标框贴合可见内容及用户要求保留的阴影。每张图独立判断，禁止固化菜单品名、价格、块数或上次任务布局。';
     const prepared = await ctx.llm.prepareCall({ provider, model, maxTokens:body.structureOnly?16000:attempt?24000:14000,
       ...(body.structureOnly?{reasoningEffort:'low'}:body.reasoningEffort ? { reasoningEffort: String(body.reasoningEffort) } : {}) },signal);
     const assembler = new BlockAssembler();
@@ -150,11 +153,12 @@ export async function analyzeLayeredImagePart(ctx, uploaded, body, width, height
       const start = text.indexOf('{'), end = text.lastIndexOf('}');
       if (start < 0 || end < start) throw new Error('模型未返回可解析的元素清单');
       const parsed = JSON.parse(text.slice(start, end + 1));
-      const elements = normalizeLayerElements(body.structureOnly ? parsed.elements?.filter(e=>e.type!=='text') : parsed.elements, width, height, { normalized: true });
+      let elements = normalizeLayerElements(body.structureOnly ? parsed.elements?.filter(e=>e.type!=='text') : parsed.elements, width, height, { normalized: true });
       const invalid = elements.filter(e => e.geometryIssues?.length);
       if (invalid.length) throw new Error(invalid.map(e => e.name + ' 缺少有效 ' + e.geometryIssues.join('/')).join('；'));
       const undecided = elements.filter(e => e.type === 'image' && (!e.visualKind || !e.classificationReason || (e.visualKind === 'photo-panel' && !e.framingEvidence)));
       if (undecided.length) throw new Error('这些图层缺少商品/照片面板的语义决策或照片边界证据：'+undecided.map(e=>e.name).join('、'));
+      if(body.splitMode==='detailed')elements=buildLayerProductionPlan(elements,width,height).elements;
       return { elements, semanticPolicyVersion:2, rawAnalysis: attempts, analysisAttempts: attempts.length,
         warnings: [...(attempt ? ['模型首次返回的结构或尺寸异常，已自动重新分析一次并通过字段检查'] : []), ...(Array.isArray(parsed.warnings) ? parsed.warnings : [])].slice(0, 30).map(x => String(x).slice(0, 600)) };
     } catch (error) { lastError = error; }

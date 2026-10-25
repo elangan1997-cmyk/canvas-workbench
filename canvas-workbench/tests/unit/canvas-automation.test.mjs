@@ -203,3 +203,11 @@ test('background API resumes full validation even when all PNG assets were alrea
  const service=createCanvasAutomation(f.h,f.options);t.after(()=>service.dispose());const job=await service.submit({...f.body,folder:'',paths:[join(f.input,'1.png')],operation:'layered_export',formats:['ai','psd'],reconstruction:'complete'});
  const result=await service.settled(job);assert.equal(result.status,'completed');assert.equal(runs,1);assert.equal(result.items[0].outputs.length,2);
 });
+
+test('formal chat tool carries detailed/practical selection into durable batch settings without changing legacy defaults',async t=>{
+ const f=await fixture(t);const {automationToolSpec}=await import('../../src/host/services/canvas-automation-tool.js');const tool=automationToolSpec(f.service,()=>({cwd:f.root}));
+ const result=await tool.execute({action:'submit',operation:'layered_export',folder:f.input,split_mode:'detailed',formats:['psd'],request_id:'detailed-mode'},{signal:new AbortController().signal,agent:{session:{id:'sid'}}});
+ const job=await f.service.settled({id:result.id});assert.equal(job.splitMode,'detailed');assert.equal(job.reconstruction,'complete');assert.equal(job.completionPolicy,'strict');
+ const legacy=await f.service.submit({...f.body,operation:'layered_export',requestId:'legacy-mode'});assert.equal((await f.service.settled(legacy)).reconstruction,'preserve');
+ await assert.rejects(f.service.submit({...f.body,splitMode:'unknown'}),/方式无效/);
+});

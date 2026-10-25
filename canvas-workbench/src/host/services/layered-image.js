@@ -1,3 +1,4 @@
+import {layeredModeOptions,buildLayerProductionPlan} from './layered-production-plan.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
@@ -72,7 +73,7 @@ export function createLayeredImageService(h, overrides = {}) {
     warnings: task.warnings || [], engine: task.engine || '', imageModel: task.imageModel || '', localOnly: task.localOnly === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
     quality: task.quality ? { ...task.quality, reviewAcknowledged: task.qualityAcknowledged === true } : null, analysisModel: task.analysisModel || null, analysisAttempts: task.analysisAttempts || 0,
     analysisProgress:task.analysisProgress||null,analysisStrategy:task.analysisStrategy||'',analysisComplete:task.analysisComplete===true,
-    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',completionPolicy:task.completionPolicy||'strict',textTruthVersion:task.textTruthVersion||0,materialGeometryTruth:task.materialGeometryTruth||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
+    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',completionPolicy:task.completionPolicy||'strict',splitMode:task.splitMode||(task.reconstruction==='complete'?(task.completionPolicy==='practical'?'practical':'detailed'):'preserve'),productionPlan:task.productionPlan||null,textTruthVersion:task.textTruthVersion||0,materialGeometryTruth:task.materialGeometryTruth||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
     generationAttempts: task.generationAttempts || 0, maxImageRequests: task.maxImageRequests ?? 40,
     sourceUrl: previewUrl(task.source, task.createdAt), previewUrl: task.preview ? previewUrl(task.preview, task.updatedAt) : '',
     outputDirectory: task.directory, storageProject: join(task.directory, '..', '..', '..'),
@@ -495,6 +496,7 @@ export function createLayeredImageService(h, overrides = {}) {
 
   async function prepareRun(task, body, signal) {
       if(body.completionPolicy!==undefined&&!['strict','practical'].includes(body.completionPolicy))throw new Error('拆分完成策略无效');
+      if(body.splitMode){const mode=layeredModeOptions(body.splitMode);task.splitMode=body.splitMode;task.reconstruction=mode.reconstruction;body={...body,...mode};}
       task.completionPolicy=body.completionPolicy||task.completionPolicy||'strict';
       signal?.throwIfAborted();
       if(task.analysisStrategy==='dense'&&task.imageGeometryVersion===1){
@@ -524,6 +526,10 @@ export function createLayeredImageService(h, overrides = {}) {
         const structured = await pixel({ operation:'structure', input:task.source, elements },signal);
         elements = normalizeLayerElements(structured.elements,task.width,task.height);
         task.structureChanges = structured.structureChanges || []; task.structureVersion=1;
+      }
+      if(task.splitMode==='detailed'){
+        const production=buildLayerProductionPlan(elements,task.width,task.height);elements=production.elements;task.productionPlan=production.plan;
+        await writeFile(join(task.directory,'production-plan.json'),JSON.stringify(production.plan,null,2));
       }
       if (elements.some(e => e.enabled && e.geometryIssues?.length)) throw new Error('元素尺寸或坐标无效，请重新分析或修正后再提取');
       task.quality=automaticLayerQuality(task.quality);
@@ -866,6 +872,10 @@ export function createLayeredImageService(h, overrides = {}) {
             task.quality=automaticLayerQuality({issues:[{code:'calibration-failed',severity:'review',message:'本地文字校准未完成，已自动保留原字形区域：'+String(error.message||error).slice(0,400)}]});
           }
         }
+        if(task.splitMode==='detailed'){
+          const production=buildLayerProductionPlan(task.elements,task.width,task.height);task.elements=production.elements;task.productionPlan=production.plan;
+          await writeFile(join(task.directory,'production-plan.json'),JSON.stringify(production.plan,null,2));
+        }
         task.status = task.automatic ? 'running' : 'review'; task.stage = task.automatic ? 'preparing' : 'review'; task.progress = task.automatic ? 10 : 100;
         task.message = task.automatic ? '已建立原图坐标清单，正在自动处理图层' : '已建立清单，可调整或直接生成';
         if (task.automatic) {
@@ -881,6 +891,7 @@ export function createLayeredImageService(h, overrides = {}) {
 
   return {
     async analyze(body) {
+      if(body.splitMode)body={...body,...layeredModeOptions(body.splitMode)};
       body = workspaceScope(body);
       const automaticSettings = body.autoRun === true || body.enhanceSource === true || body.referenceImageData ? { ...await settingsFor(), dshCodexModel: dshCodexImageModel(ctx) } : null;
       const uploaded = decodeImageData(body.imageData);
@@ -892,11 +903,11 @@ export function createLayeredImageService(h, overrides = {}) {
       await writeFile(input, uploaded.bytes, { flag: 'wx' });
       const dimensions = await pixel({ operation: 'inspect', input, output: source });
       const maximum=Number(body.maxImageRequests??40);if(!Number.isInteger(maximum)||maximum<0||maximum>10000)throw new Error('图像请求上限无效');
-      const task = { schema: 1, id, directory, source,reconstruction:body.reconstruction==='complete'?'complete':'preserve',enhanceSource:body.enhanceSource===true||!!body.referenceImageData,maxImageRequests:maximum,localOnly:body.localOnly===true, sourceHash: hash(uploaded.bytes), name: safeImageName(body.name || '画布图片.png'),
+      const task = { schema: 1, id, directory, source,splitMode:body.splitMode||'',completionPolicy:body.completionPolicy||'strict',reconstruction:body.reconstruction==='complete'?'complete':'preserve',enhanceSource:body.enhanceSource===true||!!body.referenceImageData,maxImageRequests:maximum,localOnly:body.localOnly===true, sourceHash: hash(uploaded.bytes), name: safeImageName(body.name || '画布图片.png'),
         width: dimensions.width, height: dimensions.height, sourceCheckerboard: dimensions.checkerboard === true, status: 'running', stage: 'analysis', message: '正在分析图层与前后关系…', progress: 3,
         createdAt: Date.now(), elements: [], exports: [], warnings: [], error: '', generationAttempts: 0,
         analysisModel: body.flat ? null : { provider: body.provider, model: body.model, reasoningEffort: body.reasoningEffort || '' },
-        analysisComplete:false,analysisOptions:{reconstruction:body.reconstruction==='complete'?'complete':'preserve',editableText:body.editableText!==false,fontPolicy:body.fontPolicy||'substitute',localOnly:body.localOnly===true},
+        analysisComplete:false,analysisOptions:{splitMode:body.splitMode||'',completionPolicy:body.completionPolicy||'strict',reconstruction:body.reconstruction==='complete'?'complete':'preserve',editableText:body.editableText!==false,fontPolicy:body.fontPolicy||'substitute',localOnly:body.localOnly===true},
         automatic: body.autoRun === true, autoRefine: body.autoRefine === true, editableText:body.editableText!==false, flat: body.flat === true, workspaceRoot: body.storageScope === 'workspace' ? body.cwd : projectDirectory(body.cwd, body.project) };
       if(body.referenceImageData){
         const reference=decodeImageData(body.referenceImageData);if(!reference)throw new Error('原图参考数据无效');

@@ -22,7 +22,7 @@ export function layerAnalysisRegions(width,height){
  * internal vision context; the deliverable always uses one original artboard. */
 export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,signal,runtime){
   const directory=join(runtime.directory,'analysis');await mkdir(directory,{recursive:true});
-  const signature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:5,reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
+  const signature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:5,...(body.splitMode?{splitMode:body.splitMode}:{}),reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
   const textSignature=runtime.textSourceHash?createHash('sha256').update(signature).update(runtime.textSourceHash).digest('hex'):signature;
   const legacyLayoutSignature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:4,reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
   const stored=await readJson(join(directory,'manifest.json'));
@@ -34,7 +34,7 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
   const progress=(message,extra={})=>{Object.assign(manifest,extra);const snapshot=JSON.parse(JSON.stringify(manifest));
     progressWrites=progressWrites.catch(()=>{}).then(async()=>{await writeJson(join(directory,'manifest.json'),snapshot);await runtime.progress?.({message,strategy:snapshot.strategy||'routing',calls:snapshot.calls,completedTiles:snapshot.completed.length,...extra});});return progressWrites;};
   const keyFor=name=>['layout','image-regions','whole'].includes(name)?signature:textSignature;
-  const checkpoint=async(name)=>{const value=await readJson(join(directory,name+'.json'));return value?.signature===keyFor(name)||(['layout','image-regions'].includes(name)&&value?.signature===legacyLayoutSignature)?value.result:null;};
+  const checkpoint=async(name)=>{const value=await readJson(join(directory,name+'.json'));return value?.signature===keyFor(name)||(['layout','image-regions'].includes(name)&&!body.splitMode&&value?.signature===legacyLayoutSignature)?value.result:null;};
   const retain=async(name,result)=>writeJson(join(directory,name+'.json'),{signature:keyFor(name),result});
   const ocrFile=join(runtime.directory,runtime.textSourceHash?'local-ocr-original-'+runtime.textSourceHash.slice(0,12)+'.json':'local-ocr.json');
   let ocr=await readJson(ocrFile);

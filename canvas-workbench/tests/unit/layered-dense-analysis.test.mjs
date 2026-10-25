@@ -76,3 +76,12 @@ test('substitute fonts may differ in weight within verified geometry; missing te
  assert.equal(partitionReadbackTypography([{...e,bounds:{...e.bounds,width:100}}],{issues:[good]}).issues.length,1);
  assert.equal(partitionReadbackTypography([e],{issues:[good]},'strict').issues.length,1);
 });
+
+test('detailed model analysis retries an invalid occlusion graph and returns the corrected physical layer order',async()=>{
+ let calls=0;const ctx={attachments:{saveImage:async()=>({id:'source'})},llm:{resolveModelInfo:async()=>({}),prepareCall:async()=>({config:{},stream:async function*(){
+  calls++;const rows=[{id:'p',type:'image',visualKind:'product',classificationReason:'独立杯子',x:100,y:100,width:400,height:500,z:0,frontOf:['s']},{id:'s',type:'shape',name:'底框',x:50,y:50,width:600,height:600,z:9,...(calls===1?{frontOf:['p']}:{})}];
+  yield{type:'text-delta',index:0,text:JSON.stringify({elements:rows})};yield{type:'finish',reason:{kind:'stop'}};
+ }})}};
+ const result=await analyzeLayeredImagePart(ctx,{bytes:Buffer.from('image'),mime:'image/png'},{provider:'ds',model:'current',splitMode:'detailed',reconstruction:'complete'},1000,1000,new AbortController().signal);
+ assert.equal(calls,2);assert.ok(result.elements.find(e=>e.id==='p').z>result.elements.find(e=>e.id==='s').z);assert.deepEqual(result.elements.find(e=>e.id==='p').frontOf,['s']);
+});

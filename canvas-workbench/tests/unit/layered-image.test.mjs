@@ -546,3 +546,12 @@ test('recovered local shapes and practical source groups do not consume independ
  const plan=normalizeLayerElements([...images,...shapes,group],100,100);assert.equal(plan.filter(e=>e.sourceShapeFallback).length,5);assert.equal(plan.find(e=>e.id==='g').sourceFallbackGroup,true);
  assert.throws(()=>normalizeLayerElements([...images,{id:'extra',type:'image',x:0,y:0,width:1,height:1}],100,100),/40/);
 });
+
+test('detailed service persists an executable region plan and writes the actual occlusion order into the PSD',async t=>{
+ const f=await fixture(t);f.overrides.analyze=async()=>({analysisStrategy:'dense',imageGeometryVersion:2,elements:[...sampleElements().map(e=>e.id==='object'?{...e,frontOf:['label']}:e),{id:'label',type:'text',name:'可编辑菜名',text:'奶茶',enabled:true,nativeText:true,fontAccepted:true,fontPostScript:'AlibabaPuHuiTi_3_55_Regular',fontSize:8,x:0,y:0,width:2,height:2,z:9}]});
+ f.overrides.readback=async()=>({complete:true,issues:[]});const service=createLayeredImageService(f.h,f.overrides);
+ const created=await service.analyze({imageData:png,provider:'test',model:'test',splitMode:'detailed',autoRun:false,maxImageRequests:2});const review=await service.settled(created);assert.equal(review.status,'review');assert.equal(review.productionPlan.entries.length,3);assert.equal(f.generated.length,0,'region plan is available before any image generation');await service.run({id:created.id,autoExportFormat:'psd',maxImageRequests:2});const task=await service.settled(created);
+ assert.equal(task.status,'ready',task.error);assert.equal(task.reconstruction,'complete');assert.equal(task.completionPolicy,'strict');assert.equal(task.productionPlan.relations,1);
+ const plan=JSON.parse(await readFile(join(task.outputDirectory,'production-plan.json'),'utf8'));assert.equal(plan.entries.find(e=>e.id==='label').method,'native-text');
+ const psd=readPsd(await readFile(task.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.equal(psd.children.at(-1).name,'产品');assert.ok(psd.children.some(e=>e.text?.text==='奶茶'));
+});
