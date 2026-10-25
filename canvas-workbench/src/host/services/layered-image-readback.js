@@ -5,6 +5,26 @@ import {createHash} from 'node:crypto';
 import {name} from '../plugin-meta.js';
 import {layerAnalysisRegions} from './layered-image-analysis.js';
 
+export function parseReadbackResult(text){
+ const raw=String(text||'').replace(/<think>[\s\S]*?<\/think>/gi,'');
+ const issues=[];let depth=0,start=-1,quoted=false,escaped=false,found=false;
+ for(let i=0;i<raw.length;i++){
+  const c=raw[i];
+  if(quoted){if(escaped)escaped=false;else if(c==='\\')escaped=true;else if(c==='"')quoted=false;continue;}
+  if(c==='"'&&depth){quoted=true;continue;}
+  if(c==='{'){if(!depth)start=i;depth++;}
+  else if(c==='}'&&depth&&!--depth){
+   const value=JSON.parse(raw.slice(start,i+1));
+   if(!Array.isArray(value?.issues))throw new Error('装配核验没有返回问题数组');
+   found=true;issues.push(...value.issues);
+  }
+ }
+ if(depth||!found)throw new Error('装配核验未返回完整问题清单');
+ // Some models emit a corrected second JSON block. Keep evidence from both
+ // blocks rather than silently discarding reported defects or failing parsing.
+ return {issues:[...new Map(issues.map(i=>[i.id,i])).values()]};
+}
+
 /** Dense readback has the same bounded, independent context as recognition.
  * A whole-menu verification must not recreate the original max-token failure. */
 export async function inspectLayerReadback(ctx,task,preview,signal,{pixel}={}){
@@ -37,7 +57,7 @@ export async function inspectLayerReadback(ctx,task,preview,signal,{pixel}={}){
    await writeFile(checkpoint,JSON.stringify({signature,split:children},null,2));await inspectChildren(children);return;
   }
   if(assembler.finish.kind!=='stop')throw new Error('装配核验未完成：'+assembler.finish.kind);
-  const text=assembler.blocks().filter(b=>b.type==='text').map(b=>b.text).join('');const result=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));
+  const text=assembler.blocks().filter(b=>b.type==='text').map(b=>b.text).join('');const result=parseReadbackResult(text);
   if(!Array.isArray(result.issues))throw new Error('装配核验没有返回问题数组');
   const local=result.issues.filter(i=>rows.some(e=>e.id===i.id)).slice(0,6).map(i=>({id:i.id,reason:String(i.reason||'').slice(0,300)}));
   await writeFile(checkpoint,JSON.stringify({signature,issues:local},null,2));issues.push(...local);checkedRegions++;

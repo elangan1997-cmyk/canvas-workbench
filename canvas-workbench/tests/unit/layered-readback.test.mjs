@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {inspectLayerReadback} from '../../src/host/services/layered-image-readback.js';
+import {inspectLayerReadback,parseReadbackResult} from '../../src/host/services/layered-image-readback.js';
+
+test('readback accepts multiple complete JSON blocks without dropping issues, while rejecting truncated output',()=>{
+ assert.deepEqual(parseReadbackResult('<think>reason {ignored}</think>```json\n{"issues":[{"id":"a","reason":"a {brace} and \\\"quote\\\""}]}\n```\n{"issues":[{"id":"b","reason":"错字"}]}').issues.map(i=>i.id),['a','b']);
+ assert.throws(()=>parseReadbackResult('{"issues":[]}\n{"issues":['),/完整/);
+ assert.throws(()=>parseReadbackResult('{"other":[]}'),/问题数组/);
+});
 
 test('dense readback isolates token limits and caches unchanged verification regions',async t=>{
  const root=await mkdtemp(join(tmpdir(),'readback-'));t.after(()=>rm(root,{recursive:true,force:true}));let fail=true,calls=0;const budgets=[];

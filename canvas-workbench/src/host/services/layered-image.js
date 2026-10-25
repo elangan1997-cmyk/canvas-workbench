@@ -19,6 +19,7 @@ import { inspectLayerReadback } from './layered-image-readback.js';
 import { refineLayerSourceRegions } from './layered-image-regions.js';
 
 const hash = value => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
+const nativeRepresentation=e=>({text:e.text,font:e.fontPostScript,color:e.color,tracking:e.tracking,...textLayerGeometry(e)});
 const exists = async path => { try { await access(path); return true; } catch { return false; } };
 const validId = id => /^layers-[a-z0-9]+-[a-f0-9]{12}$/.test(String(id || ''));
 export const LAYERED_TASK_DIRECTORY = '图片拆层';
@@ -179,6 +180,7 @@ export function createLayeredImageService(h, overrides = {}) {
       task.sourcePlateFallbackIds=local.unresolvedTextIds||[];return;
     }
     if (e.type==='text' && !e.nativeText) {
+      delete e.nativePreviewSignature;
       const local=await pixel({operation:'source-text',input:task.source,output,element:e},signal);
       e.sourceTextFallback=true;e.file=output;e.status='complete';e.error='';e.requestState='local';e.extractionEngine=local.engine;
       return;
@@ -195,6 +197,17 @@ export function createLayeredImageService(h, overrides = {}) {
         if (e.type === 'background') await cleanPlate(task, e, signal);
         return;
       }
+    }
+    if (e.nativeText) {
+      try { await pixel({ operation: 'text', width: task.width, height: task.height, element: { ...e, geometry: textLayerGeometry(e) }, output }, signal); e.extractionEngine='local-native-text';e.nativePreviewSignature=hash(nativeRepresentation(e)); }
+      catch (error) {
+        signal.throwIfAborted();
+        if (transientLocal(error) || !/字体|字形|候选|文字位于画布外/i.test(String(error.message||error))) throw error;
+        e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;delete e.nativePreviewSignature;
+        const local=await pixel({operation:'source-text',input:task.source,output,element:e},signal);e.extractionEngine=local.engine;
+        task.warnings.push('“'+e.name+'”渲染字体不可用，已自动保留原字形区域：'+String(error.message||error).slice(0,180));
+      }
+      e.file = output; e.status = 'complete'; e.requestState = 'local'; return;
     }
     if (await exists(output) && !(e.type === 'background' && e.plateVersion !== 4 && await exists(raw))) {
       let checked;
@@ -217,17 +230,6 @@ export function createLayeredImageService(h, overrides = {}) {
         }
         return;
       }
-    }
-    if (e.nativeText) {
-      try { await pixel({ operation: 'text', width: task.width, height: task.height, element: { ...e, geometry: textLayerGeometry(e) }, output }, signal); }
-      catch (error) {
-        signal.throwIfAborted();
-        if (transientLocal(error) || !/字体|字形|候选|文字位于画布外/i.test(String(error.message||error))) throw error;
-        e.nativeText=false;e.fontAccepted=false;e.sourceTextFallback=true;
-        const local=await pixel({operation:'source-text',input:task.source,output,element:e},signal);e.extractionEngine=local.engine;
-        task.warnings.push('“'+e.name+'”渲染字体不可用，已自动保留原字形区域：'+String(error.message||error).slice(0,180));
-      }
-      e.file = output; e.status = 'complete'; e.requestState = 'local'; return;
     }
     if (e.type === 'background' && !task.elements.some(x => x.type !== 'background')) {
       await copyFile(task.source, output); e.file = output; e.status = 'complete'; return;
@@ -282,13 +284,22 @@ export function createLayeredImageService(h, overrides = {}) {
   }
 
   async function exportArtifact(task, kind, signal, openAfterExport = false) {
+        const stale=task.elements.some(e=>e.enabled&&e.nativeText&&e.nativePreviewSignature!==hash(nativeRepresentation(e)));
+        if(stale||(task.analysisStrategy==='dense'&&task.assemblyCheck?.verified===false)){
+          for(const e of task.elements.filter(e=>e.enabled)){
+            if(e.nativeText)await extract(task,e,{},signal);
+            e.contentFile ||=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));
+            const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;
+          }
+          await validateAssembly(task,{},signal,task.elements.filter(e=>e.enabled));
+        }
         const prepared = task.elements.map(e => ({ ...e, ...(e.nativeText ? { geometry: textLayerGeometry(e) } : {}) }));
         const manifest = await pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: prepared }, signal);
         const highDensity=[];
         for(const e of prepared.filter(e=>e.enabled&&e.enhancementCheck?.accepted===true&&e.enhancedFile&&isPathWithin(task.directory,e.enhancedFile))){
           if(await exists(e.enhancedFile))highDensity.push({id:e.id,hash:hash(await readFile(e.enhancedFile))});
         }
-        const signature = hash({exporterRevision:3,highDensity,layers:prepared.map(e => ({ id:e.id, assetKey:e.assetKey, z:e.z, enabled:e.enabled, bounds:e.bounds })),composite:hash(await readFile(manifest.composite))});
+        const signature = hash({exporterRevision:4,highDensity,layers:prepared.map(e => ({ id:e.id, assetKey:e.assetKey, type:e.type,nativeText:e.nativeText, native:e.nativeText?nativeRepresentation(e):undefined,z:e.z, enabled:e.enabled, bounds:e.bounds })),composite:hash(await readFile(manifest.composite))});
         const checkpoint = task.exportCheckpoint;
         let output, published;
         if (checkpoint?.kind === kind && checkpoint.signature === signature && await exists(checkpoint.published?.path)) {
@@ -437,7 +448,7 @@ export function createLayeredImageService(h, overrides = {}) {
         if(previous?.requestState==='unknown')e.requestState='unknown';
         if (e.type === 'background' && previous?.rawFile && removalKey(task.elements)===removalKey(elements) && previous.description===e.description && previous.revision===e.revision && task.engine===engine && task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel) && isPathWithin(task.directory,previous.rawFile)) e.reusedRawFile=previous.rawFile;
         if (previous?.assetKey === key) Object.assign(e, { file: previous.file, rawFile: previous.rawFile, status: previous.status, requestState: previous.requestState,
-          extractionEngine: previous.extractionEngine, enhancedFile:previous.enhancedFile,enhancementCheck:previous.enhancementCheck,platePrepared: previous.platePrepared, plateVersion: previous.plateVersion, alignment: previous.alignment, actualPixels: previous.actualPixels, returnedFraming: previous.returnedFraming, placementQualityIssues: previous.placementQualityIssues, assetTime: previous.assetTime, contentFile: previous.contentFile, bounds: previous.bounds });
+          extractionEngine: previous.extractionEngine,nativePreviewSignature:previous.nativePreviewSignature, enhancedFile:previous.enhancedFile,enhancementCheck:previous.enhancementCheck,platePrepared: previous.platePrepared, plateVersion: previous.plateVersion, alignment: previous.alignment, actualPixels: previous.actualPixels, returnedFraming: previous.returnedFraming, placementQualityIssues: previous.placementQualityIssues, assetTime: previous.assetTime, contentFile: previous.contentFile, bounds: previous.bounds });
       }
       if (!body.retryUnknown && elements.some(e => e.enabled && e.requestState === 'unknown')) throw new Error('有请求结果未知，请先核对服务记录；确认仍需重试时勾选“接受未知请求可能重复消耗额度”');
       task.elements = elements; task.engine = engine; task.retryUnknown = body.retryUnknown === true;
@@ -454,28 +465,8 @@ export function createLayeredImageService(h, overrides = {}) {
       task.exports = []; task.preview = ''; task.status = 'running'; task.stage = 'extract'; task.error = ''; task.progress = 0; task.message = '开始逐元素提取，已成功素材会复用';
       return settings;
   }
-  async function executeRun(task, settings, signal) {
-        const enabled = task.elements.filter(e => e.enabled), order = [...enabled.filter(e => e.type !== 'background'), ...enabled.filter(e => e.type === 'background')];
-        let done = 0;
-        for (const e of order) {
-          signal.throwIfAborted();
-          task.stage = e.type === 'background' ? 'background' : 'extract'; task.message = '正在处理 ' + (done + 1) + '/' + order.length + '：' + e.name; await save(task);
-          try {
-            await recoverLocal(task, e.name, async () => {
-              await extract(task, e, settings, signal);
-              e.contentFile = join(task.directory, 'layers', e.id + '-' + safeImageName(e.name + '.png'));
-              const crop = await pixel({ operation: 'crop-layer', input: e.file, output: e.contentFile }, signal); e.bounds = crop.bounds;
-              if(e.extractionMode==='photo' && (crop.width!==undefined && (crop.width!==e.width || crop.height!==e.height || crop.alphaMin!==255))) throw new Error('完整照片的矩形边界或不透明背景校验失败：'+e.name);
-              e.assetTime = (await stat(e.contentFile)).mtimeMs;
-            }, signal, () => e.requestState !== 'unknown');
-            done++;
-          } catch (err) {
-            signal.throwIfAborted(); e.status = 'failed'; e.error = String(err.message || err).slice(0,1200);
-          }
-          task.progress = Math.round(done / order.length * 90); await save(task);
-        }
-        const failed = order.filter(e => e.status !== 'complete');
-        if (failed.length) throw new Error('已保存 '+done+'/'+order.length+' 个图层；以下步骤无法自动完成：'+failed.map(e => e.name+'：'+e.error).join('；').slice(0,1000));
+  async function validateAssembly(task,settings,signal,order){
+        const enabled=task.elements.filter(e=>e.enabled);
         const separateRasterText=async(refresh=false)=>{
           const confirmedNative=order.filter(e=>e.nativeText&&e.geometrySource==='source-ocr-token');
           for(const e of order.filter(e=>e.enabled&&e.type==='text'&&!e.nativeText)){
@@ -519,8 +510,9 @@ export function createLayeredImageService(h, overrides = {}) {
               };
               const checked=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
               await writeFile(join(task.directory,'assembly-check.json'),JSON.stringify(checked,null,2));
-              const repaired=[],targets=new Map();
-              for(const issue of checked.issues){
+              const repaired=[];
+              const restoreIssues=async issues=>{const restored=[],targets=new Map();
+              for(const issue of issues){
                 const e=task.elements.find(e=>e.enabled&&e.id===issue.id);if(!e||e.type==='background')continue;
                 targets.set(e.id,issue.reason);
                 const a=e.bounds||e;
@@ -535,16 +527,23 @@ export function createLayeredImageService(h, overrides = {}) {
                 else continue;
                 await extract(task,e,settings,signal);
                 const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;
-                repaired.push(e.id);task.warnings.push('“'+e.name+'”装配对照发现问题，已自动保留原图区域：'+reason);
+                restored.push(e.id);task.warnings.push('“'+e.name+'”装配对照发现问题，已自动保留原图区域：'+reason);
               }
-              if(repaired.length){
+              if(restored.length){
                 await separateRasterText(true);
                 const bg=task.elements.find(e=>e.enabled&&e.type==='background');await extract(task,bg,settings,signal);const crop=await pixel({operation:'crop-layer',input:bg.file,output:bg.contentFile},signal);bg.bounds=crop.bounds;
                 manifest=await pixel({operation:'assemble',directory:task.directory,width:task.width,height:task.height,elements:enabled},signal);
               }
+              repaired.push(...restored);return restored;};
+              await restoreIssues(checked.issues);
               let finalCheck=checked;
               if(repaired.length)finalCheck=await discardExactCopies(await (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(240000)]),{pixel}));
-              task.assemblyCheck={signature:hash({readbackRevision:4,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],typographyNotes:finalCheck.typographyNotes||[],complete:finalCheck.complete!==false,incompleteRegions:finalCheck.incompleteRegions||[],verified:finalCheck.complete!==false&&finalCheck.issues.length===0};
+              let finalSourceFallback=[];
+              if(visualPass===1&&finalCheck.issues.length){
+                finalSourceFallback=await restoreIssues(finalCheck.issues);
+                if(finalSourceFallback.length)finalCheck=await discardExactCopies(finalCheck);
+              }
+              task.assemblyCheck={signature:hash({readbackRevision:4,image:hash(await readFile(manifest.preview))}),issues:checked.issues,repaired:[...new Set(repaired)],finalSourceFallback,remainingIssues:finalCheck.issues,exactSourceIds:finalCheck.exactSourceIds||[],typographyNotes:finalCheck.typographyNotes||[],complete:finalCheck.complete!==false,incompleteRegions:finalCheck.incompleteRegions||[],verified:finalCheck.complete!==false&&finalCheck.issues.length===0};
               if(finalCheck.typographyNotes?.length)task.warnings.push(finalCheck.typographyNotes.length+' 处替代字体/字重差异已记录；原文字区域与内容仍通过，保留可编辑文字');
               if(finalCheck.complete===false)task.warnings.push('装配核验有未完成分区，已保留成功分区与说明；可原任务继续');
               if(finalCheck.issues.length)task.warnings.push('装配对照仍有 '+finalCheck.issues.length+' 项视觉差异，详情已保留在任务记录中');
@@ -562,6 +561,30 @@ export function createLayeredImageService(h, overrides = {}) {
         if (hasBlockingLayerQuality(task.quality)) {
           throw new Error('图层结构检查失败：'+task.quality.issues.filter(i=>['error','review'].includes(i.severity)).map(i=>i.message||i.code).join('；'));
         }
+  }
+  async function executeRun(task, settings, signal) {
+        const enabled = task.elements.filter(e => e.enabled), order = [...enabled.filter(e => e.type !== 'background'), ...enabled.filter(e => e.type === 'background')];
+        let done = 0;
+        for (const e of order) {
+          signal.throwIfAborted();
+          task.stage = e.type === 'background' ? 'background' : 'extract'; task.message = '正在处理 ' + (done + 1) + '/' + order.length + '：' + e.name; await save(task);
+          try {
+            await recoverLocal(task, e.name, async () => {
+              await extract(task, e, settings, signal);
+              e.contentFile = join(task.directory, 'layers', e.id + '-' + safeImageName(e.name + '.png'));
+              const crop = await pixel({ operation: 'crop-layer', input: e.file, output: e.contentFile }, signal); e.bounds = crop.bounds;
+              if(e.extractionMode==='photo' && (crop.width!==undefined && (crop.width!==e.width || crop.height!==e.height || crop.alphaMin!==255))) throw new Error('完整照片的矩形边界或不透明背景校验失败：'+e.name);
+              e.assetTime = (await stat(e.contentFile)).mtimeMs;
+            }, signal, () => e.requestState !== 'unknown');
+            done++;
+          } catch (err) {
+            signal.throwIfAborted(); e.status = 'failed'; e.error = String(err.message || err).slice(0,1200);
+          }
+          task.progress = Math.round(done / order.length * 90); await save(task);
+        }
+        const failed = order.filter(e => e.status !== 'complete');
+        if (failed.length) throw new Error('已保存 '+done+'/'+order.length+' 个图层；以下步骤无法自动完成：'+failed.map(e => e.name+'：'+e.error).join('；').slice(0,1000));
+        await validateAssembly(task,settings,signal,order);
         if (task.autoExportFormat) {
           signal.throwIfAborted(); task.status = 'running'; task.stage = 'export'; task.message = '正在自动导出 ' + task.autoExportFormat.toUpperCase() + '…'; await save(task);
           await recoverLocal(task, '导出文件', () => exportArtifact(task, task.autoExportFormat, signal, task.openAfterExport), signal);

@@ -353,6 +353,33 @@ test('automatic text correction retains returned product and background caches t
  const psd=readPsd(await readFile(result.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.equal(psd.children.find(e=>e.name===result.elements.find(e=>e.id==='text').name).text.text,'Corrected');
 });
 
+test('legacy native metadata cannot reuse a source-text bitmap and changing representation invalidates the export checkpoint',async t=>{
+ const f=await fixture(t),basePixel=f.overrides.pixel;let nativeRenders=0;
+ f.overrides.pixel=async spec=>{
+  if(spec.operation==='text'){nativeRenders++;await writeFile(spec.output,'native:'+spec.element.text);return {success:true};}
+  return basePixel(spec);
+ };
+ f.overrides.analyze=async()=>({elements:[{id:'bg',type:'background',name:'背景'},
+  {id:'word',type:'text',name:'菜名',text:'奶茶',x:0,y:0,width:1,height:1,nativeText:true,fontAccepted:true}]});
+ const s=createLayeredImageService(f.h,f.overrides),a=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(a);
+ await s.run({id:a.id,autoExportFormat:'psd'});let task=await s.settled(a);assert.equal(task.status,'ready',task.error);
+ const manifest=join(task.outputDirectory,'task.json'),stored=JSON.parse(await readFile(manifest,'utf8')),word=stored.elements.find(e=>e.id==='word');
+ // Older runs overwrote the native asset with the source fallback, then a
+ // calibration restored native metadata at that same asset key.
+ await writeFile(word.file,'old source bitmap');delete word.nativePreviewSignature;await writeFile(manifest,JSON.stringify(stored));
+ const migrated=createLayeredImageService(f.h,f.overrides);await migrated.export({id:a.id,format:'psd'});task=await migrated.settled(a);
+ assert.equal(task.status,'ready',task.error);assert.equal(nativeRenders,2);assert.equal(await readFile(word.file,'utf8'),'native:奶茶');
+ let current=JSON.parse(await readFile(manifest,'utf8'));const signature=current.exportCheckpoint.signature,path=current.exportCheckpoint.published.path;
+ assert.ok(current.elements.find(e=>e.id==='word').nativePreviewSignature);
+ current.elements.find(e=>e.id==='word').nativeText=false;await writeFile(manifest,JSON.stringify(current));
+ const raster=createLayeredImageService(f.h,f.overrides);await raster.export({id:a.id,format:'psd'});task=await raster.settled(a);
+ assert.equal(task.status,'ready',task.error);current=JSON.parse(await readFile(manifest,'utf8'));
+ assert.notEqual(current.exportCheckpoint.signature,signature,'same bitmap composite does not mean the same editable representation');
+ assert.notEqual(current.exportCheckpoint.published.path,path);assert.equal(f.generated.length,1,'legacy migration only renders locally');
+ const psd=readPsd(await readFile(current.exportCheckpoint.published.path),{skipLayerImageData:true,skipCompositeImageData:true});
+ assert.equal(psd.children.find(e=>e.name==='菜名').text,undefined);
+});
+
 test('typed photos bypass image generation and matting; PSD shape layers retain a native vector fill and mask', async t => {
  const f=await fixture(t);f.overrides.matte=async()=>{throw Error('photos must never be matted');};
  f.overrides.analyze=async()=>({elements:[{id:'bg',type:'background',name:'背景'},{id:'photo',type:'image',name:'完整照片',extractionMode:'photo',x:0,y:0,width:4,height:3,z:1},{id:'plate',type:'shape',name:'圆角底框',shapeKind:'roundedRect',fill:'#E5EAF3',radius:.5,x:1,y:1,width:2,height:1,z:2}]});
@@ -390,4 +417,23 @@ test('newly exposed visual defects receive a second bounded local correction wit
  f.overrides.readback=async()=>({issues:++checks===1?[{id:'word1',reason:'重影'}]:checks<4?[{id:'word2',reason:'缺字'}]:[]});
  const s=createLayeredImageService(f.h,f.overrides),created=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(created);
  await s.run({id:created.id});const result=await s.settled(created);assert.equal(result.status,'ready',result.error);assert.equal(checks,4);assert.equal(result.assemblyCheck.verified,true);assert.equal(f.generated.length,0);assert.ok(result.elements.filter(e=>e.type==='text').every(e=>!e.nativeText));
+});
+
+test('the last readback defects are restored locally and proved against source pixels before exporting',async t=>{
+ const f=await fixture(t),base=f.overrides.pixel;let checks=0;
+ const positions={w1:[0,0],w2:[2,0],w3:[0,2]};
+ f.overrides.pixel=async spec=>{
+  if(spec.operation==='source-layout-plate'){await writeFile(spec.output,'background');return {engine:'source-layout-plate'};}
+  if(spec.operation==='verify-source-regions')return {exact:spec.elements.map(e=>e.id)};
+  const r=await base(spec);if(spec.operation==='crop-layer'){
+   const id=Object.keys(positions).find(id=>spec.input.includes(id+'-'));if(id){const [x,y]=positions[id];r.bounds={x,y,width:1,height:1};}
+  }return r;
+ };
+ f.overrides.analyze=async()=>({analysisStrategy:'dense',elements:[{id:'bg',type:'background',name:'背景'},...Object.entries(positions).map(([id,[x,y]])=>({id,type:'text',name:id,text:'字',x,y,width:1,height:1,nativeText:true,fontAccepted:true}))]});
+ f.overrides.readback=async()=>({complete:true,issues:[{id:++checks===1?'w1':checks<4?'w2':'w3',reason:'错字'}]});
+ const s=createLayeredImageService(f.h,f.overrides),a=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(a);
+ await s.run({id:a.id,autoExportFormat:'psd'});const task=await s.settled(a);
+ assert.equal(task.status,'ready',task.error);assert.equal(checks,4,'final source proof needs no additional model or image request');
+ assert.deepEqual(task.assemblyCheck.finalSourceFallback,['w3']);assert.equal(task.assemblyCheck.verified,true);
+ assert.ok(task.elements.filter(e=>e.type==='text').every(e=>!e.nativeText));assert.equal(task.exports.length,1);assert.equal(f.generated.length,0);
 });
