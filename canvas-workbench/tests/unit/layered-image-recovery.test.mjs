@@ -50,10 +50,10 @@ test('reopening the panel restores the matching failed disk task, format and quo
   t.after(() => ui.unmount());
   assert.equal(ui.button('一键拆层并导出 PSD').props.disabled, true, 'analysis stays disabled while recovery is pending');
   await ui.until(() => ui.text().includes('任务已保存'));
-  assert.ok(ui.button('继续／重试缺失图层')); assert.equal(ui.button('一键拆层并导出 PSD'), undefined);
+  assert.ok(ui.button('继续生成')); assert.equal(ui.button('一键拆层并导出 PSD'), undefined);
   assert.equal(ui.nodes().find(n => n.type === 'select' && n.props['aria-label'] === '拆层导出格式').props.value, 'psd');
   assert.equal(ui.requests.some(r => r.init), false, 'opening a panel must only read saved progress');
-  await ui.button('继续／重试缺失图层').props.onClick();
+  await ui.button('继续生成').props.onClick();
   assert.equal(ui.requests.filter(r => r.init).length, 1);
   assert.match(ui.requests.find(r => r.init).url, /\/run$/);
 });
@@ -65,7 +65,7 @@ test('a persisted locator restores an older task beyond the recent list after a 
   await first.until(() => first.text().includes('任务已保存')); first.unmount(); listed = false;
   const second = mount({ storage, respond }); t.after(() => second.unmount());
   await second.until(() => second.text().includes('任务已保存'));
-  assert.ok(second.button('继续／重试缺失图层')); assert.equal(second.requests.some(r => r.init), false);
+  assert.ok(second.button('继续生成')); assert.equal(second.requests.some(r => r.init), false);
   assert.ok(second.nodes().find(n => n.type === 'option' && n.props.value === saved.id), 'restored locator is also visible in task history');
 });
 
@@ -73,14 +73,14 @@ test('same filename on a different image never restores or runs the unrelated ta
   const other = { ...failed(), sourceHash: 'different-image-hash' };
   const ui = mount({ respond: async url => ({ ok: true, tasks: [other] }) }); t.after(() => ui.unmount());
   await ui.until(() => ui.button('一键拆层并导出 PSD') && !ui.button('一键拆层并导出 PSD').props.disabled);
-  assert.equal(ui.button('继续／重试缺失图层'), undefined); assert.equal(ui.requests.some(r => r.init), false);
+  assert.equal(ui.button('继续生成'), undefined); assert.equal(ui.requests.some(r => r.init), false);
   const saved = failed();
   const recovered = mount({ respond: async url => {
     if (url.includes('/tasks?') && !url.includes('storageScope')) throw Error('old project missing');
     return url.includes('/tasks?') ? { ok: true, tasks: [saved] } : { ok: true, task: saved };
   } }); t.after(() => recovered.unmount());
   await recovered.until(() => recovered.text().includes('任务已保存'));
-  assert.ok(recovered.button('继续／重试缺失图层'));
+  assert.ok(recovered.button('继续生成'));
 });
 
 test('one-click UI submits one automatic pipeline and a restored finished export is delivered to the canvas', async t => {

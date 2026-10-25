@@ -68,6 +68,9 @@ def inspect_structure(spec):
     plates={e['id']:pill_behind(im,e) for e in elements if e.get('type')=='text' and e.get('enabled',True)}
     for e in elements:
         if e.get('type')!='image' or not e.get('enabled',True) or e.get('modeLocked') or e.get('geometryLocked'):continue
+        # Pixel edge detection refines framing, but cannot overrule the model's
+        # explicit product-vs-panel decision (a tabletop is not a photo frame).
+        if e.get('visualKind')=='product' or (e.get('extractionMode')=='cutout' and e.get('classificationReason')):continue
         if e.get('extractionMode')=='cutout' and e['x']==0 and e['y']==0 and e['width']==im.width and e['height']==im.height:continue
         rect=photo_rectangle(im,e,[p for p in plates.values() if p])
         if rect:
@@ -77,7 +80,7 @@ def inspect_structure(spec):
         if e.get('type')!='text' or not e.get('enabled',True):continue
         # A local component must enclose the actual text; never invent a card
         # merely because the description contains the word "label".
-        if any(s.get('type')=='shape' and s.get('textElementId')==e['id'] for s in elements):continue
+        if any(s.get('type')=='shape' and s.get('textElementId') in (e['id'],e.get('textGroupId','')) for s in elements):continue
         plate=plates.get(e['id'])
         if not plate:continue
         # Only promote a capsule/box when there is a verified enclosing margin.

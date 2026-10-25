@@ -9,7 +9,7 @@ test('malformed model geometry gets one bounded analysis retry and never silentl
   let calls = 0, persistentlyBad = false;
   const ctx = { attachments: { saveImage: async () => ({ id: 'source' }) }, llm: { resolveModelInfo: async () => ({ capabilities: { imageInput: true } }),
     prepareCall: async body => { assert.equal(body.model, 'current-chat'); return { config: {}, stream: async function* () {
-      calls++; yield { type: 'text-delta', index: 0, text: JSON.stringify({ elements: [{ id: 'object', type: 'image', x: 100, y: 100, width: 200, ...(!persistentlyBad && calls > 1 ? { height: 300 } : {}) }] }) };
+      calls++; yield { type: 'text-delta', index: 0, text: JSON.stringify({ elements: [{ id: 'object', type: 'image', visualKind:'product',classificationReason:'独立商品与环境分离', x: 100, y: 100, width: 200, ...(!persistentlyBad && calls > 1 ? { height: 300 } : {}) }] }) };
       yield { type: 'finish', reason: { kind: 'stop' } };
     } }; } } };
   const run = () => analyzeLayeredImage(ctx, { bytes: Buffer.from('fixture'), mime: 'image/png' }, { provider: 'selected', model: 'current-chat' }, 500, 1000, new AbortController().signal);

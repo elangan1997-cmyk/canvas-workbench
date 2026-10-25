@@ -25,7 +25,6 @@
       const [autoExport, setAutoExport] = React.useState(!props.automationLimits);
       const [autoOpen, setAutoOpen] = React.useState(!props.automationLimits);
       const [editableText, setEditableText] = React.useState(true);
-      const [acceptQuality, setAcceptQuality] = React.useState(false);
       const [maxImageRequests, setMaxImageRequests] = React.useState(40);
       const [mergeUndo, setMergeUndo] = React.useState([]);
       const alive = React.useRef(true);
@@ -42,7 +41,7 @@
       const receive = (next) => {
         if (!alive.current || !next) return;
         if (receivedTaskId.current !== next.id) {
-          setAcceptQuality(false); receivedTaskId.current = next.id;
+          receivedTaskId.current = next.id;
           if (next.autoExportFormat !== undefined) {
             setAutoExport(!!next.autoExportFormat);
             if (['ai', 'psd', 'svg'].includes(next.autoExportFormat)) setFormat(next.autoExportFormat);
@@ -173,9 +172,7 @@
         catch (e) { if (alive.current) setError(String(e.message || e)); }
         finally { if (alive.current) setRestoring(false); }
       };
-      const invalidFonts = draft.some(e => e.enabled && e.nativeText && !e.fontAccepted);
-      const canExport = task && !busy && !dirty && task.elements.length && task.elements.filter(e => e.enabled).every(e => e.status === 'complete')
-        && (task.quality?.status !== 'needs_review' || acceptQuality || task.quality?.reviewAcknowledged);
+      const canExport = task && !busy && !dirty && task.elements.length && task.elements.filter(e => e.enabled).every(e => e.status === 'complete');
       const display = [...draft].sort((a, b) => b.z - a.z);
       const hasAssets = draft.some(e => e.url && e.status === 'complete');
       const E = React.createElement;
@@ -202,14 +199,12 @@
             E('span', null, task.message || '处理中…'), E('progress', { value: Number(task.progress || 0), max: 100 })) : null,
           error || task && task.error ? E('p', { className: 'dsh-layers-error', role: 'alert' }, error || task.error) : null,
           task && task.quality ? E('details', { className: 'dsh-layers-warnings', open: task.quality.status === 'needs_review' },
-            E('summary', null, task.quality.status === 'needs_review' ? '有校准或背景问题待核对' : '清单与文字校准结果'),
+            E('summary', null, '自动处理说明'),
             ...(task.quality.issues || []).map((i, index) => E('p', { key: index }, i.message || i.code))) : null,
           E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: editableText, disabled: busy || !!task,
             onChange: e => setEditableText(e.target.checked) }), '自动校准普通文字，生成可编辑文字层'),
-          task && task.quality?.status === 'needs_review' ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: acceptQuality, disabled: busy,
-            onChange: e => setAcceptQuality(e.target.checked) }), '我已核对并接受当前清单中的近似项') : null,
           task && task.status !== 'running' && task.message !== task.error && task.message !== error ? E('p', { className: 'dsh-layers-note' }, task.message) : null,
-          task && task.warnings && task.warnings.length ? E('details', { className: 'dsh-layers-warnings' }, E('summary', null, '查看 ' + task.warnings.length + ' 项待核对说明'), ...task.warnings.map((w, i) => E('p', { key: i }, w))) : null,
+          task && task.warnings && task.warnings.length ? E('details', { className: 'dsh-layers-warnings' }, E('summary', null, '查看 ' + task.warnings.length + ' 项处理说明'), ...task.warnings.map((w, i) => E('p', { key: i }, w))) : null,
           task ? E('p', { className: 'dsh-layers-note' }, '已准备 ' + draft.filter(e => e.enabled && e.status === 'complete').length + ' / ' + draft.filter(e => e.enabled).length + ' 个图层；' + draft.filter(e => e.enabled && !e.nativeText && e.status !== 'complete' && e.requestState !== 'returned').length + ' 个图层可能需要生图。装饰文字建议连同底纹一起提取。') : null,
           !task ? E('p', { className: 'dsh-layers-note' }, '一键执行分析、提取和导出，成功素材会复用；临时本地故障会自动恢复。包装文字随产品保留。') : null,
           ...display.map(e => E('section', { key: e.id, className: 'dsh-layers-row' },
@@ -220,7 +215,8 @@
               e.type !== 'background' ? E('button', { type: 'button', disabled: busy, onClick: () => move(e.id, -1), title: '移到后面' }, '↓') : null,
               e.url ? E('button', { type: 'button', title: '仅切换预览；不输出此图层请取消左侧勾选', onClick: () => { setHidden(h => ({ ...h, [e.id]: !h[e.id] })); setOriginal(false); }, 'aria-label': '显示或隐藏' + e.name }, hidden[e.id] ? '显示' : '隐藏') : null),
             E('small', null, ({ text: '文字', image: e.extractionMode==='photo'?'完整照片':'抠图主体', shape:'图形', background: '完整背景' }[e.type] || '图层') + ' · ' + ({ pending: '待提取', complete: '已完成', failed: '待重试' }[e.status] || '待提取')),
-            ['source-pixel-flat','source-photo-rectangle'].includes(e.extractionEngine) ? E('small', null, ' · 原图像素保留') : null,
+            ['source-pixel-flat','source-photo-rectangle','source-text-region'].includes(e.extractionEngine) ? E('small', null, ' · 原图像素保留') : null,
+            e.classificationReason ? E('small',null,' · '+e.classificationReason+(e.shadowMode==='preserve'?'（保留接触阴影）':'')) : null,
             e.type === 'image' ? E('label',null,'图片类型 ',E('select',{value:e.extractionMode||'',disabled:busy,onChange:v=>update(e.id,{extractionMode:v.target.value,modeLocked:!!v.target.value})},E('option',{value:''},'自动判断'),E('option',{value:'photo'},'完整矩形照片'),E('option',{value:'cutout'},'透明主体'))) : null,
             e.extractionEngine === 'model-reconstruction' ? E('small', null, ' · 模型重建，请核对细节') : null,
             e.bounds ? E('small', null, 'PNG ' + e.bounds.width + '×' + e.bounds.height + ' · 原图坐标 (' + e.bounds.x + ', ' + e.bounds.y + ')') : null,
@@ -233,13 +229,13 @@
             e.error ? E('p', { className: 'dsh-layers-error' }, e.error) : null,
             e.type === 'text' ? E('div', { className: 'dsh-layers-text' },
               E('textarea', { value: e.text || '', disabled: busy, onChange: v => update(e.id, { text: v.target.value }), 'aria-label': '核对文字内容' }),
-              E('label', null, E('input', { type: 'checkbox', checked: !!e.nativeText, disabled: busy, onChange: v => update(e.id, { nativeText: v.target.checked, fontAccepted: false }) }), '可编辑文字（未勾选时保留原字形图像）'),
+              E('label', null, E('input', { type: 'checkbox', checked: !!e.nativeText, disabled: busy, onChange: v => update(e.id, { nativeText: v.target.checked, fontAccepted: false, textMode:v.target.checked?'editable':'image',sourceTextFallback:!v.target.checked }) }), '可编辑文字（未勾选时保留原字形图像）'),
               e.nativeText ? E('div', null,
                 E('select', { value: e.fontPostScript, disabled: busy, onChange: v => update(e.id, { fontPostScript: v.target.value, fontAccepted: false }), 'aria-label': '候选字体' },
                   ...TEXT_REBUILD_FONTS.map(group => E('optgroup', { key: group.group, label: group.group }, ...group.items.map(f => E('option', { key: f.ps, value: f.ps }, f.label))))),
                 E('div', { className: 'dsh-layers-inline' }, E('label', null, '字号 ', E('input', { type: 'number', min: 8, max: 2000, value: e.fontSize, disabled: busy, onChange: v => update(e.id, { fontSize: Number(v.target.value) }) })),
                   E('input', { type: 'color', value: e.color || '#111827', disabled: busy, onChange: v => update(e.id, { color: v.target.value }), 'aria-label': '文字颜色' })),
-                E('label', null, E('input', { type: 'checkbox', checked: !!e.fontAccepted, disabled: busy, onChange: v => update(e.id, { fontAccepted: v.target.checked }) }), '接受所选候选字体（不代表已找回原字体）')) : null) : null)),
+                E('small', null, '系统自动匹配字体和位置；无法匹配时保留原字形区域')) : null) : null)),
           draft.some(e => e.requestState === 'unknown') ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: retryUnknown, onChange: e => setRetryUnknown(e.target.checked) }), '已核对服务记录，接受未知请求重试可能重复消耗额度') : null,
           E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: localOnly, disabled: busy || props.automationLimits && !props.automationLimits.generationAllowed, onChange: e => setLocalOnly(e.target.checked) }), '仅使用原图提取（不调用生图，复杂遮挡可能无法完成）'),
           E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: autoExport, disabled: busy, onChange: e => setAutoExport(e.target.checked) }), '拆层完成后自动导出并加入画布'),
@@ -250,15 +246,15 @@
             E('button', { type: 'button', onClick: () => props.onFile(file) }, '加入画布'), E('small', { title: file.path }, file.path)))) : null,
           task && task.outputDirectory ? E('small', { className: 'dsh-layers-path', title: task.outputDirectory }, '本任务工作区：' + task.workspaceRoot + '\n过程文件：' + task.outputDirectory) : null),
         E('footer', { className: 'dsh-layers-foot' },
-          task && !busy && !props.automationLimits ? E('button', { type: 'button', onClick: () => { ownExports.current = false; taskProject.current = ''; setTask(null); setDraft([]); setMergeUndo([]); setDirty(false); setAcceptQuality(false); setError(''); setOriginal(true); } }, '新分析') : null,
+          task && !busy && !props.automationLimits ? E('button', { type: 'button', onClick: () => { ownExports.current = false; taskProject.current = ''; setTask(null); setDraft([]); setMergeUndo([]); setDirty(false); setError(''); setOriginal(true); } }, '新分析') : null,
           !task && !props.automationLimits ? E('button', { className: 'dsh-layers-primary', type: 'button', disabled: busy, onClick: () => submitAnalysis(true) }, posting ? '正在提交…' : '一键拆层' + (autoExport ? '并导出 ' + format.toUpperCase() : '')) : null,
           !task ? E('button', { type: 'button', disabled: busy, onClick: () => submitAnalysis(false) }, '仅分析，先调整清单') : null,
-          task && !busy ? E('button', { type: 'button', onClick: () => { setAcceptQuality(false); act('refine', { id: task.id, editableText, fontPolicy: 'substitute' }); } }, '重新校准') : null,
+          task && !busy ? E('button', { type: 'button', onClick: () => { act('refine', { id: task.id, editableText, fontPolicy: 'substitute' }); } }, '重新校准') : null,
           task && task.status === 'running' ? E('button', { type: 'button', disabled: posting, onClick: () => act('cancel', { id: task.id }) }, '停止后续操作') : null,
-          task && task.status !== 'running' && (task.status !== 'ready' || dirty) ? E('button', { className: 'dsh-layers-primary', type: 'button', disabled: busy || !draft.length || invalidFonts, onClick: () => { ownExports.current = autoExport; for (const f of task.exports || []) delivered.current.add(f.path); act('run', { id: task.id, elements: draft, retryUnknown, localOnly,
-            acceptQualityIssues: acceptQuality, maxImageRequests, autoExportFormat: autoExport ? format : '', openAfterExport: autoOpen }); } }, dirty ? '应用修改并继续' : task.status === 'review' ? '开始拆层' + (autoExport ? '并导出 ' + format.toUpperCase() : '') : '继续／重试缺失图层') : null,
+          task && task.status !== 'running' && (task.status !== 'ready' || dirty) ? E('button', { className: 'dsh-layers-primary', type: 'button', disabled: busy || !draft.length, onClick: () => { ownExports.current = autoExport; for (const f of task.exports || []) delivered.current.add(f.path); act('run', { id: task.id, elements: draft, retryUnknown, localOnly,
+            maxImageRequests, autoExportFormat: autoExport ? format : '', openAfterExport: autoOpen }); } }, dirty ? '应用修改并继续' : task.status === 'review' ? '开始拆层' + (autoExport ? '并导出 ' + format.toUpperCase() : '') : '继续生成') : null,
           E('div', { className: 'dsh-layers-export-tools' }, E('select', { value: format, disabled: busy, onChange: e => setFormat(e.target.value), 'aria-label': '拆层导出格式' }, E('option', { value: 'ai' }, 'AI（需 Illustrator）'), E('option', { value: 'psd' }, 'PSD'), E('option', { value: 'svg' }, 'SVG')),
-            E('button', { type: 'button', disabled: !canExport, onClick: () => { ownExports.current = true; for (const f of task.exports || []) delivered.current.add(f.path); act('export', { id: task.id, format, acceptQualityIssues: acceptQuality, openAfterExport: autoOpen }); } }, '导出 ' + format.toUpperCase())),
+            E('button', { type: 'button', disabled: !canExport, onClick: () => { ownExports.current = true; for (const f of task.exports || []) delivered.current.add(f.path); act('export', { id: task.id, format, openAfterExport: autoOpen }); } }, '导出 ' + format.toUpperCase())),
           E('label', null, '图像请求上限 ', E('input', { type: 'number', min: 0, max: 10000, value: maxImageRequests, disabled: busy || !!props.automationLimits,
             style: { width: 70 }, onChange: e => setMaxImageRequests(Number(e.target.value)) }), E('small', null, ' 已使用 ' + (task?.generationAttempts || 0)))));
     }

@@ -30,7 +30,7 @@ async function fixture(t, generation) {
       await writeFile(spec.output, await readFile(spec.input));
       return { success: true, width: 4, height: 4, hasTransparency: true, actualPixels: [4, 4], resized: false };
     }
-    if (spec.operation === 'text') { await writeFile(spec.output, 'text'); return { success: true }; }
+    if (spec.operation === 'text' || spec.operation === 'source-text') { await writeFile(spec.output, 'text'); return { success: true,engine:spec.operation==='source-text'?'source-text-region':undefined }; }
     if (spec.operation === 'crop-layer') { await mkdir(join(spec.output, '..'), {recursive:true}); await writeFile(spec.output, await readFile(spec.input)); return { success:true, bounds:{x:0,y:0,width:4,height:4} }; }
     if (spec.operation === 'background-plate') return {success:true};
     if (spec.operation === 'assemble') {
@@ -62,7 +62,7 @@ test('layer plan enforces a unique background, coordinates, review and stable ID
   assert.throws(() => normalizeLayerElements([{ id: '../escape' }], 100, 100), /ID/);
   assert.throws(() => normalizeLayerElements([{ id: 'x' }, { id: 'x' }], 100, 100), /重复/);
   assert.throws(() => normalizeLayerElements([{ id: 'a', type: 'background' }, { id: 'b', type: 'background' }], 100, 100), /一个/);
-  assert.throws(() => normalizeLayerElements([{ id: 't', type: 'text', text: '文', nativeText: true }], 100, 100), /字体/);
+  assert.equal(normalizeLayerElements([{ id: 't', type: 'text', text: '文', nativeText: true }], 100, 100)[1].fontAccepted,false,'font approval is performed automatically by the executor');
   const prompt = extractionPrompt(plan[1], plan, 900, 1200);
   assert.match(prompt, /真实Alpha/); assert.match(prompt, /禁止居中/);
 });
@@ -307,6 +307,15 @@ test('concurrent run submissions cannot both prepare the same task or replace th
   assert.equal(result.status, 'ready'); assert.equal(result.localOnly, false); assert.equal(f.generated.length, 2);
 });
 
+test('cancelling a legacy multiline task during automatic calibration cannot start generation afterwards',async t=>{
+ const f=await fixture(t);let release,reached;const wait=new Promise(r=>release=r),ready=new Promise(r=>reached=r);
+ f.overrides.analyze=async()=>({elements:[{id:'bg',type:'background'},{id:'t',type:'text',text:'First\nSecond',x:0,y:0,width:4,height:4}]});
+ f.overrides.calibrate=async task=>{reached();await wait;return{elements:task.elements,quality:{status:'passed',issues:[]}};};
+ const service=createLayeredImageService(f.h,f.overrides),created=await service.analyze({imageData:png,provider:'test',model:'test'});await service.settled({id:created.id});
+ const running=service.run({id:created.id,maxImageRequests:2});await ready;await service.cancel({id:created.id});release();await assert.rejects(running,/取消/);
+ assert.equal((await service.get({id:created.id})).status,'cancelled');assert.equal(f.generated.length,0);
+});
+
 test('generated-background review is rechecked and repaired locally without accepting the issue or repurchasing images', async t => {
   const f=await fixture(t); let dirty=true;
   f.overrides.calibrate=async task=>({elements:task.elements,quality:{status:'passed',issues:[]}});
@@ -315,9 +324,23 @@ test('generated-background review is rechecked and repaired locally without acce
   f.overrides.analyze=async()=>({elements:[...sampleElements(),{id:'text',type:'text',text:'Menu',nativeText:true,fontAccepted:true,fontPostScript:'Inter-Regular',x:0,y:0,width:1,height:1}]});
   const service=createLayeredImageService(f.h,f.overrides);
   const created=await service.analyze({imageData:png,provider:'selected',model:'selected',autoRun:true,autoRefine:true,autoExportFormat:'psd',maxImageRequests:2});
-  let result=await service.settled({id:created.id});assert.equal(result.status,'needs_review');assert.equal(f.generated.length,2);
+  let result=await service.settled({id:created.id});assert.equal(result.status,'ready');assert.equal(f.generated.length,2);assert.equal(result.exports.length,1);
+  assert.equal(result.quality.issues.find(i=>i.code==='textured-background').severity,'warning','visual differences are reported without a user acknowledgement gate');
   dirty=false;await service.run({id:created.id,autoExportFormat:'psd',maxImageRequests:2});result=await service.settled({id:created.id});
   assert.equal(result.status,'ready');assert.equal(result.quality.reviewAcknowledged,false);assert.equal(f.generated.length,2);assert.equal(result.exports.length,1);
+});
+
+test('automatic text correction retains returned product and background caches through refine and needs no extra image quota',async t=>{
+ const f=await fixture(t);let corrected=false;
+ f.overrides.analyze=async()=>({elements:[...sampleElements(),{id:'text',type:'text',text:'Original',nativeText:true,fontAccepted:true,fontPostScript:'Inter-Regular',x:0,y:0,width:1,height:1}]});
+ f.overrides.calibrate=async task=>({elements:task.elements.map(e=>e.type==='text'?{...e,text:corrected?'Corrected':'Original'}:e),quality:{status:'passed',issues:[]}});
+ f.overrides.refinement=async()=>({issues:[]});const service=createLayeredImageService(f.h,f.overrides);
+ const task=await service.analyze({imageData:png,provider:'test',model:'test',autoRun:true,autoRefine:true,autoExportFormat:'psd',maxImageRequests:2});
+ assert.equal((await service.settled({id:task.id})).status,'ready');assert.equal(f.generated.length,2);
+ corrected=true;await service.refine({id:task.id,editableText:true});let result=await service.settled({id:task.id});assert.equal(result.status,'review');assert.ok(result.elements.some(e=>e.status==='pending'));
+ await service.run({id:task.id,autoExportFormat:'psd',maxImageRequests:2});result=await service.settled({id:task.id});
+ assert.equal(result.status,'ready',result.error);assert.equal(result.elements.find(e=>e.id==='text').text,'Corrected');assert.equal(f.generated.length,2);assert.equal(result.generationAttempts,2);
+ const psd=readPsd(await readFile(result.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.equal(psd.children.find(e=>e.name===result.elements.find(e=>e.id==='text').name).text.text,'Corrected');
 });
 
 test('typed photos bypass image generation and matting; PSD shape layers retain a native vector fill and mask', async t => {

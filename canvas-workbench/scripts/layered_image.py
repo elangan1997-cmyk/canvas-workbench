@@ -115,6 +115,22 @@ def render_text(spec):
     return info(im)
 
 
+def source_text(spec):
+    """Lossless fallback for unsupported fonts/effects; never regenerate text.
+    The original region includes its local backdrop, explicitly reported as a
+    raster fallback rather than pretending it is editable or recovered glyphs.
+    """
+    source=load(spec['input']);e=spec['element'];b=e.get('cleanupBounds') or e
+    values=[b.get(k) for k in ('x','y','width','height')]
+    if any(not isinstance(v,(int,float)) or isinstance(v,bool) or not math.isfinite(v) for v in values):raise ValueError('文字区域坐标无效')
+    x,y,w,h=values
+    if w<=0 or h<=0 or x<0 or y<0 or x>=source.width or y>=source.height:raise ValueError('文字区域尺寸无效')
+    a,c=max(0,math.floor(x-2)),min(source.width,math.ceil(x+w+2))
+    b,d=max(0,math.floor(y-2)),min(source.height,math.ceil(y+h+2))
+    result=Image.new('RGBA',source.size);result.paste(source.crop((a,b,c,d)),(a,b))
+    save(result,spec['output']);return {**info(result),'engine':'source-text-region'}
+
+
 def normalize(spec):
     im = load(spec['input'])
     actual = list(im.size)
@@ -146,8 +162,7 @@ def normalize(spec):
             raise ValueError('背景未完整填充，请重新补全背景')
         if abs(math.log((im.width/im.height)/(width/height))) > .8:
             raise ValueError('背景构图比例与原图差异过大，原始返回已保留')
-        # Background completion fills the document. Cover uniformly; visible
-        # original background pixels are restored by background_plate afterwards.
+        # Background completion fills the document as one coherent plate.
         scale = max(width/im.width, height/im.height)
         size = (max(width, round(im.width*scale)), max(height, round(im.height*scale)))
         resized = im.resize(size, Image.Resampling.LANCZOS)
@@ -206,28 +221,12 @@ def background_plate(spec):
     original, generated = load(spec['source']), load(spec['input'])
     if original.size != generated.size:
         raise ValueError('背景补全与原图尺寸不一致')
-    mask = Image.new('L', original.size)
-    draw = ImageDraw.Draw(mask)
-    for e in spec['elements']:
-        if e['type'] != 'background':
-            b=e.get('cleanupBounds') or e
-            draw.rectangle((b['x'] - 10, b['y'] - 10, b['x'] + b['width'] + 10, b['y'] + b['height'] + 10), fill=255)
-            if e.get('nativeText') and e.get('bounds'):
-                b=e['bounds']
-                draw.rectangle((b['x']-4,b['y']-4,b['x']+b['width']+4,b['y']+b['height']+4),fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(3))
-    # Approximate model rectangles may miss foreground edges. Only retain
-    # original pixels that also agree with the independently completed plate;
-    # otherwise an unmasked photo strip would be baked into the background.
-    delta=ImageChops.difference(original.convert('RGB'),generated.convert('RGB'))
-    r,g,b=delta.split();maximum=ImageChops.lighter(ImageChops.lighter(r,g),b)
-    disagreement=maximum.point(lambda v:255 if v>18 else 0).filter(ImageFilter.MaxFilter(15))
-    agreement=ImageChops.invert(disagreement).filter(ImageFilter.GaussianBlur(12))
-    color_weight=maximum.point(lambda v:255 if v<=18 else max(0,round(255*(50-v)/32)))
-    keep=ImageChops.multiply(ImageChops.multiply(agreement,color_weight),ImageChops.invert(mask))
-    result = Image.composite(original, generated, keep)
-    save(result, spec['output'])
-    return {**info(result),'sourceBackgroundPixels':keep.histogram()[255]}
+    # Even feathered source/model mixing creates visible rectangular tonal
+    # boundaries on a gradient or tabletop. Never paste the text-bearing source
+    # back into a completed plate. Exact flat artwork has its separate local
+    # source_flat path; photograph panels retain source pixels in their layers.
+    save(generated, spec['output'])
+    return {**info(generated),'sourceBackgroundPixels':0,'engine':'coherent-generated-background'}
 
 
 def source_flat(spec):
@@ -344,6 +343,8 @@ def run(spec):
         return background_plate(spec)
     if op == 'source-flat':
         return source_flat(spec)
+    if op == 'source-text':
+        return source_text(spec)
     if op == 'text':
         return render_text(spec)
     if op == 'assemble':

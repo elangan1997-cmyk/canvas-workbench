@@ -27,7 +27,7 @@ def refine(spec):
             issues.append({'id':e['id'],'code':'empty-text','severity':'error','message':'文字为空，请核对识别结果'});result.append(e);continue
         if '\n' in e['text'] or '\r' in e['text'] or abs(float(e.get('rotation',0)))>2:
             e['fontAccepted']=False
-            issues.append({'id':e['id'],'code':'unsupported-text-geometry','severity':'review','message':'多行或旋转文字需要逐行复核'});result.append(e);continue
+            issues.append({'id':e['id'],'code':'unsupported-text-geometry','severity':'review','message':'此文字含复杂行式或旋转，自动保留原字形区域'});result.append(e);continue
         e['sourceSearchPadding']=min(12,max(4,(y2-y1)*.15))
         fitted=infer_block(im,e)
         # A low score may still supply useful placement for an explicit
@@ -55,9 +55,9 @@ def refine(spec):
             fitted['fontAvailable']=False
             issues.append({'id':e['id'],'code':'font-unavailable','severity':'error','message':str(ex)[:300]})
         if not fitted.get('textFit'):
-            issues.append({'id':e['id'],'code':'font-fit-unresolved','severity':'review','message':'未能可靠校准字形与位置，需复核文字区域'})
+            issues.append({'id':e['id'],'code':'font-fit-unresolved','severity':'review','message':'未能可靠校准字形与位置，自动保留原字形区域'})
         elif float(fitted.get('styleConfidence',0))<.55:
-            issues.append({'id':e['id'],'code':'font-fit-unresolved','severity':'review','message':'字形匹配分偏低，已保留候选及位置，请核对后再提取','score':fitted.get('styleConfidence',0)})
+            issues.append({'id':e['id'],'code':'font-fit-unresolved','severity':'review','message':'字形匹配分偏低，自动保留原字形区域','score':fitted.get('styleConfidence',0)})
         elif float(fitted.get('styleConfidence',0))<.9:
             issues.append({'id':e['id'],'code':'substitute-font','severity':'warning','message':'使用已安装的近似字体；不代表找回原字体','score':fitted.get('styleConfidence',0)})
         # The caller chooses strict/substitute policy, never the pixel helper.

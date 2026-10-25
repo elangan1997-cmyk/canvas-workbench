@@ -190,6 +190,16 @@ with tempfile.TemporaryDirectory() as tmp:
  r=background_plate({'source':str(p/'source.png'),'input':str(p/'generated.png'),'output':str(p/'out.png'),'elements':[{'type':'image','x':0,'y':80,'width':200,'height':60}]})
  out=Image.open(p/'out.png');assert out.getpixel((100,175))[:3]==(220,232,244),'unmasked photo tail must not be restored'
  assert out.getpixel((10,10))==original.getpixel((10,10)),'verified source background must survive'
+ # A clean generated gradient must stay byte-exact. Mixing similar source
+ # colours around model rectangles used to produce tonal erasure seams.
+ generated=Image.new('RGBA',(200,220));g=generated.load()
+ for y in range(220):
+  for x in range(200):g[x,y]=(190+x//10,205+y//15,220+y//20,255)
+ original=generated.copy();d=ImageDraw.Draw(original);d.rectangle((10,40,190,100),fill=(210,220,232,255));d.rectangle((40,130,170,150),fill='#183865')
+ original.save(p/'source.png');generated.save(p/'generated.png')
+ r=background_plate({'source':str(p/'source.png'),'input':str(p/'generated.png'),'output':str(p/'out.png'),'elements':[{'type':'text','x':40,'y':130,'width':130,'height':20}]})
+ assert Image.open(p/'out.png').tobytes()==generated.tobytes(),'source mixing must not reintroduce seams or old text'
+ assert r['sourceBackgroundPixels']==0
  # Smooth light-ray variation with no remaining original ink is already clean.
  grad=Image.new('RGBA',(200,220));gp=grad.load()
  for y in range(220):

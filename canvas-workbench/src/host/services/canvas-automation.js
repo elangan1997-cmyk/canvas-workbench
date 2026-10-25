@@ -190,10 +190,10 @@ export function createCanvasAutomation(h, overrides = {}) {
         throw new Error((task.error || '图层分析失败') + '；继续任务时将重新分析');
       }
       await reconcileRequests(job); await save(job);
-      if (hasBlockingLayerQuality(task.quality) && !task.quality?.reviewAcknowledged) throw budgetError(task.message || '图层分析需要核对');
+      if (hasBlockingLayerQuality(task.quality)) throw budgetError(task.message || '图层结构数据无效，需要重新分析');
       if (task.elements.some(e => e.requestState === 'unknown') && !job.retryUnknown) throw budgetError('有图像请求结果未知，未自动重发；请核对后再继续');
       const attemptsBefore = task.generationAttempts || 0;
-      if (!task.elements.every(e => !e.enabled || e.status === 'complete')) {
+      if (!task.elements.every(e => !e.enabled || e.status === 'complete') || task.status === 'needs_review') {
         await service.run({ ...request, engine: job.imageSettings.engine, imageSettingsOverride: job.imageSettings,
           localOnly: !job.allowGeneration, retryUnknown: job.retryUnknown, maxImageRequests: attemptsBefore + Math.max(0, job.maxImageRequests - (job.imageRequestsUsed || 0)) });
         try { task = await waitLayer(service, request, signal); }
