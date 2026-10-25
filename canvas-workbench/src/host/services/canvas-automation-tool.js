@@ -22,6 +22,9 @@ export function automationToolSpec(service, getContext) {
       project_name: { type: 'string' }, recursive: { type: 'boolean' }, max_files: { type: 'integer', description: '默认100，最高500；超出时拒绝静默截断' },
       formats: { type: 'array', items: { type: 'string', enum: ['psd', 'ai', 'svg'] } },
       editable_text: { type: 'boolean', description: '拆层时默认true，识别普通文字为可编辑文字层' },
+      reconstruction: { type: 'string', enum: ['preserve','complete'], description: '用户要求完整拆分时使用complete：可辨认普通文字转可编辑文字，独立主体透明PNG，形状与背景分开；原文确实无法确认的微字独立保留透明字形并明确标记不可编辑，不能编造文案。未通过分层及视觉核验不能报告完成。preserve偏向保留原像素。' },
+      enhance_source: { type: 'boolean', description: '先用工作台图像模型生成高清识别母版，原图仍为核对依据；实际像素不足时自动分区重建并复用完成分区，计入max_image_requests。' },
+      preprocessing_job_id: { type: 'string', description: '可复用已完成edit_image高清任务的结果；必须与当前原图哈希匹配，避免再次购买同一整图重建。' },
       font_policy: { type: 'string', enum: ['substitute', 'strict'], description: '默认substitute，使用已安装的近似字体并记录差异；strict低置信时自动保留原字形区域' },
       prompt: { type: 'string' }, region: box,
       allow_generation: { type: 'boolean', description: '是否允许当前工作台图像引擎重建素材；默认false' },
@@ -48,7 +51,7 @@ export function automationToolSpec(service, getContext) {
         operation: args.operation, folder: args.folder, paths: args.paths, elementIds: args.element_ids, selectedOnly: args.selected_only,
         sourceProject: args.source_project, project: args.source_project || current.project, outputParent: args.output_parent, outputProject: args.output_project,
         projectName: args.project_name, recursive: args.recursive, maxFiles: args.max_files, formats: args.formats, editableText: args.editable_text,
-        fontPolicy: args.font_policy, prompt: args.prompt, region: args.region, allowGeneration: args.allow_generation, maxImageRequests: args.max_image_requests,
+        fontPolicy: args.font_policy,reconstruction:args.reconstruction,enhanceSource:args.enhance_source,preprocessingJobId:args.preprocessing_job_id, prompt: args.prompt, region: args.region, allowGeneration: args.allow_generation, maxImageRequests: args.max_image_requests,
         retryUnknown: args.retry_unknown, openCanvas: args.open_canvas, id: args.job_id, itemId: args.item_id, reprocess: args.reprocess, requestId: args.request_id, patches: args.patches, baseRevision: args.base_revision };
       let value;
       if (args.action === 'capabilities') value = { operations: ['layered_export', 'flat_psd', 'remove_background', 'edit_image'], limits: { maxFiles: 500, imageBytes: 32 * 1024 * 1024 },

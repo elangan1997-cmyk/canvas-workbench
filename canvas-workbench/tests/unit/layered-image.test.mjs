@@ -437,3 +437,40 @@ test('the last readback defects are restored locally and proved against source p
  assert.deepEqual(task.assemblyCheck.finalSourceFallback,['w3']);assert.equal(task.assemblyCheck.verified,true);
  assert.ok(task.elements.filter(e=>e.type==='text').every(e=>!e.nativeText));assert.equal(task.exports.length,1);assert.equal(f.generated.length,0);
 });
+
+test('complete reconstruction repairs the native word instead of silently flattening it',async t=>{
+ const f=await fixture(t);let checks=0,repairs=0;
+ f.overrides.analyze=async()=>({analysisStrategy:'dense',elements:[{id:'bg',type:'background',name:'背景'},
+ {id:'t',type:'text',name:'菜名',text:'奶荼',x:0,y:0,width:2,height:2,nativeText:true,fontAccepted:true}]});
+ f.overrides.calibrate=async task=>({elements:task.elements,quality:{issues:[]}});f.overrides.refinement=async()=>({issues:[]});
+ f.overrides.readback=async()=>({complete:true,issues:++checks===1?[{id:'t',reason:'原图为奶茶，出现错字'}]:[]});
+ f.overrides.recoverText=async(_ctx,task,ids)=>{repairs++;assert.deepEqual(ids,['t']);return {elements:task.elements.map(e=>e.id==='t'?{...e,text:'奶茶',contentVerified:true}:e),changed:['t'],unresolved:[]};};
+ f.overrides.completeRefinement=async spec=>({elements:spec.elements.map(e=>({...e,fontAvailable:true,textFit:{text:e.text,fontPostScript:e.fontPostScript,fontSize:e.fontSize,tracking:0,originOffsetX:0,baselineOffset:1,advance:1}}))});
+ const s=createLayeredImageService(f.h,f.overrides),a=await s.analyze({imageData:png,provider:'test',model:'current',reconstruction:'complete',autoRefine:true});await s.settled(a);
+ await s.run({id:a.id,autoExportFormat:'psd'});const task=await s.settled(a);
+ assert.equal(task.status,'ready',task.error);assert.equal(repairs,1);assert.equal(task.elements.find(e=>e.id==='t').nativeText,true);assert.equal(task.completeness.complete,true);assert.deepEqual(task.completeness.rasterText,[]);
+ const psd=readPsd(await readFile(task.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.equal(psd.children.find(e=>e.name==='菜名').text.text,'奶茶');assert.equal(f.generated.length,1);
+});
+
+test('direct export cannot bypass the complete reconstruction audit with cached raster text',async t=>{
+ const f=await fixture(t);f.overrides.analyze=async()=>({elements:[{id:'bg',type:'background',name:'背景'},
+ {id:'t',type:'text',name:'菜名',text:'奶茶',x:0,y:0,width:2,height:2,nativeText:false}]});
+ const s=createLayeredImageService(f.h,f.overrides),a=await s.analyze({imageData:png,provider:'test',model:'current'});await s.settled(a);
+ await s.run({id:a.id,autoExportFormat:'psd'});let task=await s.settled(a);assert.equal(task.status,'ready');
+ const file=join(task.outputDirectory,'task.json'),stored=JSON.parse(await readFile(file,'utf8'));stored.reconstruction='complete';delete stored.completeness;await writeFile(file,JSON.stringify(stored));
+ const current=createLayeredImageService(f.h,f.overrides);await current.export({id:a.id,format:'psd'});task=await current.settled(a);
+ assert.equal(task.status,'failed');assert.match(task.error,/完整拆分尚未通过/);assert.equal(task.completeness.complete,false);assert.deepEqual(task.completeness.rasterText,['t']);assert.equal(task.exports.length,1,'only the old partial export remains in history');
+});
+
+test('complete visual readback can add and render a genuinely missing text layer outside the original IR',async t=>{
+ const f=await fixture(t);let checks=0;
+ f.overrides.analyze=async()=>({analysisStrategy:'dense',elements:[{id:'bg',type:'background',name:'背景'}]});
+ f.overrides.refinement=async()=>({issues:[]});
+ f.overrides.readback=async()=>({complete:true,issues:++checks===1?[{id:'missing-new',kind:'missing-text',text:'奶茶',reason:'原图有文字而预览缺失',x:0,y:0,width:2,height:2}]:[]});
+ f.overrides.recoverText=async(_ctx,task,ids)=>({elements:task.elements.map(e=>ids.includes(e.id)?{...e,text:'奶茶',contentVerified:true}:e),changed:ids,unresolved:[]});
+ f.overrides.completeRefinement=async spec=>({elements:spec.elements.map(e=>({...e,fontAvailable:true,textFit:{text:e.text,fontPostScript:e.fontPostScript,fontSize:e.fontSize,tracking:0,originOffsetX:0,baselineOffset:1,advance:1}}))});
+ const s=createLayeredImageService(f.h,f.overrides),a=await s.analyze({imageData:png,provider:'test',model:'current',reconstruction:'complete'});await s.settled(a);
+ await s.run({id:a.id,autoExportFormat:'psd'});const task=await s.settled(a);
+ assert.equal(task.status,'ready',task.error);assert.equal(task.completeness.editableText,1);assert.equal(task.elements.find(e=>e.id==='missing-new').nativeText,true);assert.equal(task.exports.length,1);
+ const psd=readPsd(await readFile(task.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.ok(psd.children.some(e=>e.text?.text==='奶茶'));
+});

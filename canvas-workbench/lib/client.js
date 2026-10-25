@@ -2048,6 +2048,8 @@ window.__ModuleLoader__.load({
       const [autoExport, setAutoExport] = React.useState(!props.automationLimits);
       const [autoOpen, setAutoOpen] = React.useState(!props.automationLimits);
       const [editableText, setEditableText] = React.useState(true);
+      const [completeMode, setCompleteMode] = React.useState(false);
+      const [enhanceSource, setEnhanceSource] = React.useState(false);
       const [maxImageRequests, setMaxImageRequests] = React.useState(40);
       const [mergeUndo, setMergeUndo] = React.useState([]);
       const alive = React.useRef(true);
@@ -2072,7 +2074,7 @@ window.__ModuleLoader__.load({
           }
         }
         if (recoveryKey.current && !props.automationLimits) try {
-          window.localStorage.setItem(recoveryKey.current, JSON.stringify({ id: next.id, storageProject: next.storageProject, sourceHash: next.sourceHash }));
+          window.localStorage.setItem(recoveryKey.current, JSON.stringify({ id: next.id, storageProject: next.storageProject, sourceHash: next.referenceSourceHash || next.sourceHash }));
         } catch { /* Disk task records remain recoverable if browser storage is unavailable. */ }
         setRecent(items => [next, ...items.filter(item => item.id !== next.id)].sort((a,b) => b.createdAt-a.createdAt));
         taskProject.current = next.storageProject || props.project.project || '';
@@ -2117,14 +2119,14 @@ window.__ModuleLoader__.load({
               const saved = JSON.parse(window.localStorage.getItem(recoveryKey.current) || 'null');
               if (saved?.id && saved.storageProject && saved.sourceHash === sourceHash) candidates.push(saved);
             } catch { /* Fall back to persisted task history. */ }
-            candidates.push(...history.filter(item => item.sourceHash === sourceHash));
+            candidates.push(...history.filter(item => item.sourceHash === sourceHash || item.referenceSourceHash === sourceHash));
           }
           let restoreError = '';
           for (const previous of candidates.filter((item, index, all) => all.findIndex(other => other.id === item.id) === index)) {
             try {
               const value = await read(endpoint('task', { id: previous.id, project: previous.storageProject }));
               if (cancelled || !alive.current) return;
-              if (value.task?.sourceHash !== sourceHash) continue;
+              if (value.task?.sourceHash !== sourceHash && value.task?.referenceSourceHash !== sourceHash) continue;
               ownExports.current = false; receive(value.task); setError(''); return;
             } catch (e) { restoreError = String(e.message || e); }
           }
@@ -2165,6 +2167,7 @@ window.__ModuleLoader__.load({
       const submitAnalysis = automatic => {
         ownExports.current = automatic && autoExport;
         return act('analyze', { ...props.data, autoRun: automatic, autoRefine: true, editableText, localOnly, maxImageRequests,
+          reconstruction: completeMode ? 'complete' : 'preserve', enhanceSource: enhanceSource && !localOnly,
           autoExportFormat: autoExport ? format : '', openAfterExport: autoOpen, fontPolicy: 'substitute',
           ...(!props.automationLimits ? { storageScope: 'workspace' } : {}), ...(props.getModel ? props.getModel() : props.model || {}) });
       };
@@ -2226,6 +2229,11 @@ window.__ModuleLoader__.load({
             ...(task.quality.issues || []).map((i, index) => E('p', { key: index }, i.message || i.code))) : null,
           E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: editableText, disabled: busy || !!task,
             onChange: e => setEditableText(e.target.checked) }), '自动校准普通文字，生成可编辑文字层'),
+          !task ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: completeMode, disabled: busy || localOnly || !editableText,
+            onChange: e => setCompleteMode(e.target.checked) }), '完整重建：普通文字、透明主体、图形和背景分开') : null,
+          !task ? E('label', { className: 'dsh-layers-note' }, E('input', { type: 'checkbox', checked: enhanceSource, disabled: busy || localOnly,
+            onChange: e => setEnhanceSource(e.target.checked) }), '先用图像模型高清重建，按实际返回尺寸检查；计入图像请求上限') : null,
+          task && task.completeness ? E('p', { className: 'dsh-layers-note' }, task.completeness.complete ? '独立分层检查通过：可编辑文字 '+task.completeness.editableText+' 个，未确认微字字形 '+(task.completeness.unconfirmedGlyphs||[]).length+' 处' : '完整性检查尚未通过，已保留具体原因和素材') : null,
           task && task.status !== 'running' && task.message !== task.error && task.message !== error ? E('p', { className: 'dsh-layers-note' }, task.message) : null,
           task && task.warnings && task.warnings.length ? E('details', { className: 'dsh-layers-warnings' }, E('summary', null, '查看 ' + task.warnings.length + ' 项处理说明'), ...task.warnings.map((w, i) => E('p', { key: i }, w))) : null,
           task ? E('p', { className: 'dsh-layers-note' }, '已准备 ' + draft.filter(e => e.enabled && e.status === 'complete').length + ' / ' + draft.filter(e => e.enabled).length + ' 个图层；' + draft.filter(e => e.enabled && ['image','background'].includes(e.type) && (e.resolutionPolicy==='enhance' || (!e.sourceRegion && e.extractionMode!=='photo')) && e.status !== 'complete' && e.requestState !== 'returned').length + ' 个图层可能需要生图。文字与原图区块优先本地处理。') : null,

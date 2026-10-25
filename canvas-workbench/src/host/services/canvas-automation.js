@@ -61,6 +61,7 @@ export function createCanvasAutomation(h, overrides = {}) {
     sessionId: job.sessionId, createdAt: job.createdAt, updatedAt: job.updatedAt, startedAt: job.startedAt, finishedAt: job.finishedAt,
     model: job.model, imageEngine: job.imageSettings.engine, imageModel: job.imageSettings.engine === 'dsh-codex' ? job.imageSettings.dshCodexModel : job.imageSettings.apiModel,
     allowGeneration: job.allowGeneration, maxImageRequests: job.maxImageRequests, imageRequestsUsed: job.imageRequestsUsed || 0,
+    reconstruction:job.reconstruction||'preserve',enhanceSource:job.enhanceSource===true,
     completed: job.items.filter(i => i.status === 'completed').length, total: job.items.length,
     needsReview: job.items.filter(i => i.status === 'needs_review').length, failed: job.items.filter(i => i.status === 'failed').length,
     progress: Math.round(job.items.filter(i => ['completed', 'failed', 'needs_review'].includes(i.status)).length / Math.max(1, job.items.length) * 100),
@@ -162,7 +163,7 @@ export function createCanvasAutomation(h, overrides = {}) {
       if (item.layeredTaskId && h.layeredImage) {
         const task = await h.layeredImage.get({ project: job.project, id: item.layeredTaskId });
         total += Number(task.generationAttempts || 0);
-        item.requestState = task.elements.some(e => ['submitted', 'unknown'].includes(e.requestState)) ? 'unknown' : 'returned';
+        item.requestState = (task.elements.some(e => ['submitted', 'unknown'].includes(e.requestState))||['submitted','unknown'].includes(task.sourceHd?.requestState)||Object.values(task.sourceHd?.tiles||{}).some(s=>['submitted','unknown'].includes(s))) ? 'unknown' : 'returned';
       }
     }
     job.imageRequestsUsed = Math.max(job.imageRequestsUsed || 0, total);
@@ -185,13 +186,17 @@ export function createCanvasAutomation(h, overrides = {}) {
         try{await service.get({project:job.project,id:candidate});item.layeredTaskId=candidate;await save(job);}catch{}
       }
       if (!item.layeredTaskId) {
-        const task = await service.analyze({ project: job.project, imageData: 'data:' + (mimeOf(item.sourceCopy) || 'image/png') + ';base64,' + (await readFile(item.sourceCopy)).toString('base64'),
-          name: item.name, ...job.model, flat: job.operation === 'flat_psd', autoRefine: true, editableText: job.editableText, fontPolicy: job.fontPolicy,localOnly:!job.allowGeneration });
+        if(item.hdSource&&item.hdReferenceHash!==item.sourceHash)throw new Error('高清前置任务与当前原图不一致，未采用旧高清素材');
+        const sourceData='data:'+(mimeOf(item.sourceCopy)||'image/png')+';base64,'+(await readFile(item.sourceCopy)).toString('base64');
+        const task = await service.analyze({ project: job.project, imageData: item.hdSource?'data:image/png;base64,'+(await readFile(item.hdSource)).toString('base64'):sourceData,
+          ...(item.hdSource?{referenceImageData:sourceData}:{}),
+          name: item.name, ...job.model, flat: job.operation === 'flat_psd', autoRefine: true, editableText: job.editableText, fontPolicy: job.fontPolicy,localOnly:!job.allowGeneration,
+          reconstruction:job.reconstruction,enhanceSource:job.enhanceSource,maxImageRequests:Math.max(0,job.maxImageRequests-(job.imageRequestsUsed||0)) });
         item.layeredTaskId = task.id; await save(job);
       }
       const request = { project: job.project, id: item.layeredTaskId };
       let task = await waitLayer(service, request, signal);
-      if (task.status === 'failed' && !task.elements.length) {
+      if (['failed','cancelled'].includes(task.status) && !task.elements.length) {
         // Keep ownership of the analysis and all completed tile checkpoints.
         // Resume the same child instead of starting a full duplicate analysis.
         if(item.analysisResumeRevision===job.runRevision)throw new Error(task.error||'图层分析失败，已保存完成的分区');
@@ -283,13 +288,13 @@ export function createCanvasAutomation(h, overrides = {}) {
                 item.status = error.code === 'NEEDS_REVIEW' || /结果未知|请求上限|尚未完成|无法在本地|核对/.test(message(error)) ? 'needs_review' : 'failed';
                 item.error = message(error);
               }
-              await save(job);
+              await reconcileRequests(job);await save(job);
             }
             const done = job.items.filter(i => i.status === 'completed').length;
             job.status = done === job.items.length ? 'completed' : done ? 'partial' : job.items.some(i => i.status === 'needs_review') ? 'needs_review' : 'failed';
             job.message = '已完成 ' + done + '/' + job.items.length + ' 张；' + (job.items.length - done) + ' 张需核对或重试';
           } catch (error) { job.status = controller.signal.aborted ? 'cancelled' : 'failed'; job.message = controller.signal.aborted ? '任务已停止，成功结果及素材已保留' : message(error); }
-          finally { job.finishedAt = Date.now(); await publish(job); workers.delete(id); }
+          finally { await reconcileRequests(job);job.finishedAt = Date.now(); await publish(job); workers.delete(id); }
         })();
         try { await entry.promise; } catch (error) { job.status = 'failed'; job.message = message(error); await save(job).catch(() => {}); workers.delete(id); }
       }
@@ -302,15 +307,23 @@ export function createCanvasAutomation(h, overrides = {}) {
       const work = async () => {
       await initialized; if (disposed) throw new Error('后台服务正在关闭');
       const preview = await plan(body), current = contextFor(body);
+      let preprocessing=null;
+      if(body.preprocessingJobId){
+        preprocessing=await load(body.preprocessingJobId);
+        if(preprocessing.status!=='completed'||preprocessing.operation!=='edit_image')throw new Error('高清前置任务尚未完成或类型不符');
+        for(const file of preview.files){const prior=preprocessing.items.find(i=>i.path===file.path&&i.outputs?.some(o=>o.kind==='image'));
+          if(!prior||prior.sourceHash!==createHash('sha256').update(await readFile(file.path)).digest('hex'))throw new Error('高清前置任务没有匹配的原图：'+file.name);
+        }
+      }
       const model = { ...(body.provider && body.model ? { provider: body.provider, model: body.model, reasoningEffort: body.reasoningEffort } : current.modelSelection || {}) };
       if (body.operation === 'layered_export' && (!model.provider || !model.model)) throw new Error('尚未取得当前聊天模型，请在聊天区选择模型后重试');
       const settings = await (overrides.settings || readImageEngineSettings)();
       const imageSettings = { engine: settings.engine, apiBaseUrl: settings.apiBaseUrl, apiModel: settings.apiModel, dshCodexModel: dshCodexImageModel(h.ctx) };
       const requestId = String(body.requestId || '').slice(0, 120);
       const fingerprint = createHash('sha256').update(JSON.stringify({ sessionId: body.sessionId || '', operation: body.operation,
-        files: preview.files, formats: preview.formats, model, imageSettings, editableText: body.editableText !== false, fontPolicy: body.fontPolicy || 'substitute',
+        files: preview.files, formats: preview.formats, model, imageSettings, editableText: body.editableText !== false, fontPolicy: body.fontPolicy || 'substitute',reconstruction:body.reconstruction||'preserve',enhanceSource:body.enhanceSource===true,
         prompt: body.prompt || '', region: body.region || null, allowGeneration: preview.allowGeneration, maxImageRequests: preview.maxImageRequests,
-        outputParent: body.outputParent || current.cwd, outputProject: body.outputProject || '', projectName: body.projectName || '', openCanvas: body.openCanvas !== false })).digest('hex');
+        outputParent: body.outputParent || current.cwd, outputProject: body.outputProject || '', projectName: body.projectName || '', openCanvas: body.openCanvas !== false,preprocessingJobId:body.preprocessingJobId||'' })).digest('hex');
       const duplicate = [...records.values()].find(j => j.sessionId === String(body.sessionId || '') && (requestId ? j.requestId === requestId : j.fingerprint === fingerprint && Date.now() - j.createdAt < 30000));
       if (duplicate) {
         if (requestId && duplicate.fingerprint !== fingerprint) throw new Error('该request_id已用于另一组参数，请使用原参数取回任务或换一个编号');
@@ -325,10 +338,11 @@ export function createCanvasAutomation(h, overrides = {}) {
       await mutateAutomationCanvas(h, project, () => {});
       const job = { schema: 1, id, requestId, fingerprint, operation: body.operation, sessionId: String(body.sessionId || ''), cwd: current.cwd || parent, project, model,
         imageSettings, formats: preview.formats, allowGeneration: preview.allowGeneration, maxImageRequests: preview.maxImageRequests, imageRequestsUsed: 0,
-        editableText: body.editableText !== false, fontPolicy: body.fontPolicy === 'strict' ? 'strict' : 'substitute',
+        editableText: body.editableText !== false, fontPolicy: body.fontPolicy === 'strict' ? 'strict' : 'substitute',reconstruction:body.reconstruction==='complete'?'complete':'preserve',enhanceSource:body.enhanceSource===true,
         prompt: String(body.prompt || ''), region: body.region || null, retryUnknown: false, openCanvas: body.openCanvas !== false,
         createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', message: '已加入后台队列', ignored: preview.ignored,
-        items: preview.files.map((file, i) => ({ ...file, id: 'item-' + (i + 1), status: 'queued', outputs: [], warnings: [] })) };
+        preprocessingJobId:body.preprocessingJobId||'',
+        items: preview.files.map((file, i) => {const prior=preprocessing?.items.find(item=>item.path===file.path);return { ...file,...(prior?{hdSource:prior.outputs.find(o=>o.kind==='image').path,hdReferenceHash:prior.sourceHash}:{}), id: 'item-' + (i + 1), status: 'queued', outputs: [], warnings: [] };}) };
       records.set(id, job); await save(job); enqueue(job); return present(job);
       };
       const pending = submissionChain.catch(() => {}).then(work);

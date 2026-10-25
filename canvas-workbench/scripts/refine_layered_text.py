@@ -48,7 +48,7 @@ def match_token(e,regions):
     compact=lambda s:re.sub(r'[^a-z0-9\u3400-\u9fff]','',unicodedata.normalize('NFKC',str(s)).lower())
     text=compact(e.get('text',''))
     matches=[r for r in regions if text and compact(r['text'])==text and abs(r['y']-e['y'])<=max(r['height'],e['height'])*.8
-        and r['x']<e['x']+e['width']+100 and r['x']+r['width']>e['x']-100]
+        and min(r['x']+r['width'],e['x']+e['width'])-max(r['x'],e['x'])>=min(r['width'],e['width'])*.35]
     return min(matches,key=lambda r:abs(r['y']-e['y'])*4+abs(r['x']-e['x'])) if matches else None
 
 def refine(spec):
@@ -69,7 +69,7 @@ def refine(spec):
         e['cleanupBounds']={'x':x1,'y':y1,'width':x2-x1,'height':y2-y1}
         if not str(e.get('text','')).strip():
             issues.append({'id':e['id'],'code':'empty-text','severity':'error','message':'文字为空，请核对识别结果'});result.append(e);continue
-        if '\n' in e['text'] or '\r' in e['text'] or abs(float(e.get('rotation',0)))>2:
+        if ('\n' in e['text'] or '\r' in e['text'] or abs(float(e.get('rotation',0)))>2) and not spec.get('complete'):
             e['fontAccepted']=False
             issues.append({'id':e['id'],'code':'unsupported-text-geometry','severity':'review','message':'此文字含复杂行式或旋转，自动保留原字形区域'});result.append(e);continue
         e['sourceSearchPadding']=min(12,max(4,(y2-y1)*.15))
@@ -114,6 +114,22 @@ def refine(spec):
         color=fitted.get('color','#111111');rgb=tuple(int(color[k:k+2],16) for k in (1,3,5))
         if ambiguous or max(abs(rgb[k]-bg[k]) for k in range(3))<40:
             fitted.pop('textFit',None)
+        if spec.get('complete') and not fitted.get('textFit'):
+            # An explicit reconstruction may replace the font; a low original
+            # font-match score is not a reason to bake readable copy into PNG.
+            choices=font_candidates(has_cjk(e['text']))
+            for family,ps,weight,_ in choices:
+                try:
+                    target=fitted.get('cleanupBounds') or e
+                    tw,th=target['width'],target['height'];probe=strict_font(ps,48,e['text']);bb=probe.getbbox(e['text'],anchor='ls')
+                    size=max(8,math.floor(48*min(tw/max(1,bb[2]-bb[0]),th/max(1,bb[3]-bb[1]))));font=strict_font(ps,size,e['text']);bb=font.getbbox(e['text'],anchor='ls')
+                    if bb[2]-bb[0]>tw+2 or bb[3]-bb[1]>th+2:continue
+                    fitted.update(fontFamily=family,fontPostScript=ps,fontWeight=weight,fontSize=size,tracking=0)
+                    fitted['textFit']={'text':e['text'],'fontPostScript':ps,'fontSize':size,'tracking':0,
+                        'originOffsetX':target['x']-e['x']-bb[0],'baselineOffset':target['y']-e['y']-bb[1]+max(0,(th-(bb[3]-bb[1]))/2),'advance':font.getlength(e['text'])}
+                    fitted['styleNote']='完整重建使用可编辑替代字体；内容与位置仍须对照原图核验'
+                    issues.append({'id':e['id'],'code':'font-layout-substitution','severity':'warning','message':fitted['styleNote']});break
+                except (ValueError,OSError):continue
         try:
             strict_font(fitted['fontPostScript'],float(fitted['fontSize']),fitted['text'])
             fitted['fontAvailable']=True
@@ -122,7 +138,7 @@ def refine(spec):
             issues.append({'id':e['id'],'code':'font-unavailable','severity':'error','message':str(ex)[:300]})
         if not fitted.get('textFit'):
             issues.append({'id':e['id'],'code':'font-fit-unresolved','severity':'review','message':'未能可靠校准字形与位置，自动保留原字形区域'})
-        elif float(fitted.get('styleConfidence',0))<.55 and not token:
+        elif float(fitted.get('styleConfidence',0))<.55 and not token and not spec.get('complete'):
             issues.append({'id':e['id'],'code':'font-fit-unresolved','severity':'review','message':'字形匹配分偏低，自动保留原字形区域','score':fitted.get('styleConfidence',0)})
         elif float(fitted.get('styleConfidence',0))<.9:
             issues.append({'id':e['id'],'code':'substitute-font','severity':'warning','message':'使用已安装的近似字体；不代表找回原字体','score':fitted.get('styleConfidence',0)})

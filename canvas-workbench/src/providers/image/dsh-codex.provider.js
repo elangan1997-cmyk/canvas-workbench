@@ -72,7 +72,15 @@ async function loadCodexModule() {
   throw new Error('dsh-codex 模块加载失败，请重启 DSH 后重试');
 }
 
-async function generateWithDshCodex({ ctx, image, prompt, signal, model, background }) {
+export function codexImageRequestOptions(settings={}){
+  const size=String(settings.dshCodexSize||'');
+  if(!size)return {};
+  const m=/^(\d+)x(\d+)$/.exec(size),w=Number(m?.[1]),h=Number(m?.[2]);
+  if(!m||Math.min(w,h)<512||Math.max(w,h)>4096||w%16||h%16||w*h>20_000_000)throw new Error('图像尺寸应为512至4096之间的16倍数');
+  return {size,quality:'high'};
+}
+
+async function generateWithDshCodex({ ctx, image, prompt, signal, model, background, settings }) {
   const module = await loadCodexModule();
   const service = typeof ctx.get === 'function' ? ctx.get('openAICodex') : null;
   const credentials = service && service.credentials
@@ -89,11 +97,12 @@ async function generateWithDshCodex({ ctx, image, prompt, signal, model, backgro
       : undefined;
   // Older dsh-codex clients hard-code background:auto. The layered workflow
   // needs a real Alpha channel, so pass its explicit option to image requests.
-  const requestFetch = ['transparent', 'opaque'].includes(background) ? (input, init) => {
+  const options=codexImageRequestOptions(settings);
+  const requestFetch = ['transparent', 'opaque'].includes(background)||options.size ? (input, init) => {
     const imageUrls = [module.OPENAI_CODEX_IMAGE_EDITS_URL, module.OPENAI_CODEX_IMAGE_GENERATIONS_URL];
     if (imageUrls.includes(String(input)) && typeof init?.body === 'string') {
       const body = JSON.parse(init.body);
-      return (proxyFetch || globalThis.fetch)(input, { ...init, body: JSON.stringify({ ...body, background }) });
+      return (proxyFetch || globalThis.fetch)(input, { ...init, body: JSON.stringify({ ...body, ...options,...(['transparent','opaque'].includes(background)?{background}:{}) }) });
     }
     return (proxyFetch || globalThis.fetch)(input, init);
   } : proxyFetch;
@@ -109,7 +118,7 @@ export const dshCodexProvider = {
   async generate({ ctx, images, prompt, signal, settings = {}, sizeOnEdit, background }) {
     // 比例提示词由 generateChatImage 在 Provider 分派前统一注入，API 与
     // dsh-codex 得到完全相同的构图约束；画布局部编辑仍保持原图比例。
-    return generateWithDshCodex({ ctx, image: images, prompt, signal, model: settings.dshCodexModel || dshCodexImageModel(ctx), background });
+    return generateWithDshCodex({ ctx, image: images, prompt, signal, model: settings.dshCodexModel || dshCodexImageModel(ctx), background,settings });
   },
   async health(ctx) {
     let installed = false;

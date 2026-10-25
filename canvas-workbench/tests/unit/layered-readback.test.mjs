@@ -11,6 +11,13 @@ test('readback accepts multiple complete JSON blocks without dropping issues, wh
  assert.throws(()=>parseReadbackResult('{"other":[]}'),/问题数组/);
 });
 
+test('complete readback retains spatial evidence for text missing from the IR, including multiple missing rows',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'readback-missing-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const ctx={attachments:{saveImage:async()=>({id:'crop'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:JSON.stringify({issues:[{id:'missing',kind:'missing-text',text:'奶茶',x:10,y:20,width:30,height:10},{id:'missing',kind:'missing-text',text:'16/M',x:50,y:20,width:25,height:10}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const result=await inspectLayerReadback(ctx,{directory:root,source:'source',width:100,height:100,reconstruction:'complete',analysisModel:{provider:'ds',model:'current'},elements:[]},'preview',new AbortController().signal,{pixel:async spec=>writeFile(spec.output,spec.input)});
+ assert.equal(result.complete,true);assert.equal(result.issues.length,2);assert.equal(result.issues[0].kind,'missing-text');assert.equal(result.issues[0].x,10);assert.notEqual(result.issues[0].id,result.issues[1].id);
+});
+
 test('dense readback isolates token limits and caches unchanged verification regions',async t=>{
  const root=await mkdtemp(join(tmpdir(),'readback-'));t.after(()=>rm(root,{recursive:true,force:true}));let fail=true,calls=0;const budgets=[];
  const ctx={attachments:{saveImage:async({data})=>({...JSON.parse(Buffer.from(data).toString()),id:'crop'})},llm:{prepareCall:async spec=>{budgets.push(spec.maxTokens);return {config:{},stream:async function*(request){calls++;const r=request.messages[0].content[1].attachment.region;if(fail&&r.x===0&&r.y===0){if(r.width<900){yield{type:'finish',reason:{kind:'provider-error'}};return;}yield{type:'text-delta',index:0,text:'{"issues":['};yield{type:'finish',reason:{kind:'max-tokens'}};}else{yield{type:'text-delta',index:0,text:'{"issues":[]}'};yield{type:'finish',reason:{kind:'stop'}};}}};}}};

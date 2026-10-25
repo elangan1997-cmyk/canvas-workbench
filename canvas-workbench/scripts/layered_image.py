@@ -327,8 +327,73 @@ def assemble(spec):
     return {'width': width, 'height': height, 'layers': layers, 'composite': str(composite), 'preview': str(root / 'preview.png')}
 
 
+def exclude_owned_regions(im,e,elements):
+    alpha=im.getchannel('A');draw=ImageDraw.Draw(alpha)
+    for other in elements:
+        if not other.get('enabled',True) or other['id']==e['id'] or other['type']=='background':continue
+        x,y,w,h=[int(other[k]) for k in ('x','y','width','height')]
+        if w*h>=e['width']*e['height']*.9:continue
+        if x>=e['x']-2 and y>=e['y']-2 and x+w<=e['x']+e['width']+2 and y+h<=e['y']+e['height']+2:
+            draw.rectangle((max(0,x-2),max(0,y-2),min(im.width,x+w+1),min(im.height,y+h+1)),fill=0)
+    im.putalpha(alpha)
+
+
 def run(spec):
     op = spec.get('operation', 'inspect')
+    if op == 'text-presence':
+        from infer_text_style import pixel_foreground
+        im=load(spec['input']);e=spec['element'];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
+        fg=pixel_foreground(im,(x,y,min(im.width,x+w),min(im.height,y+h)),e.get('color'),ignore_leaders=True)
+        count=sum(fg['mask'].histogram()[1:]) if fg else 0
+        return {'hasVisibleInk':count>=8,'inkPixels':count}
+    if op == 'source-glyph-cutout':
+        from infer_text_style import pixel_foreground
+        im=load(spec['input']);e=spec['element'];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
+        box=(max(0,x-2),max(0,y-2),min(im.width,x+w+2),min(im.height,y+h+2));fg=pixel_foreground(im,box,None,ignore_leaders=False)
+        if not fg:raise ValueError('未能提取可靠的原始字形，未使用不透明文字补片')
+        mask=fg['mask'].resize((max(1,round(fg['mask'].width/fg['sx'])),max(1,round(fg['mask'].height/fg['sy']))),Image.Resampling.LANCZOS)
+        left,top=round(fg['left']),round(fg['top']);tile=im.crop((left,top,left+mask.width,top+mask.height));tile.putalpha(mask)
+        out=Image.new('RGBA',im.size);out.paste(tile,(left,top));save(out,spec['output']);return info(out)
+    if op == 'place-cutout':
+        im=load(spec['input']);e=spec['element'];w,h=int(e['width']),int(e['height'])
+        if im.size!=(w,h):raise ValueError('本地抠图改变了素材尺寸，未强行拉伸')
+        if not info(im)['hasTransparency']:raise ValueError('本地抠图未产生有效透明区域')
+        out=Image.new('RGBA',(int(spec['width']),int(spec['height'])));out.paste(im,(int(e['x']),int(e['y'])));exclude_owned_regions(out,e,spec.get('elements',[]));save(out,spec['output']);return info(out)
+    if op == 'graphic-cutout':
+        source=load(spec['input']);e=spec['element'];colors=e.get('foregroundColors',[])
+        if not colors:return {'eligible':False}
+        rgb=[tuple(int(c[i:i+2],16) for i in (1,3,5)) for c in colors];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
+        tile=source.crop((x,y,x+w,y+h));mask=Image.new('L',(w,h));mp=mask.load();p=tile.load()
+        for yy in range(h):
+            for xx in range(w):
+                distance=min(max(abs(p[xx,yy][k]-c[k]) for k in range(3)) for c in rgb)
+                mp[xx,yy]=round(255*max(0,min(1,(80-distance)/45)))
+        coverage=sum(mask.histogram()[1:])/(w*h)
+        if coverage<.002 or coverage>.72:return {'eligible':False}
+        tile.putalpha(mask);out=Image.new('RGBA',source.size);out.paste(tile,(x,y));exclude_owned_regions(out,e,spec.get('elements',[]));save(out,spec['output']);return {'eligible':True,'engine':'hd-graphic-color-matte',**info(out)}
+    if op == 'stitch-hd-tiles':
+        source=load(spec['input']);tiles=spec['tiles'];prepared=[]
+        for t in tiles:
+            image=load(t['file']);r=t['region']
+            if abs(math.log((image.width/image.height)/(r['width']/r['height'])))>.025:raise ValueError('高清分区返回改变构图比例：'+t['id'])
+            prepared.append((t,image))
+        scale=min(min(im.width/t['region']['width'],im.height/t['region']['height']) for t,im in prepared)
+        if scale<1.2:raise ValueError('高清分区未达到原图1.2倍实际像素，不作为高清成功')
+        w,h=round(source.width*scale),round(source.height*scale)
+        if w*h>MAX_PIXELS:raise ValueError('高清拼接超过2000万像素')
+        result=Image.new('RGBA',(w,h))
+        for t,im in prepared:
+            r,c=t['region'],t['core'];x1,y1=round(c['x']*scale),round(c['y']*scale);x2,y2=round((c['x']+c['width'])*scale),round((c['y']+c['height'])*scale)
+            box=((c['x']-r['x'])*im.width/r['width'],(c['y']-r['y'])*im.height/r['height'],(c['x']+c['width']-r['x'])*im.width/r['width'],(c['y']+c['height']-r['y'])*im.height/r['height'])
+            part=im.transform((x2-x1,y2-y1),Image.Transform.EXTENT,box,resample=Image.Resampling.BICUBIC);result.paste(part,(x1,y1))
+        save(result,spec['output']);return info(result)
+    if op == 'reference-canvas':
+        im=load(spec['input']);w,h=int(spec['width']),int(spec['height'])
+        if w*h>MAX_PIXELS or min(w,h)<1:raise ValueError('参考画布尺寸无效')
+        if abs(math.log((im.width/im.height)/(w/h)))>.025:raise ValueError('高清返回改变了原图长宽比例，未采用')
+        # Only a comparison reference is resampled; generated master and
+        # original input remain separate and unchanged on disk.
+        im=im.resize((w,h),Image.Resampling.LANCZOS);save(im,spec['output']);return info(im)
     if op == 'inspect':
         im = load(spec['input'])
         if spec.get('output'):
@@ -379,6 +444,8 @@ def run(spec):
         crop=im.crop((x,y,x+w,y+h));draw=ImageDraw.Draw(crop)
         for e in spec.get('exclude',[]):
             if e.get('enabled',True):draw.rectangle((e['x']-x,e['y']-y,e['x']+e['width']-x-1,e['y']+e['height']-y-1),fill='white')
+        target=spec.get('highlight')
+        if target:draw.rectangle((max(0,target['x']-x-3),max(0,target['y']-y-3),min(w-1,target['x']+target['width']-x+2),min(h-1,target['y']+target['height']-y+2)),outline='#ff00aa',width=1)
         save(crop,spec['output']);return info(crop)
     if op == 'source-layout-plate':
         from layered_source_plate import source_plate

@@ -53,6 +53,7 @@ function visionBlocks(value, width, height, coordinateSpace = 'normalized') {
       fontWeight: weight,
       color: /^#[0-9a-f]{6}$/i.test(String(item.color || '')) ? String(item.color).toUpperCase() : '#111111',
       textAlign: aligns.has(item.textAlign) ? item.textAlign : 'left',
+      ...(['handwriting','display'].includes(item.fontFamily)?{typographyKind:item.fontFamily}:{}),
       rotation: clamp(item.rotation, -180, 180), confidence: clamp(item.confidence, 0, 100),
       backgroundHint: String(item.backgroundHint || '').trim().slice(0, 500), enabled: true
     };
@@ -104,6 +105,7 @@ async function analyzeTextWithCurrentModel(ctx, uploaded, body, simplified, sign
   let system = pixels ? TEXT_VISION_SYSTEM.replace('x/y/width/height 是 0-1000 的整图归一化坐标；fontSize 是相对整图高度 0-1000 的估算值；',
     'x/y/width/height/fontSize 均为当前裁图像素坐标，禁止归一化；') : TEXT_VISION_SYSTEM;
   if(body.compactText)system+='\n本轮为密集菜单分区，只返回简洁JSON {"blocks":[{"text":"原文","x":0,"y":0,"width":100,"height":20,"fontSize":20,"color":"#112233"}]}。不用输出字体解释、backgroundHint、erasePrompt。菜名、价格、容量、备注与英文逐项完整输出，菜名与右侧价格是不同对象，不合并相隔很远的列。商品包装/完整摄影海报内部的装饰文字不拆，普通菜单文字不能漏。';
+  if(body.reconstruction==='complete')system+='\n当前为完整拆分：框内所有普通文字包括主视觉旁的细字、角落小字、英文、价格和容量都必须识别，不得以宣传图为由跳过。包装内部文字除外；商品外接矩形内部的排版说明仍要识别。每个价格与其M/L容量可以同一对象，和菜名分开；同一个字只输出一次，边界紧贴真实字形。只有明显书法/艺术字/特殊字形才额外填fontFamily:"handwriting"或"display"，它们将独立提取原字形；普通黑体/宋体正文与常规大标题不能当艺术字，仍为可编辑文字。';
   for await (const chunk of prepared.stream({ ...prepared.config, messages: [message], system, signal, purpose: 'canvas-text-analysis' })) assembler.push(chunk);
   const finish = assembler.finish;
   if (finish.kind !== 'stop') throw new Error('当前聊天模型识别未正常完成：' + finish.kind);

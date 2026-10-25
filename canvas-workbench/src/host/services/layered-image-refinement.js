@@ -157,7 +157,7 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
   // source pixels instead of buying model reconstructions of tiny line images.
   const decorations = elements.filter(e => e.type === 'image' && (e.role === 'decoration' || (
     /分割线|短横|引导点|separator|divider|leader/i.test(e.name + ' ' + e.description) && e.width * e.height < task.width * task.height * .01 && Math.max(e.width, e.height) / Math.min(e.width, e.height) > 3)));
-  if (decorations.length) {
+  if (decorations.length&&task.reconstruction!=='complete') {
     const ids = new Set(decorations.map(e => e.id)); elements = elements.filter(e => !ids.has(e.id));
     elements = elements.map(e => ({ ...e, mergedIds: (e.mergedIds || []).filter(id => !ids.has(id)) }));
     const background = elements.find(e => e.type === 'background');
@@ -165,7 +165,7 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
     warnings.push(decorations.length + ' 个细线或小装饰已合并到背景，保留原图像素');
   }
   if (elements.some(e => e.type === 'text')) {
-    const refined = await runLayerRefinementScript(h, { operation: 'refine', input: task.source, elements,
+    const refined = await runLayerRefinementScript(h, { operation: 'refine', input: task.analysisSource||task.source, elements,complete:task.reconstruction==='complete',
       ...(task.analysisStrategy==='dense'?{ocrLines}: {}) }, signal);
     elements = refined.elements; issues.push(...(refined.issues || [])); warnings.push(...(refined.warnings || []));
     for (const e of elements) if (e.type === 'text' && e.enabled) {
@@ -178,7 +178,7 @@ export async function calibrateLayeredAnalysis(h, task, options, signal) {
         } else delete e.sourceTextFallback;
     }
   }
-  if(task.analysisStrategy==='dense'){
+  if(task.analysisStrategy==='dense'&&task.reconstruction!=='complete'){
     const count=suppressOverlappingOcrRows(elements);
     if(count)warnings.push(count+' 个OCR补漏整行不再覆盖已校准的独立文字；未拆出的原字仍保留在原背景');
   }

@@ -5,6 +5,7 @@ import { analyzeLayeredImagePart, normalizeLayerElements } from './layered-image
 import { analyzeTextWithCurrentModel, visionBlocks } from './text-analysis.js';
 import { mergeTextCandidates, supplementTextCoverage } from './text-coverage.js';
 import { denseSourceStructure } from './layered-source-policy.js';
+import {completeLayerPlan} from './layered-complete-policy.js';
 
 const readJson=async path=>{try{return JSON.parse(await readFile(path,'utf8'));}catch{return null;}};
 const writeJson=async(path,value)=>{await writeFile(path+'.tmp',JSON.stringify(value,null,2));await rename(path+'.tmp',path);};
@@ -21,14 +22,15 @@ export function layerAnalysisRegions(width,height){
  * internal vision context; the deliverable always uses one original artboard. */
 export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,signal,runtime){
   const directory=join(runtime.directory,'analysis');await mkdir(directory,{recursive:true});
-  const signature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:3,provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
+  const signature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:5,reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
+  const legacyLayoutSignature=createHash('sha256').update(uploaded.bytes).update(JSON.stringify({version:4,reconstruction:body.reconstruction||'preserve',provider:body.provider,model:body.model,effort:body.reasoningEffort||'',localOnly:body.localOnly===true})).digest('hex');
   const stored=await readJson(join(directory,'manifest.json'));
   const manifest=stored?.signature===signature?stored:{signature,calls:0,completed:[],failures:[]};
   const initialCalls=manifest.calls;
   let progressWrites=Promise.resolve();
   const progress=(message,extra={})=>{Object.assign(manifest,extra);const snapshot=JSON.parse(JSON.stringify(manifest));
     progressWrites=progressWrites.catch(()=>{}).then(async()=>{await writeJson(join(directory,'manifest.json'),snapshot);await runtime.progress?.({message,strategy:snapshot.strategy||'routing',calls:snapshot.calls,completedTiles:snapshot.completed.length,...extra});});return progressWrites;};
-  const checkpoint=async(name)=>{const value=await readJson(join(directory,name+'.json'));return value?.signature===signature?value.result:null;};
+  const checkpoint=async(name)=>{const value=await readJson(join(directory,name+'.json'));return value?.signature===signature||(['layout','image-regions'].includes(name)&&value?.signature===legacyLayoutSignature)?value.result:null;};
   const retain=async(name,result)=>writeJson(join(directory,name+'.json'),{signature,result});
   let ocr=await readJson(join(runtime.directory,'local-ocr.json'));
   if(!ocr)try{ocr=await runtime.ocr(signal);await writeJson(join(runtime.directory,'local-ocr.json'),ocr);}catch(error){signal.throwIfAborted();ocr={blocks:[],warning:String(error.message||error)};}
@@ -51,10 +53,10 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
   if(whole)return{...whole,analysisStrategy:'whole',analysisCalls:manifest.calls};
   manifest.strategy='dense';
   const layout=await part(true);
-  let sourceLayout=denseSourceStructure(layout.elements);
+  let sourceLayout=body.reconstruction==='complete'?{elements:completeLayerPlan(layout.elements),warnings:[]}:denseSourceStructure(layout.elements);
   const regionPlan=await checkpoint('image-regions');
   if(regionPlan)sourceLayout={...sourceLayout,elements:regionPlan.elements,warnings:[...sourceLayout.warnings,...regionPlan.warnings]};
-  else if(runtime.refineImages){const refined=await runtime.refineImages(sourceLayout.elements,signal);await retain('image-regions',refined);sourceLayout={...sourceLayout,elements:refined.elements,warnings:[...sourceLayout.warnings,...refined.warnings]};}
+  else if(runtime.refineImages){await progress('正在核对独立主体的完整边界，保留已生成的高清素材…');const refined=await runtime.refineImages(sourceLayout.elements,signal);await retain('image-regions',refined);sourceLayout={...sourceLayout,elements:refined.elements,warnings:[...sourceLayout.warnings,...refined.warnings]};}
   const images=sourceLayout.elements.filter(e=>e.type==='image'&&e.enabled!==false);
   const regions=layerAnalysisRegions(width,height),blocks=[],warnings=[...(layout.warnings||[])];let cursor=0;
   const tile=async region=>{
@@ -64,7 +66,7 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
     if(manifest.calls-initialCalls>=48)throw new Error('本轮分析请求达到48次上限，已保存全部完成分区，可继续任务');
     const pad=64,x=Math.max(0,region.x-pad),y=Math.max(0,region.y-pad);
     const crop={x,y,width:Math.min(width,region.x+region.width+pad)-x,height:Math.min(height,region.y+region.height+pad)-y};
-    const path=join(directory,region.id+'.png');await runtime.crop({...crop,output:path,exclude:images},signal);
+    const path=join(directory,region.id+'.png');await runtime.crop({...crop,output:path,exclude:body.reconstruction==='complete'?[]:images},signal);
     const bytes=await readFile(path);let failure;
     for(let attempt=0;attempt<2;attempt++){
       try{
@@ -73,7 +75,7 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
           {...body,compactText:true,coordinateSpace:'pixels',name:'图层文字 '+region.id,crops:[{x:0,y:0,width:crop.width,height:crop.height}]},false,AbortSignal.any([signal,AbortSignal.timeout(180000)]));
         const mapped=visionBlocks(result.value,crop.width,crop.height,'pixels').map(b=>({...b,x:b.x+x,y:b.y+y})).filter(b=>{
           const cx=b.x+b.width/2,cy=b.y+b.height/2;
-          return cx>=region.x&&cx<region.x+region.width&&cy>=region.y&&cy<region.y+region.height&&!images.some(e=>contains(e,b));
+          return cx>=region.x&&cx<region.x+region.width&&cy>=region.y&&cy<region.y+region.height&&(body.reconstruction==='complete'||!images.some(e=>contains(e,b)));
         });
         await retain(region.id,mapped);blocks.push(...mapped);manifest.completed.push(region.id);await progress('文字分区已保存 '+manifest.completed.length+' 个');return;
       }catch(error){signal.throwIfAborted();failure=error;if(/max-tokens|JSON|json|Unexpected|unterminated/i.test(error.message||''))break;}
@@ -90,7 +92,7 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
   const errors=[];await Promise.all(Array.from({length:Math.min(2,regions.length)},async()=>{while(cursor<regions.length){const region=regions[cursor++];try{await tile(region);}catch(error){errors.push(error);}}}));
   if(errors.length){signal.throwIfAborted();throw errors[0];}
   const merged=mergeTextCandidates(blocks);
-  const coverage=supplementTextCoverage(merged,(ocr.blocks||[]).filter(b=>b.confidence>=85&&!images.some(e=>contains(e,b))),[{x:0,y:0,width,height}]);
+  const coverage=supplementTextCoverage(merged,(ocr.blocks||[]).filter(b=>b.confidence>=85&&(body.reconstruction==='complete'||!images.some(e=>contains(e,b)))),[{x:0,y:0,width,height}]);
   // OCR-only omissions remain original pixel regions, not invented editable
   // copy. The selected vision model remains the source of native text content.
   const text=coverage.blocks.filter(b=>b.enabled!==false).map((b,i)=>({...b,id:'text-'+String(i+1).padStart(3,'0'),type:'text',name:'文字 '+String(i+1).padStart(3,'0')+'：'+b.text.slice(0,20),
@@ -101,9 +103,9 @@ export async function analyzeLayeredDocument(ctx,uploaded,body,width,height,sign
   // Dense layouts contain small product thumbnails and artwork panels whose
   // original pixels must survive. Rebuilding each thumbnail changes identity
   // and wastes image quota; retain these bounded regions with their backdrop.
-  const resolved=denseSourceStructure([...sourceLayout.elements,...text]);warnings.push(...sourceLayout.warnings);
+  const resolved=body.reconstruction==='complete'?{elements:completeLayerPlan([...sourceLayout.elements,...text])}:denseSourceStructure([...sourceLayout.elements,...text]);warnings.push(...sourceLayout.warnings);
   const elements=normalizeLayerElements(resolved.elements,width,height);
-  warnings.push('密集版面的照片、插画与装饰主视觉保留原图区块及其局部底色，不重新生成商品；补全不可见背景仍可能使用图像模型');
+  warnings.push(body.reconstruction==='complete'?'完整重建会分别处理普通文字、独立装饰字形、透明主体、形状和背景；原图是内容核对依据，高清图不能替代事实。':'密集版面的照片、插画与装饰主视觉保留原图区块及其局部底色，不重新生成商品；补全不可见背景仍可能使用图像模型');
   await progress('结构及全部文字分区分析完成',{textCount:text.length});
   return{elements,warnings,semanticPolicyVersion:2,analysisStrategy:'dense',analysisAttempts:manifest.calls,analysisCalls:manifest.calls,
     analysisTiles:manifest.completed.length,imageGeometryVersion:runtime.refineImages?2:0,rawAnalysis:diagnostics};

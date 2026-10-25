@@ -34,6 +34,14 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
       ...(['product','photo-panel','screenshot','graphic'].includes(b.visualKind) ? { visualKind:b.visualKind } : {}),
       ...(b.classificationReason ? { classificationReason:String(b.classificationReason).slice(0,700) } : {}),
       ...(b.framingEvidence ? { framingEvidence:String(b.framingEvidence).slice(0,500) } : {}),
+      ...(Array.isArray(b.foregroundColors)?{foregroundColors:b.foregroundColors.filter(c=>/^#[0-9a-f]{6}$/i.test(c)).slice(0,5)}:{}),
+      ...(b.contentVerified===true?{contentVerified:true}:{}),
+      ...(b.contentUncertain===true?{contentUncertain:true}:{}),
+      ...(b.useOriginalRegion===true?{useOriginalRegion:true}:{}),
+      ...(b.embeddedInMaterial===true?{embeddedInMaterial:true}:{}),
+      ...(['handwriting','display','unreadable'].includes(b.typographyKind)?{typographyKind:b.typographyKind}:{}),
+      ...(b.unresolvedAsGlyph===true?{unresolvedAsGlyph:true,sourceGlyphReason:String(b.sourceGlyphReason||'原文未确认').slice(0,500)}:{}),
+      ...(b.duplicateOf?{duplicateOf:String(b.duplicateOf).slice(0,64)}:{}),
       ...(b.shadowMode === 'preserve' ? { shadowMode:'preserve' } : {}),
       ...(b.sourceRegion===true&&!(b.modeLocked&&b.extractionMode==='cutout')?{sourceRegion:true}:{}),
       ...(b.resolutionPolicy==='enhance'?{resolutionPolicy:'enhance',qualityReason:String(b.qualityReason||'').slice(0,500)}:{}),
@@ -74,7 +82,7 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
   if (!background) items.unshift({ id: ids.has('background') ? 'background-base' : 'background', type: 'background', name: '完整背景',
     description: '移除所选前景及文字，补全其背后的背景', x: 0, y: 0, width, height, z: -10000, enabled: true, status: 'pending' });
   if (items.length > MAX_LAYER_ELEMENTS) throw new Error('包含背景时最多支持 '+MAX_LAYER_ELEMENTS+' 个图层');
-  if(items.filter(e=>['image','background'].includes(e.type)&&e.enabled).length>MAX_LAYER_IMAGES)throw new Error('独立图像与背景最多支持 '+MAX_LAYER_IMAGES+' 层；文字和形状不计入图像上限');
+  if(items.filter(e=>['image','background'].includes(e.type)&&e.enabled&&!e.typographyKind).length>MAX_LAYER_IMAGES)throw new Error('独立图像与背景最多支持 '+MAX_LAYER_IMAGES+' 层；文字、独立字形和形状不计入图像上限');
   for (const item of items) for (const id of item.mergedIds || []) {
     const child = items.find(e => e.id === id);
     if (id === item.id || !child || child.type !== 'image' || item.type !== 'image') throw new Error('合并图层的关联无效，请重新核对清单');
@@ -114,9 +122,10 @@ export async function analyzeLayeredImagePart(ctx, uploaded, body, width, height
     let instruction = attempt ? system + '\n上一次结构或尺寸有错误：' + String(lastError?.message || lastError).slice(0, 1000)
       + '。重新检查原图，输出完整合法JSON；每个前景必须包含数值x,y,width,height，width和height均大于0。不得用缺失字段冒充整幅画布。' : system;
     if(body.structureOnly)instruction+='\n本轮只规划大结构：只输出image/shape/background，最多24项；普通文字和价格会在下一阶段逐区识别，本轮严禁抄录它们。独立菜单小杯、插图与整块宣传海报可作为image；description每项不超过100字，分类依据不超过60字。把带装饰文字的完整宣传主视觉保留为图像，但不要把整张菜单作为一个image。';
+    if(body.reconstruction==='complete')instruction+='\n本任务是完整重建，覆盖上面的保守合并规则：严禁把含普通文字、商品和背景的宣传主视觉合并成image。大幅摄影中的产品/水果/手部组合提成透明主体，普通标题、正文、价格逐行独立；特殊书法/装饰字可作为单独透明graphic，必须说明准确文字且紧贴字形，不含周围商品/背景，并填foregroundColors列出字形/标识的实际前景色HEX（不含底色）。每个杯子独立；印在杯上的包装字随杯保留。全部线条、标签底框和色块独立shape；复杂渐变是背景，不得覆盖或合并其内部元素。背景描述仅包含底色/渐变/台面/环境，不含任何商品、文字或独立形状。只输出真实可见元素，尽量拆全。';
     if(body.localOnly)instruction+='\n本任务禁止生图，必须保留原始照片、插图、宣传主视觉的实际像素。识别准确矩形范围供本地裁切，商品组合仍记录product但描述需含完整可见背景和阴影；不要提出重绘、补造商品或重新设计。普通菜单文字仍独立。';
     const prepared = await ctx.llm.prepareCall({ provider, model, maxTokens:body.structureOnly?16000:attempt?24000:14000,
-      ...(body.reasoningEffort ? { reasoningEffort: String(body.reasoningEffort) } : {}) },signal);
+      ...(body.structureOnly?{reasoningEffort:'low'}:body.reasoningEffort ? { reasoningEffort: String(body.reasoningEffort) } : {}) },signal);
     const assembler = new BlockAssembler();
     for await (const chunk of prepared.stream({ ...prepared.config, messages: [message], system: instruction, signal, purpose: 'canvas-layer-analysis' })) assembler.push(chunk);
     const text = assembler.blocks().filter(b => b.type === 'text').map(b => b.text).join(''); attempts.push(text.slice(0, 100000));
