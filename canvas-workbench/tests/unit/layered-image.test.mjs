@@ -522,3 +522,17 @@ test('split native text parts own distinct PNG files instead of overwriting the 
  const service=createLayeredImageService(f.h,f.overrides);await service.run({id:created.id,maxImageRequests:1});await service.settled({id:created.id});const saved=JSON.parse(await readFile(file,'utf8')),parts=saved.elements.filter(e=>e.textGroupId==='title');
  assert.equal(parts.length,2);assert.equal(new Set(parts.map(e=>e.contentFile)).size,2);assert.ok(parts.every(e=>e.contentFile.includes(e.id+'-')));assert.ok(parts.every(e=>e.contentFile!==saved.elements.find(e=>e.id==='title').contentFile));
 });
+
+test('explicit practical delivery keeps a tiny failed decoration as an original group without claiming strict verification or buying images',async t=>{
+ const f=await fixture(t);await f.service.run(f.body);const prior=await f.service.settled(f.body);
+ const file=join(prior.outputDirectory,'task.json'),record=JSON.parse(await readFile(file,'utf8'));
+ Object.assign(record,{width:100,height:100,reconstruction:'complete',analysisStrategy:'dense',assemblyCheck:{verified:false},completeness:null});
+ Object.assign(record.elements.find(e=>e.id==='object'),{type:'shape',name:'微小装饰',x:1,y:1,width:2,height:2,fill:'#112233'});await writeFile(file,JSON.stringify(record));
+ const base=f.overrides.pixel;f.overrides.pixel=async spec=>spec.operation==='shape-evidence'?{nativeEligible:false}:spec.operation==='graphic-cutout'?{eligible:false}:base(spec);
+ f.overrides.readback=async()=>{throw Error('practical mode must not buy another whole-menu review');};
+ const service=createLayeredImageService(f.h,f.overrides);await service.run({...f.body,completionPolicy:'practical',localOnly:true,autoExportFormat:'psd'});const result=await service.settled(f.body);
+ assert.equal(result.status,'ready',result.error);assert.equal(f.generated.length,2,'existing background must be reused');
+ assert.equal(result.completeness.practicalAccepted,true);assert.equal(result.completeness.complete,false);assert.equal(result.assemblyCheck.verified,false);
+ const grouped=result.elements.find(e=>e.id==='object');assert.equal(grouped.sourceFallbackGroup,true);assert.equal(grouped.extractionMode,'photo');assert.equal(result.completeness.fallbackGroups[0].id,'object');
+ const psd=readPsd(await readFile(result.exports[0].path),{skipLayerImageData:true,skipCompositeImageData:true});assert.equal(psd.children.length,2);
+});

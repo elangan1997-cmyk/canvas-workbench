@@ -9,6 +9,7 @@ export function completeLayerPlan(elements){
   }
   if(e.sourceParentId){delete e.sourceParentId;e.enabled=true;}
   if(e.type==='image'){
+   if(e.sourceFallbackGroup){e.extractionMode='photo';e.sourceRegion=true;e.modeLocked=true;return e;}
    if(['photo-panel','screenshot'].includes(e.visualKind)){
     e.extractionMode='photo';e.sourceRegion=true;e.modeLocked=true;
    }else{
@@ -71,4 +72,11 @@ export function deduplicateCompleteText(elements){
   let rest=compact(e.text);for(const p of parts.sort((a,b)=>b.text.length-a.text.length))rest=rest.replace(compact(p.text),'');
   if(parts.length&&!rest){e.enabled=false;e.duplicateOf=parts[0].id;delete e.retainedInBackground;}
  }
+}
+
+
+/** Practical delivery is an explicit user choice, not a measured quality score.
+ * Strict completion remains false; actual local assets must still be prepared. */
+export function layeredDeliveryAccepted(task){
+ return task.completeness?.complete===true&&task.assemblyCheck?.verified===true||task.completionPolicy==='practical'&&task.completeness?.practicalAccepted===true;
 }

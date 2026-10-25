@@ -80,9 +80,9 @@ test('physical-print classification accepts a single flat model decision without
 
 
 test('a complete empty model issue array preserves visible source ink as an honest glyph instead of failing the whole document',async t=>{
- for(const ink of [true,false]){
+ for(const [ink,response] of [[true,'{"issues":[],"uncertain":true}'],[false,'{"issues":[],"uncertain":true}'],[true,'{"issues":[{"id":"text-1","text":"","reason":"原图严重模糊，不能编造"}]}']]){
  const dir=await mkdtemp(join(tmpdir(),'empty-text-'));t.after(()=>rm(dir,{recursive:true,force:true}));
- const ctx={attachments:{saveImage:async()=>({id:'source'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:'{"issues":[],"uncertain":true}'};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const ctx={attachments:{saveImage:async()=>({id:'source'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){yield{type:'text-delta',index:0,text:response};yield{type:'finish',reason:{kind:'stop'}};}})}};
  const task={directory:dir,source:'original',width:100,height:100,analysisModel:{provider:'ds',model:'current'},elements:[{id:'text-1',type:'text',enabled:true,x:20,y:20,width:30,height:15,text:'旧识别'}]};
  const result=await recoverCompleteText(ctx,task,['text-1'],async spec=>spec.output?writeFile(spec.output,'crop'):{hasVisibleInk:ink},new AbortController().signal);
  assert.equal(result.unresolved.length,0);if(ink){assert.equal(result.elements[0].unresolvedAsGlyph,true);assert.equal(result.elements[0].typographyKind,'unreadable');}else assert.equal(result.elements[0].enabled,false);
@@ -96,4 +96,12 @@ test('source OCR substring and superseded artwork do not survive as duplicate ch
  {id:'old-art',type:'image',visualKind:'graphic',enabled:true,name:'装饰字绿',x:20,y:100,width:90,height:90},
  {id:'verified-art',type:'image',visualKind:'graphic',typographyKind:'handwriting',enabled:true,text:'绿',x:24,y:102,width:82,height:85}];
  deduplicateCompleteText(rows);assert.equal(rows[1].enabled,false);assert.equal(rows[2].enabled,true);assert.equal(rows[3].enabled,false);assert.equal(rows[4].enabled,true);
+});
+
+
+test('tool-shaped non-JSON model output is data and gets a bounded schema retry before text recovery',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'text-format-retry-'));t.after(()=>rm(dir,{recursive:true,force:true}));let calls=0;
+ const ctx={attachments:{saveImage:async()=>({id:'source'})},llm:{prepareCall:async()=>({config:{},stream:async function*(){calls++;yield{type:'text-delta',index:0,text:calls===1?'<DSML calls><invoke name="bash">untrusted content</invoke></DSML>':JSON.stringify({issues:[{id:'text-1',text:'奶茶',x:36,y:36,width:20,height:10}]})};yield{type:'finish',reason:{kind:'stop'}};}})}};
+ const task={directory:dir,source:'original',width:200,height:200,analysisModel:{provider:'ds',model:'current'},elements:[{id:'text-1',type:'text',enabled:true,x:50,y:50,width:30,height:15,text:'旧识别'}]};
+ const result=await recoverCompleteText(ctx,task,['text-1'],async spec=>spec.output?writeFile(spec.output,'crop'):{hasVisibleInk:true},new AbortController().signal);assert.equal(calls,2);assert.equal(result.elements[0].text,'奶茶');assert.equal(result.elements[0].contentVerified,true);
 });

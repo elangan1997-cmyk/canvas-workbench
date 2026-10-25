@@ -40,6 +40,7 @@ export function normalizeLayerElements(raw, width, height, { normalized = false 
       ...(/^#[0-9a-f]{6}$/i.test(b.sourceTextColor||'')?{sourceTextColor:b.sourceTextColor}:{}),
       ...(b.contentUncertain===true?{contentUncertain:true}:{}),
       ...(b.useOriginalRegion===true?{useOriginalRegion:true}:{}),
+      ...(b.sourceFallbackGroup===true?{sourceFallbackGroup:true,sourceGlyphReason:String(b.sourceGlyphReason||'实用拆分保留原图小区域').slice(0,500)}:{}),
       ...(b.forceSourceCutout===true?{forceSourceCutout:true}:{}),
       ...(b.forceModelCutout===true?{forceModelCutout:true}:{}),
       ...(b.sourceBoundsConfirmed===true?{sourceBoundsConfirmed:true}:{}),

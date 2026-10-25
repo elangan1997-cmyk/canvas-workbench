@@ -10,6 +10,7 @@ import { isRasterImagePath, MAX_IMAGE_BYTES, mimeOf, sniffImageMime, extOf } fro
 import { PLUGIN_ROOT } from '../vendor-assets.js';
 import { runPythonSpec } from './python-launch.js';
 import { appendAutomationOutputs, mutateAutomationCanvas, patchAutomationCanvas, readAutomationCanvas, summarizeAutomationCanvas } from './automation-canvas.js';
+import {layeredDeliveryAccepted} from './layered-complete-policy.js';
 import { hasBlockingLayerQuality } from './layered-image-refinement.js';
 
 const OPERATIONS = new Set(['layered_export', 'flat_psd', 'remove_background', 'edit_image']);
@@ -61,7 +62,7 @@ export function createCanvasAutomation(h, overrides = {}) {
     sessionId: job.sessionId, createdAt: job.createdAt, updatedAt: job.updatedAt, startedAt: job.startedAt, finishedAt: job.finishedAt,
     model: job.model, imageEngine: job.imageSettings.engine, imageModel: job.imageSettings.engine === 'dsh-codex' ? job.imageSettings.dshCodexModel : job.imageSettings.apiModel,
     allowGeneration: job.allowGeneration, maxImageRequests: job.maxImageRequests, imageRequestsUsed: job.imageRequestsUsed || 0,
-    reconstruction:job.reconstruction||'preserve',enhanceSource:job.enhanceSource===true,
+    reconstruction:job.reconstruction||'preserve',completionPolicy:job.completionPolicy||'strict',enhanceSource:job.enhanceSource===true,
     completed: job.items.filter(i => i.status === 'completed').length, total: job.items.length,
     needsReview: job.items.filter(i => i.status === 'needs_review').length, failed: job.items.filter(i => i.status === 'failed').length,
     progress: Math.round(job.items.filter(i => ['completed', 'failed', 'needs_review'].includes(i.status)).length / Math.max(1, job.items.length) * 100),
@@ -194,7 +195,7 @@ export function createCanvasAutomation(h, overrides = {}) {
         const task = await service.analyze({ project: job.project, imageData: item.hdSource?'data:image/png;base64,'+(await readFile(item.hdSource)).toString('base64'):sourceData,
           ...(item.hdSource?{referenceImageData:sourceData}:{}),
           name: item.name, ...job.model, flat: job.operation === 'flat_psd', autoRefine: true, editableText: job.editableText, fontPolicy: job.fontPolicy,localOnly:!job.allowGeneration,
-          reconstruction:job.reconstruction,enhanceSource:job.enhanceSource,maxImageRequests:Math.max(0,job.maxImageRequests-(job.imageRequestsUsed||0)) });
+          reconstruction:job.reconstruction,completionPolicy:job.completionPolicy,enhanceSource:job.enhanceSource,maxImageRequests:Math.max(0,job.maxImageRequests-(job.imageRequestsUsed||0)) });
         item.layeredTaskId = task.id; await save(job);
       }
       const request = { project: job.project, id: item.layeredTaskId };
@@ -212,16 +213,16 @@ export function createCanvasAutomation(h, overrides = {}) {
       if (hasBlockingLayerQuality(task.quality)) throw budgetError(task.message || '图层结构数据无效，需要重新分析');
       if (task.elements.some(e => e.requestState === 'unknown') && !job.retryUnknown) throw budgetError('有图像请求结果未知，未自动重发；请核对后再继续');
       const attemptsBefore = task.generationAttempts || 0;
-      const needsCompleteValidation=task.reconstruction==='complete'&&(task.textTruthVersion!==4||task.materialGeometryTruth!==1||task.completeness?.complete!==true||task.assemblyCheck?.verified!==true);
-      if (!task.elements.every(e => !e.enabled || e.status === 'complete') || task.status === 'needs_review'||needsCompleteValidation) {
+      const needsCompleteValidation=task.reconstruction==='complete'&&(task.textTruthVersion!==4||task.materialGeometryTruth!==1||!layeredDeliveryAccepted(task));
+      if (!task.elements.every(e => !e.enabled || e.status === 'complete') || task.status === 'needs_review'||needsCompleteValidation||(job.completionPolicy||'strict')!==(task.completionPolicy||'strict')) {
         await service.run({ ...request, engine: job.imageSettings.engine, imageSettingsOverride: job.imageSettings,
-          localOnly: !job.allowGeneration, retryUnknown: job.retryUnknown, maxImageRequests: attemptsBefore + Math.max(0, job.maxImageRequests - (job.imageRequestsUsed || 0)) });
+          completionPolicy:job.completionPolicy,localOnly: !job.allowGeneration, retryUnknown: job.retryUnknown, maxImageRequests: attemptsBefore + Math.max(0, job.maxImageRequests - (job.imageRequestsUsed || 0)) });
         try { task = await waitLayer(service, request, signal); }
         finally { await reconcileRequests(job); await save(job); }
       }
       await reconcileRequests(job); await save(job);
       item.warnings = task.warnings || []; item.quality = task.quality || null;
-      if(task.reconstruction==='complete'&&(task.status==='failed'||task.completeness?.complete!==true||task.assemblyCheck?.verified!==true))throw budgetError(task.error||task.message||'完整拆分未通过装配核验，不能仅凭PNG已提取就导出');
+      if(task.reconstruction==='complete'&&(task.status==='failed'||!layeredDeliveryAccepted(task)))throw budgetError(task.error||task.message||'完整拆分未通过装配核验，不能仅凭PNG已提取就导出');
       if (!task.elements.every(e => !e.enabled || e.status === 'complete') || task.status === 'needs_review') throw budgetError(task.error || task.message || '图层提取尚未完成');
       const outputs = [...(item.outputs || [])];
       for (const format of job.operation === 'flat_psd' ? ['psd'] : job.formats) {
@@ -343,7 +344,7 @@ export function createCanvasAutomation(h, overrides = {}) {
       await mutateAutomationCanvas(h, project, () => {});
       const job = { schema: 1, id, requestId, fingerprint, operation: body.operation, sessionId: String(body.sessionId || ''), cwd: current.cwd || parent, project, model,
         imageSettings, formats: preview.formats, allowGeneration: preview.allowGeneration, maxImageRequests: preview.maxImageRequests, imageRequestsUsed: 0,
-        editableText: body.editableText !== false, fontPolicy: body.fontPolicy === 'strict' ? 'strict' : 'substitute',reconstruction:body.reconstruction==='complete'?'complete':'preserve',enhanceSource:body.enhanceSource===true,
+        editableText: body.editableText !== false, fontPolicy: body.fontPolicy === 'strict' ? 'strict' : 'substitute',reconstruction:body.reconstruction==='complete'?'complete':'preserve',completionPolicy:body.completionPolicy==='practical'?'practical':'strict',enhanceSource:body.enhanceSource===true,
         prompt: String(body.prompt || ''), region: body.region || null, retryUnknown: false, openCanvas: body.openCanvas !== false,
         createdAt: Date.now(), updatedAt: Date.now(), status: 'queued', message: '已加入后台队列', ignored: preview.ignored,
         preprocessingJobId:body.preprocessingJobId||'',
@@ -368,6 +369,7 @@ export function createCanvasAutomation(h, overrides = {}) {
         const targets=job.items.filter(item=>!body.itemId||item.id===body.itemId);if(!targets.length)throw new Error('指定的批处理文件不存在');
         for(const item of targets){item.previousOutputs=[...(item.previousOutputs||[]),...(item.outputs||[])];item.outputs=[];item.status='queued';}
       }
+      if(body.completionPolicy!==undefined){if(!['strict','practical'].includes(body.completionPolicy))throw new Error('拆分完成策略无效');job.completionPolicy=body.completionPolicy;}
       if (body.allowGeneration !== undefined) job.allowGeneration = body.allowGeneration === true;
       if (body.maxImageRequests !== undefined) { options({ ...job, maxImageRequests: body.maxImageRequests }); job.maxImageRequests = body.maxImageRequests; }
       job.retryUnknown = body.retryUnknown === true;

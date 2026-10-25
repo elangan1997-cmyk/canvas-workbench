@@ -17,7 +17,7 @@ import { denseSourceStructure } from './layered-source-policy.js';
 import { enhanceLayerRegion,verifyEnhancedRegion } from './layered-image-enhancement.js';
 import { inspectLayerReadback,layerReadbackTimeout } from './layered-image-readback.js';
 import { refineLayerSourceRegions } from './layered-image-regions.js';
-import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials} from './layered-complete-policy.js';
+import {completeLayerPlan,completeLayerAudit,deduplicateCompleteText,reuseCompleteMaterials,layeredDeliveryAccepted} from './layered-complete-policy.js';
 import {prepareLayerSourceHd,identifySourceBrands,sourceBrandConstraint} from './layered-source-hd.js';
 import {recoverCompleteText} from './layered-complete-text.js';
 
@@ -72,7 +72,7 @@ export function createLayeredImageService(h, overrides = {}) {
     warnings: task.warnings || [], engine: task.engine || '', imageModel: task.imageModel || '', localOnly: task.localOnly === true, createdAt: task.createdAt, updatedAt: task.updatedAt,
     quality: task.quality ? { ...task.quality, reviewAcknowledged: task.qualityAcknowledged === true } : null, analysisModel: task.analysisModel || null, analysisAttempts: task.analysisAttempts || 0,
     analysisProgress:task.analysisProgress||null,analysisStrategy:task.analysisStrategy||'',analysisComplete:task.analysisComplete===true,
-    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',textTruthVersion:task.textTruthVersion||0,materialGeometryTruth:task.materialGeometryTruth||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
+    assemblyCheck:task.assemblyCheck||null,reconstruction:task.reconstruction||'preserve',completionPolicy:task.completionPolicy||'strict',textTruthVersion:task.textTruthVersion||0,materialGeometryTruth:task.materialGeometryTruth||0,sourceHd:task.sourceHd||null,completeness:task.completeness||null,
     generationAttempts: task.generationAttempts || 0, maxImageRequests: task.maxImageRequests ?? 40,
     sourceUrl: previewUrl(task.source, task.createdAt), previewUrl: task.preview ? previewUrl(task.preview, task.updatedAt) : '',
     outputDirectory: task.directory, storageProject: join(task.directory, '..', '..', '..'),
@@ -191,6 +191,13 @@ export function createLayeredImageService(h, overrides = {}) {
   }
   async function fixCompleteText(task,ids,settings,signal,render=false){
     if(!ids.length)return [];
+    if(task.completionPolicy==='practical'){
+      const known=[];for(const e of task.elements.filter(e=>ids.includes(e.id)&&e.enabled&&e.type==='text')){
+        if(e.contentVerified&&String(e.text||'').trim()){known.push(e.id);continue;}
+        Object.assign(e,{type:'image',visualKind:'graphic',typographyKind:'unreadable',unresolvedAsGlyph:true,useOriginalRegion:true,nativeText:false,extractionMode:'cutout',modeLocked:true,preserveSource:false,sourceGlyphReason:'实用拆分保留未确认微字的原图字形，不补猜文案'});
+      }
+      await fitCompleteCandidates(task,known,settings,signal,render);deduplicateCompleteText(task.elements);return ids;
+    }
     task.stage='verification';task.message='正在对照原图核对 '+ids.length+' 处文字与包装归属，复用已完成素材…';await save(task);
     const result=await (overrides.recoverText||recoverCompleteText)(ctx,task,ids,pixel,signal);
     for(const old of task.elements){const next=result.elements.find(e=>e.id===old.id);if(!next)continue;
@@ -382,7 +389,7 @@ export function createLayeredImageService(h, overrides = {}) {
 
   async function exportArtifact(task, kind, signal, openAfterExport = false) {
         const stale=task.elements.some(e=>e.enabled&&e.nativeText&&e.nativePreviewSignature!==hash(nativeRepresentation(e)));
-        if(stale||(task.analysisStrategy==='dense'&&task.assemblyCheck?.verified===false)||(task.reconstruction==='complete'&&task.completeness?.complete!==true)){
+        if(stale||(task.analysisStrategy==='dense'&&task.completionPolicy!=='practical'&&task.assemblyCheck?.verified===false)||(task.reconstruction==='complete'&&!layeredDeliveryAccepted(task))){
           for(const e of task.elements.filter(e=>e.enabled)){
             if(e.nativeText)await extract(task,e,{},signal);
             e.contentFile ||=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));
@@ -487,6 +494,8 @@ export function createLayeredImageService(h, overrides = {}) {
   }
 
   async function prepareRun(task, body, signal) {
+      if(body.completionPolicy!==undefined&&!['strict','practical'].includes(body.completionPolicy))throw new Error('拆分完成策略无效');
+      task.completionPolicy=body.completionPolicy||task.completionPolicy||'strict';
       signal?.throwIfAborted();
       if(task.analysisStrategy==='dense'&&task.imageGeometryVersion===1){
         const plan=await refineLayerSourceRegions(ctx,{...task,elements:body.elements||task.elements},pixel,signal);
@@ -546,7 +555,7 @@ export function createLayeredImageService(h, overrides = {}) {
         if(e.type==='image'&&previous?.rawFile&&previous.forceModelCutout===e.forceModelCutout&&previous.description===e.description&&previous.revision===e.revision&&['x','y','width','height'].every(k=>previous[k]===e[k])&&task.engine===engine&&task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel)&&isPathWithin(task.directory,previous.rawFile))e.reusedRawFile=previous.rawFile;
         e.assetKey = key;
         if(previous?.requestState==='unknown')e.requestState='unknown';
-        if (e.type === 'background' && previous?.rawFile && removalKey(task.elements)===removalKey(elements) && previous.description===e.description && previous.revision===e.revision && task.engine===engine && task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel) && isPathWithin(task.directory,previous.rawFile)) e.reusedRawFile=previous.rawFile;
+        if (e.type === 'background' && previous?.rawFile && (task.reconstruction==='complete'||removalKey(task.elements)===removalKey(elements)) && previous.description===e.description && previous.revision===e.revision && task.engine===engine && task.imageModel===(engine==='api'?settings.apiModel:settings.dshCodexModel) && isPathWithin(task.directory,previous.rawFile)) e.reusedRawFile=previous.rawFile;
         if (previous?.assetKey === key) Object.assign(e, { file: previous.file, rawFile: previous.rawFile, status: previous.status, requestState: previous.requestState,
           extractionEngine: previous.extractionEngine,nativePreviewSignature:previous.nativePreviewSignature, enhancedFile:previous.enhancedFile,enhancementCheck:previous.enhancementCheck,platePrepared: previous.platePrepared, plateVersion: previous.plateVersion, alignment: previous.alignment, actualPixels: previous.actualPixels, returnedFraming: previous.returnedFraming, placementQualityIssues: previous.placementQualityIssues, assetTime: previous.assetTime, contentFile: previous.contentFile, bounds: previous.bounds });
       }
@@ -600,7 +609,7 @@ export function createLayeredImageService(h, overrides = {}) {
         if(task.reconstruction!=='complete'&&order.some(e=>!e.nativeText&&overlapping.has(e.id)))await separateRasterText(true);
         let manifest = await recoverLocal(task, '图层装配', () => pixel({ operation: 'assemble', directory: task.directory, width: task.width, height: task.height, elements: enabled }, signal), signal);
         const inspectAssembly=()=> (overrides.readback||inspectLayerReadback)(ctx,task,manifest.preview,AbortSignal.any([signal,AbortSignal.timeout(layerReadbackTimeout(task))]),{pixel,onProgress:async p=>{task.message='正在对照原图核对版式分区 '+p.completed+'/'+p.total+'，已检查 '+p.checked+' 个局部…';await save(task);}});
-        if(task.analysisStrategy==='dense'&&(overrides.readback||ctx.llm?.prepareCall)){
+        if(task.completionPolicy!=='practical'&&task.analysisStrategy==='dense'&&(overrides.readback||ctx.llm?.prepareCall)){
           const signature=hash({readbackRevision:4,image:hash(await readFile(manifest.preview))});
           if(task.assemblyCheck?.signature!==signature||task.assemblyCheck?.complete===false||task.assemblyCheck?.verified===false){
             for(let visualPass=0;visualPass<(task.reconstruction==='complete'?3:2);visualPass++){
@@ -718,10 +727,11 @@ export function createLayeredImageService(h, overrides = {}) {
         if(task.reconstruction==='complete'){
           task.completeness={...completeLayerAudit(task.elements),layoutIssues:checkLayerLayout(task.elements,task.width,task.height),verified:task.assemblyCheck?.verified===true};
           task.completeness.complete=task.completeness.complete&&!task.completeness.layoutIssues.length&&task.completeness.verified;
-          if(!task.completeness.complete)throw new Error('完整拆分尚未通过：'+JSON.stringify(task.completeness)+'；已保留进度，不把部分拆分报告成完成');
+          if(task.completionPolicy==='practical'){task.completeness.practicalAccepted=task.elements.filter(e=>e.enabled).every(e=>e.status==='complete'&&e.contentFile&&e.bounds)&&task.elements.some(e=>e.enabled&&e.type==='background');task.completeness.target=.9;task.completeness.approximate=true;task.completeness.fallbackGroups=task.elements.filter(e=>e.enabled&&(e.sourceFallbackGroup||e.typographyKind||!e.nativeText&&e.type==='text')).map(e=>({id:e.id,name:e.name,reason:e.sourceGlyphReason||'保留原图字形'}));task.warnings.push('按实用拆分目标交付；复杂排版、装饰和微字可按原图分组保留，未声明100%独立或全部文字可编辑。');}
+          if(!layeredDeliveryAccepted(task))throw new Error('完整拆分尚未通过：'+JSON.stringify(task.completeness)+'；已保留进度，不把部分拆分报告成完成');
         }
         task.preview = manifest.preview; task.status = 'ready'; task.stage = 'complete'; task.progress = 100;
-        task.message = '独立图层已准备，可导出 AI、PSD 或 SVG；自动处理说明已保存';
+        task.message = task.completionPolicy==='practical'?'实用拆分已准备，可导出 AI、PSD 或 SVG；原图分组保留项已记录':'独立图层已准备，可导出 AI、PSD 或 SVG；自动处理说明已保存';
         if (hasBlockingLayerQuality(task.quality)) {
           throw new Error('图层结构检查失败：'+task.quality.issues.filter(i=>['error','review'].includes(i.severity)).map(i=>i.message||i.code).join('；'));
         }
@@ -748,7 +758,12 @@ export function createLayeredImageService(h, overrides = {}) {
             }, signal, () => e.requestState !== 'unknown');
             done++;
           } catch (err) {
-            signal.throwIfAborted(); e.status = 'failed'; e.error = String(err.message || err).slice(0,1200);
+            signal.throwIfAborted();
+            if(task.completionPolicy==='practical'&&e.type!=='background'&&e.requestState!=='unknown'&&(e.type==='shape'||e.visualKind==='graphic'||e.typographyKind)&&e.width*e.height<=task.width*task.height*.015){
+              const reason=String(err.message||err).slice(0,500);Object.assign(e,{type:'image',visualKind:'graphic',nativeText:false,sourceFallbackGroup:true,sourceRegion:true,useOriginalRegion:true,preserveSource:true,extractionMode:'photo',modeLocked:true,sourceGlyphReason:'实用拆分按原图小区域分组保留：'+reason});for(const key of ['typographyKind','unresolvedAsGlyph','forceModelCutout','forceSourceCutout'])delete e[key];
+              await extract(task,e,settings,signal);e.contentFile=join(task.directory,'layers',e.id+'-'+safeImageName(e.name+'.png'));const crop=await pixel({operation:'crop-layer',input:e.file,output:e.contentFile},signal);e.bounds=crop.bounds;e.assetTime=(await stat(e.contentFile)).mtimeMs;done++;task.warnings.push(e.name+'：保留原图小区域图层，未继续生图。');
+            }else{e.status = 'failed'; e.error = String(err.message || err).slice(0,1200);}
+
           }
           task.progress = Math.round(done / order.length * 90); await save(task);
         };
