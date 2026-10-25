@@ -60,6 +60,9 @@ with tempfile.TemporaryDirectory() as temp:
  assert not run({'operation':'shape-evidence','input':str(source),'element':{'x':0,'y':0,'width':200,'height':100,'fill':'#F47700'}})['nativeEligible'], 'an irregular brush stroke is not a filled rectangle'
  ImageDraw.Draw(im).rectangle((20,30,80,60),fill='#F47700');im.save(source)
  assert run({'operation':'shape-evidence','input':str(source),'element':{'x':20,'y':30,'width':60,'height':30,'fill':'#F47700'}})['nativeEligible']
+ im=Image.new('RGBA',(200,120),(164,193,108));ImageDraw.Draw(im).rectangle((100,0,199,119),fill=(165,181,106));ImageDraw.Draw(im).line((30,20,90,100),fill='#E6751E',width=8);im.save(source)
+ run({'operation':'source-glyph-cutout','input':str(source),'output':str(glyph),'element':{'x':10,'y':10,'width':180,'height':100,'sourceTextColor':'#E6751E'}})
+ extracted=Image.open(glyph);assert extracted.getpixel((180,70))[3]==0 and extracted.getpixel((60,60))[3]>200, 'known orange ink cannot be replaced with the dominant green gradient cluster'
  print('PASS: real HD pixels, ownership, alpha and installed-font substitution')
 `],{cwd:new URL('../..',import.meta.url),encoding:'utf8'});
  assert.equal(run.status,0,run.stdout+run.stderr);

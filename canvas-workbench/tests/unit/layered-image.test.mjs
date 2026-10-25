@@ -511,3 +511,14 @@ test('a legacy rasterized shape rejected by the image service is recovered local
  const restored=await createLayeredImageService(f.h,f.overrides).get(f.body),shape=restored.elements.find(e=>e.id==='object');assert.equal(shape.type,'shape');assert.equal(shape.requestState,'local');assert.equal(shape.extractionMode,undefined);assert.equal(restored.generationAttempts,1);assert.equal(f.generated.length,0);
  assert.equal(restored.recoveryEvents.at(-1).previousRequestState,'rejected');
 });
+
+test('split native text parts own distinct PNG files instead of overwriting the parent or each other',async t=>{
+ const f=await fixture(t);let reads=0;
+ f.overrides.analyze=async()=>({elements:[{id:'bg',type:'background'},{id:'title',type:'text',name:'合并价格',text:'1618',nativeText:true,fontAccepted:true,fontPostScript:'AlibabaPuHuiTi_3_55_Regular',x:0,y:0,width:4,height:2}]});
+ f.overrides.readback=async()=>({complete:true,issues:reads++===0?[{id:'title',parts:[{text:'16',x:0,y:0,width:1,height:2},{text:'18',x:2,y:0,width:1,height:2}],reason:'两个独立价格'}]:[]});
+ f.overrides.completeRefinement=async spec=>({elements:spec.elements.map(e=>({...e,fontAvailable:true,fontSize:1,textFit:{text:e.text,fontPostScript:e.fontPostScript,fontSize:1,tracking:0,baselineOffset:1,originOffsetX:0,advance:1}}))});
+ const initial=createLayeredImageService(f.h,f.overrides),created=await initial.analyze({imageData:png,provider:'ds',model:'current',reconstruction:'complete',autoRun:true,maxImageRequests:1});await initial.settled({id:created.id});
+ const file=join(created.outputDirectory,'task.json'),record=JSON.parse(await readFile(file,'utf8'));record.analysisStrategy='dense';record.assemblyCheck={verified:false};record.completeness=null;await writeFile(file,JSON.stringify(record));
+ const service=createLayeredImageService(f.h,f.overrides);await service.run({id:created.id,maxImageRequests:1});await service.settled({id:created.id});const saved=JSON.parse(await readFile(file,'utf8')),parts=saved.elements.filter(e=>e.textGroupId==='title');
+ assert.equal(parts.length,2);assert.equal(new Set(parts.map(e=>e.contentFile)).size,2);assert.ok(parts.every(e=>e.contentFile.includes(e.id+'-')));assert.ok(parts.every(e=>e.contentFile!==saved.elements.find(e=>e.id==='title').contentFile));
+});

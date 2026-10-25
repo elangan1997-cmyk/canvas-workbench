@@ -406,6 +406,11 @@ def run(spec):
     if op == 'source-glyph-cutout':
         from infer_text_style import pixel_foreground
         im=load(spec['input']);e=spec['element'];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
+        colors=e.get('foregroundColors') or [e.get('sourceTextColor') or e.get('color')]
+        colors=[c for c in colors if isinstance(c,str) and len(c)==7 and c.startswith('#')]
+        if colors:
+            precise=run({**spec,'operation':'graphic-cutout','color_tolerance':45,'element':{**e,'foregroundColors':colors}})
+            if precise.get('eligible'):return {**precise,'engine':'source-confirmed-ink-matte'}
         box=(max(0,x-2),max(0,y-2),min(im.width,x+w+2),min(im.height,y+h+2));fg=pixel_foreground(im,box,None,ignore_leaders=False)
         if not fg:raise ValueError('未能提取可靠的原始字形，未使用不透明文字补片')
         mask=fg['mask'].resize((max(1,round(fg['mask'].width/fg['sx'])),max(1,round(fg['mask'].height/fg['sy']))),Image.Resampling.LANCZOS)
@@ -419,12 +424,25 @@ def run(spec):
     if op == 'graphic-cutout':
         source=load(spec['input']);e=spec['element'];colors=e.get('foregroundColors',[])
         if not colors:return {'eligible':False}
+        tolerance=max(16,min(80,float(spec.get('color_tolerance',80))))
         rgb=[tuple(int(c[i:i+2],16) for i in (1,3,5)) for c in colors];x,y,w,h=[int(e[k]) for k in ('x','y','width','height')]
         tile=source.crop((x,y,x+w,y+h));mask=Image.new('L',(w,h));mp=mask.load();p=tile.load()
+        import colorsys
+        from statistics import median
+        hints=[colorsys.rgb_to_hsv(*(v/255 for v in c)) for c in rgb]
+        hue_distance=lambda a,b:min(abs(a-b),1-abs(a-b))*360
+        border=[p[xx,0][:3] for xx in range(w)]+[p[xx,h-1][:3] for xx in range(w)]+[p[0,yy][:3] for yy in range(h)]+[p[w-1,yy][:3] for yy in range(h)]
+        bg=colorsys.rgb_to_hsv(*(median(c[k] for c in border)/255 for k in range(3)))
+        hue_ink=tolerance<=45 and bg[1]>.2 and all(c[1]>.3 and hue_distance(c[0],bg[0])>28 for c in hints)
+
         for yy in range(h):
             for xx in range(w):
                 distance=min(max(abs(p[xx,yy][k]-c[k]) for k in range(3)) for c in rgb)
-                mp[xx,yy]=round(255*max(0,min(1,(80-distance)/45)))
+                if hue_ink:
+                    hue,saturation,value=colorsys.rgb_to_hsv(*(p[xx,yy][k]/255 for k in range(3)))
+                    coverage=max(max(0,min(1,(25-hue_distance(hue,c[0]))/12)) for c in hints) if saturation>.18 else 0
+                else:coverage=max(0,min(1,(tolerance-distance)/max(16,tolerance*.5625)))
+                mp[xx,yy]=round(255*coverage)
         coverage=sum(mask.histogram()[1:])/(w*h)
         if coverage<.002 or coverage>.72:return {'eligible':False}
         tile.putalpha(mask);out=Image.new('RGBA',source.size);out.paste(tile,(x,y));exclude_owned_regions(out,e,spec.get('elements',[]));save(out,spec['output']);return {'eligible':True,'engine':'hd-graphic-color-matte',**info(out)}

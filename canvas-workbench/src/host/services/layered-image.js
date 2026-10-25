@@ -650,7 +650,7 @@ export function createLayeredImageService(h, overrides = {}) {
                       const id=(e.id.length<=59?e.id:e.id.slice(0,48)+'-'+hash(e.id).slice(0,8))+'-p'+(index+1);let child=task.elements.find(n=>n.id===id);
                       if(!child){if(task.elements.length>=320)throw new Error('修复文字部件超过320层');child={...e,id,name:e.name+' 部件 '+(index+1)};task.elements.push(child);}
                       Object.assign(child,part,{type:'text',text:part.layout==='vertical'?Array.from(part.text).join('\n'):part.text,enabled:true,nativeText:false,textMode:'editable',contentVerified:true,geometrySource:'source-readback',textGroupId:e.id,assetKey:hash({id,part}),status:'pending'});
-                      for(const key of ['unresolvedAsGlyph','typographyKind','sourceTextFallback','embeddedInMaterial','nativePreviewSignature','textFit','cleanupBounds'])delete child[key];child.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,child[k]]));
+                      for(const key of ['unresolvedAsGlyph','typographyKind','sourceTextFallback','embeddedInMaterial','nativePreviewSignature','textFit','cleanupBounds','file','contentFile','bounds','rawFile','reusedRawFile','assetTime','requestState'])delete child[key];child.recognitionBounds=Object.fromEntries(['x','y','width','height'].map(k=>[k,child[k]]));
                       if(!enabled.includes(child))enabled.push(child);if(!order.includes(child))order.push(child);direct.add(child.id);restored.push(child.id);
                     }
                     restored.push(e.id);continue;
